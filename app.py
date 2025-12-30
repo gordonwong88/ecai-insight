@@ -12,10 +12,6 @@ try:
 except Exception:
     pass
 
-
-# -----------------------------
-# Config
-# -----------------------------
 st.set_page_config(page_title="EC-AI Insight MVP", layout="wide")
 
 APP_TITLE = "EC-AI Insight (MVP)"
@@ -26,7 +22,7 @@ OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""
 
 
 # -----------------------------
-# Helpers: cleaning & profiling
+# Cleaning helpers
 # -----------------------------
 def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -35,9 +31,6 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _coerce_numeric(df: pd.DataFrame, col: str) -> None:
-    """
-    Converts messy numeric columns (e.g., '(blank)', '', 'NA') to float with NaN.
-    """
     df[col] = (
         df[col]
         .astype(str)
@@ -54,32 +47,23 @@ def smart_clean(df: pd.DataFrame) -> pd.DataFrame:
     """
     Minimal, safe cleaning:
     - Normalize column names
-    - Parse Date if column name contains 'date'
-    - Convert obvious numeric columns to numeric (including Expected_Usage)
+    - Parse date-like columns
+    - Convert numeric-like columns (including those with blanks)
     """
     df = _normalize_columns(df)
 
-    # Auto-detect date-ish columns
+    # Parse date-ish columns by name
     for c in df.columns:
-        if c.lower() == "date" or "date" in c.lower():
+        lc = c.lower()
+        if lc == "date" or "date" in lc or "asof" in lc or "as_of" in lc:
             _coerce_date(df, c)
 
-    # Convert numeric-like columns (common finance fields)
-    likely_numeric = {
-        "Expected_Usage", "RoE_pct", "Revenue_USD",
-        "DSC_Approved_Amount", "Actual_Loan_Outstanding",
-        "Loan_Average_Balance", "Deposit_Average_Balance",
-    }
-    for c in df.columns:
-        if c in likely_numeric:
-            _coerce_numeric(df, c)
-
-    # Also try to convert any object column that looks mostly numeric
+    # Convert any object column that looks mostly numeric
     for c in df.select_dtypes(include=["object"]).columns:
-        # if >70% values look numeric, convert
-        sample = df[c].dropna().astype(str).head(200)
+        sample = df[c].dropna().astype(str).head(300)
         if len(sample) == 0:
             continue
+        # numeric-like ratio
         numeric_like = sample.str.match(r"^\s*-?\d+(\.\d+)?\s*$").mean()
         if numeric_like >= 0.7:
             _coerce_numeric(df, c)
@@ -100,7 +84,7 @@ def basic_profile(df: pd.DataFrame) -> pd.DataFrame:
 def df_overview_text(df: pd.DataFrame) -> str:
     n_rows, n_cols = df.shape
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    cat_cols = [c for c in df.columns if c not in num_cols]
+    cat_cols = [c for c in df.columns if c not in num_cols and not np.issubdtype(df[c].dtype, np.datetime64)]
 
     miss = (df.isna().mean() * 100).sort_values(ascending=False).head(8)
     miss = miss[miss > 0]
@@ -125,54 +109,150 @@ def r_squared(x: pd.Series, y: pd.Series):
 
 
 # -----------------------------
+# Smart detection (semantic mapping)
+# -----------------------------
+KEYWORDS = {
+    # Metrics
+    "approved_amount": ["approved", "approval", "limit", "commit", "committed", "facility", "dsc", "sanction", "credit_limit"],
+    "outstanding":     ["outstanding", "os", "balance", "loan_balance", "drawn", "utilized", "exposure", "ead", "used"],
+    "revenue":         ["revenue", "income", "fee", "fees", "gop", "nop", "profit", "pnl", "tb", "gm", "net_income"],
+    "roe":             ["roe", "return_on_equity", "return", "ror", "raroc"],
+    "usage":           ["usage", "util", "utilisation", "utilization", "expected_usage", "expected", "draw_ratio", "drawdown"],
+    # Dimensions
+    "country":         ["country", "market", "geo", "geography", "location", "office"],
+    "industry":        ["industry", "sector", "subsector", "sub_sector"],
+    "client_size":     ["client_size", "size", "segment", "tier", "sme", "mid", "large"],
+    "status":          ["status", "approval_status", "stage", "state", "decision"],
+}
+
+def _score_column(colname: str, keywords: list[str]) -> int:
+    s = 0
+    lc = colname.lower()
+    for kw in keywords:
+        if kw in lc:
+            s += 3
+    # bonus for exact-ish matches
+    if lc in keywords:
+        s += 2
+    return s
+
+def detect_columns(df: pd.DataFrame):
+    """
+    Returns suggested mappings:
+    - metrics: approved_amount, outstanding, revenue, roe, usage
+    - dims: country, industry, client_size, status
+    """
+    cols = df.columns.tolist()
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    datetime_cols = [c for c in cols if np.issubdtype(df[c].dtype, np.datetime64)]
+    cat_cols = [c for c in cols if c not in numeric_cols and c not in datetime_cols]
+
+    suggestions = {}
+
+    # Metrics: choose among numeric columns
+    for key in ["approved_amount", "outstanding", "revenue", "roe", "usage"]:
+        best = None
+        best_score = -1
+        for c in numeric_cols:
+            score = _score_column(c, KEYWORDS[key])
+            # slight bias for columns with large scale for amount-like metrics
+            if key in ("approved_amount", "outstanding", "revenue"):
+                try:
+                    med = float(df[c].median(skipna=True))
+                    if med >= 1e6:
+                        score += 1
+                except Exception:
+                    pass
+            # slight bias against too-many-unique small numeric for ratio metrics
+            if key in ("roe", "usage"):
+                try:
+                    med = float(df[c].median(skipna=True))
+                    if -5 <= med <= 5:
+                        score += 1
+                except Exception:
+                    pass
+
+            if score > best_score:
+                best_score = score
+                best = c
+
+        suggestions[key] = best if best_score > 0 else None
+
+    # Dims: choose among categorical columns
+    for key in ["country", "industry", "client_size", "status"]:
+        best = None
+        best_score = -1
+        for c in cat_cols:
+            score = _score_column(c, KEYWORDS[key])
+            # bias: good dims usually have low/moderate unique counts
+            try:
+                nu = int(df[c].nunique(dropna=True))
+                if 2 <= nu <= 50:
+                    score += 1
+            except Exception:
+                pass
+            if score > best_score:
+                best_score = score
+                best = c
+        suggestions[key] = best if best_score > 0 else None
+
+    # Date: pick a datetime column if exists
+    suggestions["date"] = datetime_cols[0] if datetime_cols else None
+    suggestions["_numeric_cols"] = numeric_cols
+    suggestions["_cat_cols"] = cat_cols
+    return suggestions
+
+
+# -----------------------------
 # OpenAI insights (stats-only)
 # -----------------------------
-def generate_ai_insights(df: pd.DataFrame) -> str:
+def generate_ai_insights(df: pd.DataFrame, mapping: dict) -> str:
     if not OPENAI_API_KEY or "YOUR_" in OPENAI_API_KEY.upper():
         return (
             "🔑 **OpenAI API key not configured**.\n\n"
-            "1) Create/copy a real API key from the OpenAI developer platform\n"
-            "2) Add it to Streamlit Cloud → App → **Settings → Secrets**:\n\n"
-            "```toml\nOPENAI_API_KEY=\"sk-...\"\n```\n"
-            "Then rerun and click **Generate AI insights** again."
+            "Add your key in Streamlit Cloud → App → **Settings → Secrets**:\n\n"
+            "```toml\nOPENAI_API_KEY=\"sk-...\"\n```"
         )
 
-    # Only send profile + summary stats (no raw rows)
     prof = basic_profile(df).head(30)
 
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     stats = None
     if num_cols:
         stats = df[num_cols].describe().T
-        stats = stats[["count", "mean", "std", "min", "25%", "50%", "75%", "max"]].round(4).head(20)
+        stats = stats[["count", "mean", "std", "min", "25%", "50%", "75%", "max"]].round(4).head(25)
 
     overview = df_overview_text(df)
+
+    # Provide mapping context to LLM (still no raw rows)
+    mapping_text = "\n".join([f"- {k}: {v}" for k, v in mapping.items() if v])
 
     try:
         from openai import OpenAI
         client = OpenAI(api_key=OPENAI_API_KEY)
 
-        prompt_parts = []
-        prompt_parts.append("You are EC-AI Insight. Generate concise, business-friendly insights from dataset PROFILE ONLY.")
-        prompt_parts.append("Do NOT hallucinate. If unsure, say 'insufficient information'.")
-        prompt_parts.append("Return in markdown with these sections:")
-        prompt_parts.append("## Executive summary (3 bullets)")
-        prompt_parts.append("## Key patterns (5 bullets)")
-        prompt_parts.append("## Data quality checks (5 bullets)")
-        prompt_parts.append("## Suggested next analyses (3 bullets)")
-        prompt_parts.append("")
-        prompt_parts.append("Dataset overview:")
-        prompt_parts.append(overview)
-        prompt_parts.append("")
-        prompt_parts.append("Top columns profile (first 30):")
-        prompt_parts.append(prof.to_csv(index=False))
+        prompt = f"""
+You are EC-AI Insight. Generate concise, business-friendly insights from dataset PROFILE ONLY.
+Do NOT hallucinate. If unsure, say 'insufficient information'.
+Return in markdown with these sections:
+## Executive summary (3 bullets)
+## Key patterns (5 bullets)
+## Business view (by key dimension)
+## Data quality checks (5 bullets)
+## Suggested next analyses (3 bullets)
 
-        if stats is not None:
-            prompt_parts.append("")
-            prompt_parts.append("Numeric summary stats (top 20 numeric cols):")
-            prompt_parts.append(stats.to_csv())
+Dataset overview:
+{overview}
 
-        prompt = "\n".join(prompt_parts)
+Detected mapping (may be user-adjusted):
+{mapping_text}
+
+Top columns profile (first 30):
+{prof.to_csv(index=False)}
+
+Numeric summary stats (top numeric cols):
+{stats.to_csv() if stats is not None else "No numeric columns."}
+"""
 
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -200,15 +280,66 @@ if uploaded is None:
     st.info("Upload a CSV to begin.")
     st.stop()
 
-# Load CSV with encoding fallback
 try:
     df_raw = pd.read_csv(uploaded)
 except UnicodeDecodeError:
     df_raw = pd.read_csv(uploaded, encoding="latin1")
 
 df = smart_clean(df_raw)
+suggest = detect_columns(df)
 
 st.success(f"Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]:,} columns")
+
+# -----------------------------
+# Sidebar mapping (Smart + Override)
+# -----------------------------
+st.sidebar.markdown("## Mapping")
+st.sidebar.caption("Auto-detected fields. Override if your column names differ.")
+
+numeric_cols = suggest["_numeric_cols"]
+cat_cols = suggest["_cat_cols"]
+date_col = suggest["date"]
+
+def pick_default(options, default):
+    if default in options:
+        return options.index(default)
+    return 0
+
+# Dimensions (include None)
+dim_options = ["(none)"] + cat_cols
+metric_options = ["(none)"] + numeric_cols
+
+country_col = st.sidebar.selectbox("Country / Region", dim_options, index=pick_default(dim_options, suggest["country"]))
+industry_col = st.sidebar.selectbox("Industry / Sector", dim_options, index=pick_default(dim_options, suggest["industry"]))
+size_col = st.sidebar.selectbox("Client size / Segment", dim_options, index=pick_default(dim_options, suggest["client_size"]))
+status_col = st.sidebar.selectbox("Status / Stage", dim_options, index=pick_default(dim_options, suggest["status"]))
+
+approved_col = st.sidebar.selectbox("Approved / Limit amount", metric_options, index=pick_default(metric_options, suggest["approved_amount"]))
+outstanding_col = st.sidebar.selectbox("Outstanding / Balance", metric_options, index=pick_default(metric_options, suggest["outstanding"]))
+revenue_col = st.sidebar.selectbox("Revenue / Income", metric_options, index=pick_default(metric_options, suggest["revenue"]))
+roe_col = st.sidebar.selectbox("RoE / Return", metric_options, index=pick_default(metric_options, suggest["roe"]))
+usage_col = st.sidebar.selectbox("Usage / Utilization", metric_options, index=pick_default(metric_options, suggest["usage"]))
+
+# Normalize "(none)" to None
+def none_to_none(x): 
+    return None if x == "(none)" else x
+
+mapping = {
+    "date": date_col,
+    "country": none_to_none(country_col),
+    "industry": none_to_none(industry_col),
+    "client_size": none_to_none(size_col),
+    "status": none_to_none(status_col),
+    "approved_amount": none_to_none(approved_col),
+    "outstanding": none_to_none(outstanding_col),
+    "revenue": none_to_none(revenue_col),
+    "roe": none_to_none(roe_col),
+    "usage": none_to_none(usage_col),
+}
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Tip: If charts look odd, adjust mapping (e.g., choose the right revenue column).")
+
 
 # Preview
 with st.expander("Preview data", expanded=True):
@@ -219,11 +350,12 @@ st.markdown("### Data profile (post-clean)")
 profile_df = basic_profile(df)
 st.dataframe(profile_df, use_container_width=True, height=360)
 
-# Quick charts (more sensible for small N)
+# Quick charts
 st.markdown("### Quick charts")
 
 num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-cat_cols = [c for c in df.columns if c not in num_cols]
+datetime_cols = [c for c in df.columns if np.issubdtype(df[c].dtype, np.datetime64)]
+cat_cols2 = [c for c in df.columns if c not in num_cols and c not in datetime_cols]
 
 c1, c2 = st.columns(2)
 
@@ -239,25 +371,37 @@ with c1:
         st.info("No numeric columns detected.")
 
 with c2:
-    if cat_cols:
-        chosen_cat = st.selectbox("Categorical column (top values)", cat_cols, key="catcol")
+    if cat_cols2:
+        chosen_cat = st.selectbox("Categorical column (top values)", cat_cols2, key="catcol")
         vc = df[chosen_cat].astype(str).value_counts().head(20).reset_index()
         vc.columns = [chosen_cat, "count"]
         fig = px.bar(vc, x=chosen_cat, y="count", text_auto=True)
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("No categorical columns detected (or all numeric).")
+        st.info("No categorical columns detected (or all numeric / dates).")
 
-# Business breakdown
-st.markdown("### Business breakdown")
-dims = [d for d in ["Country", "Industry", "Client_Size"] if d in df.columns]
-metrics = [m for m in ["Revenue_USD", "DSC_Approved_Amount", "Actual_Loan_Outstanding", "RoE_pct"] if m in df.columns]
+
+# Business breakdown (semantic-driven)
+st.markdown("### Business breakdown (smart)")
+
+# available dimensions from mapping (and fallbacks)
+dims = [mapping["country"], mapping["industry"], mapping["client_size"], mapping["status"]]
+dims = [d for d in dims if d and d in df.columns]
+
+# available key metrics from mapping (and fallbacks)
+metrics = [mapping["revenue"], mapping["approved_amount"], mapping["outstanding"], mapping["roe"], mapping["usage"]]
+metrics = [m for m in metrics if m and m in df.columns]
 
 if dims and metrics:
     group_dim = st.selectbox("Group by", dims, key="groupby")
     metric = st.selectbox("Metric", metrics, key="metric")
 
-    agg_choice = st.radio("Aggregation", ["Mean", "Sum"], horizontal=True)
+    # Use SUM for amount-like columns, MEAN for ratios by default
+    amount_like = {mapping["revenue"], mapping["approved_amount"], mapping["outstanding"]}
+    default_agg = "Sum" if metric in amount_like else "Mean"
+
+    agg_choice = st.radio("Aggregation", ["Mean", "Sum"], horizontal=True, index=0 if default_agg=="Mean" else 1)
+
     if agg_choice == "Sum":
         grp_df = df.groupby(group_dim, dropna=False)[metric].sum().reset_index()
     else:
@@ -268,44 +412,53 @@ if dims and metrics:
     fig = px.bar(grp_df, x=group_dim, y=metric, text_auto=".2s")
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("Business breakdown will appear when Country/Industry/Client_Size and metrics columns exist.")
+    st.info("To show business breakdown, map at least 1 dimension (e.g., Country) and 1 metric (e.g., Revenue). Use the sidebar Mapping panel.")
 
-# Correlation
+
+# Correlation + R²
 if len(num_cols) >= 2:
     st.markdown("### Correlation (numeric)")
     corr = df[num_cols].corr(numeric_only=True).round(2)
 
     fig = px.imshow(
         corr,
-        text_auto=True,          # show numbers on each box
+        text_auto=True,
         aspect="auto",
         color_continuous_scale="Blues",
         zmin=-1, zmax=1
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # R² section
-    st.markdown("### Key R² relationships (selected pairs)")
-    candidate_pairs = []
-    # Common finance pairs if present:
-    if "DSC_Approved_Amount" in df.columns and "Actual_Loan_Outstanding" in df.columns:
-        candidate_pairs.append(("DSC_Approved_Amount", "Actual_Loan_Outstanding"))
-    if "Actual_Loan_Outstanding" in df.columns and "Revenue_USD" in df.columns:
-        candidate_pairs.append(("Actual_Loan_Outstanding", "Revenue_USD"))
-    if "DSC_Approved_Amount" in df.columns and "Revenue_USD" in df.columns:
-        candidate_pairs.append(("DSC_Approved_Amount", "Revenue_USD"))
-    if "RoE_pct" in df.columns and "Revenue_USD" in df.columns:
-        candidate_pairs.append(("RoE_pct", "Revenue_USD"))
+    st.markdown("### Key R² relationships (smart)")
+    # prioritize semantically meaningful pairs if mapped
+    candidates = []
+    if mapping["approved_amount"] and mapping["outstanding"]:
+        candidates.append((mapping["approved_amount"], mapping["outstanding"]))
+    if mapping["outstanding"] and mapping["revenue"]:
+        candidates.append((mapping["outstanding"], mapping["revenue"]))
+    if mapping["approved_amount"] and mapping["revenue"]:
+        candidates.append((mapping["approved_amount"], mapping["revenue"]))
+    if mapping["usage"] and mapping["outstanding"]:
+        candidates.append((mapping["usage"], mapping["outstanding"]))
+    if mapping["roe"] and mapping["revenue"]:
+        candidates.append((mapping["roe"], mapping["revenue"]))
 
-    if not candidate_pairs:
-        st.caption("Tip: Add named finance columns (Revenue_USD, DSC_Approved_Amount, etc.) to show R² highlights.")
+    # de-duplicate
+    uniq = []
+    for a, b in candidates:
+        if a in df.columns and b in df.columns and (a, b) not in uniq:
+            uniq.append((a, b))
+
+    if not uniq:
+        st.caption("Map key metrics in the sidebar (Approved/Outstanding/Revenue/Usage/RoE) to see meaningful R² highlights.")
     else:
-        for a, b in candidate_pairs:
+        for a, b in uniq:
             r2 = r_squared(df[a], df[b])
             if r2 is None:
                 st.write(f"**{a} → {b}** : R² = (insufficient data)")
             else:
                 st.write(f"**{a} → {b}** : R² = **{r2}**")
+
 
 # AI Insights
 st.markdown("### AI Insights")
@@ -313,6 +466,5 @@ st.caption("Generates insights from **profile + summary statistics only** (safer
 
 if st.button("Generate AI insights"):
     with st.spinner("Generating insights..."):
-        insights = generate_ai_insights(df)
+        insights = generate_ai_insights(df, mapping)
     st.markdown(insights)
-
