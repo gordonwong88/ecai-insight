@@ -12,6 +12,9 @@ try:
 except Exception:
     pass
 
+# -----------------------------
+# Config
+# -----------------------------
 st.set_page_config(page_title="EC-AI Insight MVP", layout="wide")
 
 APP_TITLE = "EC-AI Insight (MVP)"
@@ -63,7 +66,6 @@ def smart_clean(df: pd.DataFrame) -> pd.DataFrame:
         sample = df[c].dropna().astype(str).head(300)
         if len(sample) == 0:
             continue
-        # numeric-like ratio
         numeric_like = sample.str.match(r"^\s*-?\d+(\.\d+)?\s*$").mean()
         if numeric_like >= 0.7:
             _coerce_numeric(df, c)
@@ -118,12 +120,14 @@ KEYWORDS = {
     "revenue":         ["revenue", "income", "fee", "fees", "gop", "nop", "profit", "pnl", "tb", "gm", "net_income"],
     "roe":             ["roe", "return_on_equity", "return", "ror", "raroc"],
     "usage":           ["usage", "util", "utilisation", "utilization", "expected_usage", "expected", "draw_ratio", "drawdown"],
+
     # Dimensions
-    "country":         ["country", "market", "geo", "geography", "location", "office"],
+    "country":         ["country", "market", "geo", "geography", "location", "office", "region"],
     "industry":        ["industry", "sector", "subsector", "sub_sector"],
     "client_size":     ["client_size", "size", "segment", "tier", "sme", "mid", "large"],
     "status":          ["status", "approval_status", "stage", "state", "decision"],
 }
+
 
 def _score_column(colname: str, keywords: list[str]) -> int:
     s = 0
@@ -131,17 +135,10 @@ def _score_column(colname: str, keywords: list[str]) -> int:
     for kw in keywords:
         if kw in lc:
             s += 3
-    # bonus for exact-ish matches
-    if lc in keywords:
-        s += 2
     return s
 
+
 def detect_columns(df: pd.DataFrame):
-    """
-    Returns suggested mappings:
-    - metrics: approved_amount, outstanding, revenue, roe, usage
-    - dims: country, industry, client_size, status
-    """
     cols = df.columns.tolist()
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     datetime_cols = [c for c in cols if np.issubdtype(df[c].dtype, np.datetime64)]
@@ -151,11 +148,11 @@ def detect_columns(df: pd.DataFrame):
 
     # Metrics: choose among numeric columns
     for key in ["approved_amount", "outstanding", "revenue", "roe", "usage"]:
-        best = None
-        best_score = -1
+        best, best_score = None, -1
         for c in numeric_cols:
             score = _score_column(c, KEYWORDS[key])
-            # slight bias for columns with large scale for amount-like metrics
+
+            # Bias for amount-like columns: large scale
             if key in ("approved_amount", "outstanding", "revenue"):
                 try:
                     med = float(df[c].median(skipna=True))
@@ -163,11 +160,12 @@ def detect_columns(df: pd.DataFrame):
                         score += 1
                 except Exception:
                     pass
-            # slight bias against too-many-unique small numeric for ratio metrics
+
+            # Bias for ratio-like columns: around 0-1 or 0-100
             if key in ("roe", "usage"):
                 try:
                     med = float(df[c].median(skipna=True))
-                    if -5 <= med <= 5:
+                    if -5 <= med <= 5 or 0 <= med <= 100:
                         score += 1
                 except Exception:
                     pass
@@ -180,11 +178,10 @@ def detect_columns(df: pd.DataFrame):
 
     # Dims: choose among categorical columns
     for key in ["country", "industry", "client_size", "status"]:
-        best = None
-        best_score = -1
+        best, best_score = None, -1
         for c in cat_cols:
             score = _score_column(c, KEYWORDS[key])
-            # bias: good dims usually have low/moderate unique counts
+            # bias: dims often have low/moderate cardinality
             try:
                 nu = int(df[c].nunique(dropna=True))
                 if 2 <= nu <= 50:
@@ -196,7 +193,7 @@ def detect_columns(df: pd.DataFrame):
                 best = c
         suggestions[key] = best if best_score > 0 else None
 
-    # Date: pick a datetime column if exists
+    # Date
     suggestions["date"] = datetime_cols[0] if datetime_cols else None
     suggestions["_numeric_cols"] = numeric_cols
     suggestions["_cat_cols"] = cat_cols
@@ -207,7 +204,7 @@ def detect_columns(df: pd.DataFrame):
 # OpenAI insights (stats-only)
 # -----------------------------
 def generate_ai_insights(df: pd.DataFrame, mapping: dict) -> str:
-    if not OPENAI_API_KEY or "YOUR_" in OPENAI_API_KEY.upper():
+    if not OPENAI_API_KEY:
         return (
             "🔑 **OpenAI API key not configured**.\n\n"
             "Add your key in Streamlit Cloud → App → **Settings → Secrets**:\n\n"
@@ -223,8 +220,6 @@ def generate_ai_insights(df: pd.DataFrame, mapping: dict) -> str:
         stats = stats[["count", "mean", "std", "min", "25%", "50%", "75%", "max"]].round(4).head(25)
 
     overview = df_overview_text(df)
-
-    # Provide mapping context to LLM (still no raw rows)
     mapping_text = "\n".join([f"- {k}: {v}" for k, v in mapping.items() if v])
 
     try:
@@ -269,6 +264,14 @@ Numeric summary stats (top numeric cols):
 
 
 # -----------------------------
+# Auto-run guard (only once per file)
+# -----------------------------
+def get_file_signature(uploaded_file) -> str:
+    # Good enough for MVP; avoids re-calling AI on every rerun
+    return f"{uploaded_file.name}_{uploaded_file.size}"
+
+
+# -----------------------------
 # UI
 # -----------------------------
 st.markdown(f"## {APP_TITLE}")
@@ -290,6 +293,7 @@ suggest = detect_columns(df)
 
 st.success(f"Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]:,} columns")
 
+
 # -----------------------------
 # Sidebar mapping (Smart + Override)
 # -----------------------------
@@ -305,7 +309,6 @@ def pick_default(options, default):
         return options.index(default)
     return 0
 
-# Dimensions (include None)
 dim_options = ["(none)"] + cat_cols
 metric_options = ["(none)"] + numeric_cols
 
@@ -320,8 +323,7 @@ revenue_col = st.sidebar.selectbox("Revenue / Income", metric_options, index=pic
 roe_col = st.sidebar.selectbox("RoE / Return", metric_options, index=pick_default(metric_options, suggest["roe"]))
 usage_col = st.sidebar.selectbox("Usage / Utilization", metric_options, index=pick_default(metric_options, suggest["usage"]))
 
-# Normalize "(none)" to None
-def none_to_none(x): 
+def none_to_none(x):
     return None if x == "(none)" else x
 
 mapping = {
@@ -350,18 +352,19 @@ st.markdown("### Data profile (post-clean)")
 profile_df = basic_profile(df)
 st.dataframe(profile_df, use_container_width=True, height=360)
 
+
 # Quick charts
 st.markdown("### Quick charts")
 
-num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+num_cols2 = df.select_dtypes(include=[np.number]).columns.tolist()
 datetime_cols = [c for c in df.columns if np.issubdtype(df[c].dtype, np.datetime64)]
-cat_cols2 = [c for c in df.columns if c not in num_cols and c not in datetime_cols]
+cat_cols2 = [c for c in df.columns if c not in num_cols2 and c not in datetime_cols]
 
 c1, c2 = st.columns(2)
 
 with c1:
-    if num_cols:
-        chosen_num = st.selectbox("Numeric column", num_cols, key="numcol")
+    if num_cols2:
+        chosen_num = st.selectbox("Numeric column", num_cols2, key="numcol")
         if len(df) > 100:
             fig = px.histogram(df, x=chosen_num, nbins=30)
         else:
@@ -384,11 +387,9 @@ with c2:
 # Business breakdown (semantic-driven)
 st.markdown("### Business breakdown (smart)")
 
-# available dimensions from mapping (and fallbacks)
 dims = [mapping["country"], mapping["industry"], mapping["client_size"], mapping["status"]]
 dims = [d for d in dims if d and d in df.columns]
 
-# available key metrics from mapping (and fallbacks)
 metrics = [mapping["revenue"], mapping["approved_amount"], mapping["outstanding"], mapping["roe"], mapping["usage"]]
 metrics = [m for m in metrics if m and m in df.columns]
 
@@ -396,11 +397,15 @@ if dims and metrics:
     group_dim = st.selectbox("Group by", dims, key="groupby")
     metric = st.selectbox("Metric", metrics, key="metric")
 
-    # Use SUM for amount-like columns, MEAN for ratios by default
     amount_like = {mapping["revenue"], mapping["approved_amount"], mapping["outstanding"]}
     default_agg = "Sum" if metric in amount_like else "Mean"
 
-    agg_choice = st.radio("Aggregation", ["Mean", "Sum"], horizontal=True, index=0 if default_agg=="Mean" else 1)
+    agg_choice = st.radio(
+        "Aggregation",
+        ["Mean", "Sum"],
+        horizontal=True,
+        index=0 if default_agg == "Mean" else 1
+    )
 
     if agg_choice == "Sum":
         grp_df = df.groupby(group_dim, dropna=False)[metric].sum().reset_index()
@@ -408,7 +413,6 @@ if dims and metrics:
         grp_df = df.groupby(group_dim, dropna=False)[metric].mean().reset_index()
 
     grp_df = grp_df.sort_values(metric, ascending=False)
-
     fig = px.bar(grp_df, x=group_dim, y=metric, text_auto=".2s")
     st.plotly_chart(fig, use_container_width=True)
 else:
@@ -416,10 +420,9 @@ else:
 
 
 # Correlation + R²
-if len(num_cols) >= 2:
+if len(num_cols2) >= 2:
     st.markdown("### Correlation (numeric)")
-    corr = df[num_cols].corr(numeric_only=True).round(2)
-
+    corr = df[num_cols2].corr(numeric_only=True).round(2)
     fig = px.imshow(
         corr,
         text_auto=True,
@@ -430,7 +433,6 @@ if len(num_cols) >= 2:
     st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### Key R² relationships (smart)")
-    # prioritize semantically meaningful pairs if mapped
     candidates = []
     if mapping["approved_amount"] and mapping["outstanding"]:
         candidates.append((mapping["approved_amount"], mapping["outstanding"]))
@@ -443,7 +445,6 @@ if len(num_cols) >= 2:
     if mapping["roe"] and mapping["revenue"]:
         candidates.append((mapping["roe"], mapping["revenue"]))
 
-    # de-duplicate
     uniq = []
     for a, b in candidates:
         if a in df.columns and b in df.columns and (a, b) not in uniq:
@@ -460,11 +461,30 @@ if len(num_cols) >= 2:
                 st.write(f"**{a} → {b}** : R² = **{r2}**")
 
 
-# AI Insights
+# -----------------------------
+# AI Insights (AUTO, no click)
+# -----------------------------
 st.markdown("### AI Insights")
-st.caption("Generates insights from **profile + summary statistics only** (safer than sending full raw data).")
+st.caption("Auto-generated from **profile + summary statistics only** (safer than sending full raw data).")
 
-if st.button("Generate AI insights"):
-    with st.spinner("Generating insights..."):
-        insights = generate_ai_insights(df, mapping)
-    st.markdown(insights)
+file_sig = get_file_signature(uploaded)
+
+# Initialize state
+if "ai_insights" not in st.session_state:
+    st.session_state.ai_insights = None
+    st.session_state.ai_sig = None
+    st.session_state.ai_mapping_sig = None
+
+# Optional: also re-run if mapping changed materially
+mapping_sig = str(mapping)
+
+should_run = (st.session_state.ai_sig != file_sig) or (st.session_state.ai_mapping_sig != mapping_sig)
+
+if should_run:
+    with st.spinner("Generating AI insights..."):
+        st.session_state.ai_insights = generate_ai_insights(df, mapping)
+        st.session_state.ai_sig = file_sig
+        st.session_state.ai_mapping_sig = mapping_sig
+
+# Display
+st.markdown(st.session_state.ai_insights or "No insights yet.")
