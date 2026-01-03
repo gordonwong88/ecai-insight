@@ -301,14 +301,12 @@ def parse_next_analyses_blocks(ai_text: str) -> list[dict]:
     if not ai_text:
         return blocks
 
-    # isolate Suggested next analyses section
     m = re.split(r"(?i)##\s+Suggested next analyses", ai_text, maxsplit=1)
     if len(m) < 2:
         return blocks
     section = m[1]
 
     parts = re.split(r"(?m)^\s*###\s*\d+\)\s*", section)
-    # parts[0] is preface, ignore
     for p in parts[1:]:
         lines = [x.rstrip() for x in p.splitlines() if x.strip()]
         if not lines:
@@ -408,7 +406,6 @@ def build_pdf_bytes(title: str, indicators: dict, exec_bullets: list[str], analy
             c.drawString(x, y, line)
             y -= 0.45 * cm
 
-        # body lines (already bullet-like)
         for raw in a["lines"][:30]:
             wrapped = wrap_text(raw.strip(), 95)
             for wline in wrapped:
@@ -430,7 +427,6 @@ def build_pdf_bytes(title: str, indicators: dict, exec_bullets: list[str], analy
 # PPTX export (no overflow)
 # =============================
 def _pick_font_size(text_len: int) -> int:
-    # simple heuristic: longer text -> smaller font
     if text_len <= 700:
         return 18
     if text_len <= 1100:
@@ -466,19 +462,18 @@ def build_pptx_bytes(title: str, indicators: dict, exec_bullets: list[str], anal
     tf.clear()
 
     exec_bullets_trim = exec_bullets[:8]
-    for i, b in enumerate(exec_bullets_trim):
+    for b in exec_bullets_trim:
         p = tf.add_paragraph()
         p.text = b
         p.level = 0
 
-    # Set font size for exec slide
     all_text = "\n".join(exec_bullets_trim)
     fs = _pick_font_size(len(all_text))
     for p in tf.paragraphs:
         for run in p.runs:
             run.font.size = Pt(fs)
 
-    # Slides 3-5 - One analysis per slide to avoid overflow
+    # Slides 3-5 - One analysis per slide
     for idx, a in enumerate(analyses[:3], start=1):
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = f"Suggested Next Analysis {idx}: {a['title']}"
@@ -486,7 +481,6 @@ def build_pptx_bytes(title: str, indicators: dict, exec_bullets: list[str], anal
         tf = slide.shapes.placeholders[1].text_frame
         tf.clear()
 
-        # Keep concise but meaningful: cap lines
         lines = a["lines"][:18]
         for line in lines:
             p = tf.add_paragraph()
@@ -564,16 +558,33 @@ with c2:
     else:
         st.info("No categorical columns detected.")
 
+# ===== Correlation (numeric) — widened =====
 if len(num_cols) >= 2:
     st.markdown("### Correlation (numeric)")
     corr = df[num_cols].corr().round(2)
+
     fig = px.imshow(
         corr,
         text_auto=True,
         color_continuous_scale="Blues",
         zmin=-1,
-        zmax=1
+        zmax=1,
+        aspect="auto"
     )
+
+    fig.update_layout(
+        height=600,
+        width=1200,
+        margin=dict(l=40, r=40, t=40, b=40),
+        coloraxis_colorbar=dict(
+            title="Correlation",
+            thickness=15
+        )
+    )
+
+    fig.update_xaxes(side="bottom", tickangle=45)
+    fig.update_yaxes(autorange="reversed")
+
     st.plotly_chart(fig, use_container_width=True)
 
 # AI output (auto once per upload)
