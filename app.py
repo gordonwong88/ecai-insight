@@ -65,7 +65,7 @@ def basic_profile(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # =============================
-# Signal extraction (core logic)
+# Signal extraction
 # =============================
 def extract_analysis_signals(df: pd.DataFrame) -> dict:
     signals = {
@@ -125,18 +125,15 @@ def extract_analysis_signals(df: pd.DataFrame) -> dict:
 
 
 def compute_coverage_and_confidence(df: pd.DataFrame, signals: dict) -> dict:
-    # Coverage: overall completeness
-    missing_avg = float(df.isna().mean().mean())  # 0..1
+    missing_avg = float(df.isna().mean().mean())
     coverage = max(0.0, min(1.0, 1.0 - missing_avg))
 
-    # Confidence (heuristic score 0..100)
     rows = signals["row_count"]
     num_n = len(signals["numeric_columns"])
     cat_n = len(signals["categorical_columns"])
     rel_n = len(signals["strong_relationships"])
     has_time = len(signals["date_columns"]) > 0
 
-    # Row score
     if rows < 30:
         row_score = 0.25
     elif rows < 100:
@@ -146,7 +143,6 @@ def compute_coverage_and_confidence(df: pd.DataFrame, signals: dict) -> dict:
     else:
         row_score = 1.00
 
-    # Structure score (needs at least some numeric or categorical)
     structure_score = 0.0
     if num_n >= 2:
         structure_score += 0.55
@@ -161,8 +157,6 @@ def compute_coverage_and_confidence(df: pd.DataFrame, signals: dict) -> dict:
 
     structure_score = min(1.0, structure_score)
 
-    # Relationship boost
-    rel_score = 0.0
     if rel_n >= 5:
         rel_score = 1.0
     elif rel_n >= 2:
@@ -172,7 +166,6 @@ def compute_coverage_and_confidence(df: pd.DataFrame, signals: dict) -> dict:
     else:
         rel_score = 0.0
 
-    # Combine
     confidence = (
         0.45 * coverage +
         0.25 * row_score +
@@ -181,7 +174,6 @@ def compute_coverage_and_confidence(df: pd.DataFrame, signals: dict) -> dict:
     )
     confidence = int(round(confidence * 100))
 
-    # Labels
     if confidence >= 80:
         conf_label = "High"
     elif confidence >= 55:
@@ -202,7 +194,7 @@ def compute_coverage_and_confidence(df: pd.DataFrame, signals: dict) -> dict:
 
 
 # =============================
-# AI Insights
+# AI (structured output)
 # =============================
 def generate_ai_output(signals: dict, indicators: dict) -> str:
     if not OPENAI_API_KEY:
@@ -224,8 +216,8 @@ Signals:
 - Data quality flags: {signals['data_quality_flags']}
 
 Indicators:
-- Coverage (overall completeness): {indicators['coverage_pct']}%
-- Avg missing rate: {indicators['missing_avg_pct']}%
+- Coverage: {indicators['coverage_pct']}%
+- Avg missing: {indicators['missing_avg_pct']}%
 - Confidence score: {indicators['confidence_score']} ({indicators['confidence_label']})
 """
 
@@ -233,24 +225,28 @@ Indicators:
 You are EC-AI Insight, an executive analytics advisor.
 
 STRICT RULES:
-- Base all statements ONLY on the provided context
-- Do NOT assume industry/business context
-- Do NOT predict future outcomes
-- Do NOT invent variables or benchmarks
+- Base every statement ONLY on the provided dataset context.
+- Do NOT assume industry/business goals.
+- Do NOT predict future outcomes.
+- Do NOT invent variables, benchmarks, or external facts.
 
-OUTPUT FORMAT (MANDATORY):
+OUTPUT FORMAT (MANDATORY). Use exactly these headings:
 
 ## Executive Summary
-Provide 7–10 concise bullet points.
-- Must be grounded in the signals and indicators (coverage/confidence/relationships)
-- Must be non-speculative and professional
+Write 7–10 bullets. Each bullet must be evidence-led (signals/indicators/structure), and written in executive language.
 
 ## Suggested next analyses
-Provide EXACTLY 3 items.
-Each item must include:
-1) Analysis name
-2) Why it is relevant (explicitly reference signals)
-3) What decision or insight it would enable
+Provide EXACTLY 3 analyses, each in the following structure:
+
+### 1) <Analysis name>
+- Objective: <what the analysis answers>
+- Why now: <explicitly cite which signals/indicators motivate this>
+- Approach: <3–5 concrete steps, actionable>
+- Outputs: <specific charts/tables/tests the app/user should produce>
+- Decisions enabled: <specific decision types this could support>
+
+### 2) ...
+### 3) ...
 
 DATASET CONTEXT:
 {analysis_context}
@@ -263,7 +259,7 @@ DATASET CONTEXT:
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are precise, non-speculative, and executive-grade."},
+                {"role": "system", "content": "You are precise, non-speculative, and consultant-grade."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.2
@@ -273,45 +269,77 @@ DATASET CONTEXT:
         return f"AI error: {e}"
 
 
-def parse_sections(ai_text: str):
-    """
-    Extract Executive Summary bullets and Suggested next analyses section text (best-effort).
-    """
-    exec_bullets = []
-    next_analyses_lines = []
-
+# =============================
+# Parsing for export
+# =============================
+def parse_exec_bullets(ai_text: str) -> list[str]:
+    bullets = []
     if not ai_text:
-        return exec_bullets, ""
-
-    lines = ai_text.splitlines()
-    mode = None
-
-    for line in lines:
+        return bullets
+    in_exec = False
+    for line in ai_text.splitlines():
         l = line.strip()
         if l.lower().startswith("## executive summary"):
-            mode = "exec"
+            in_exec = True
             continue
         if l.lower().startswith("## suggested next analyses"):
-            mode = "next"
-            continue
-
-        if mode == "exec":
+            in_exec = False
+        if in_exec:
             if l.startswith(("-", "•")):
-                exec_bullets.append(l.lstrip("-• ").strip())
+                bullets.append(l.lstrip("-• ").strip())
             elif re.match(r"^\d+[\).\s]\s*", l):
-                exec_bullets.append(re.sub(r"^\d+[\).\s]\s*", "", l).strip())
+                bullets.append(re.sub(r"^\d+[\).\s]\s*", "", l).strip())
+    return [b for b in bullets if b][:10]
 
-        if mode == "next":
-            if l:
-                next_analyses_lines.append(line)
 
-    return exec_bullets, "\n".join(next_analyses_lines).strip()
+def parse_next_analyses_blocks(ai_text: str) -> list[dict]:
+    """
+    Returns list of {title:str, lines:list[str]} for up to 3 analyses.
+    Expects '### 1) Name' etc.
+    """
+    blocks = []
+    if not ai_text:
+        return blocks
+
+    # isolate Suggested next analyses section
+    m = re.split(r"(?i)##\s+Suggested next analyses", ai_text, maxsplit=1)
+    if len(m) < 2:
+        return blocks
+    section = m[1]
+
+    parts = re.split(r"(?m)^\s*###\s*\d+\)\s*", section)
+    # parts[0] is preface, ignore
+    for p in parts[1:]:
+        lines = [x.rstrip() for x in p.splitlines() if x.strip()]
+        if not lines:
+            continue
+        title = lines[0].strip()
+        body = lines[1:]
+        blocks.append({"title": title, "lines": body})
+        if len(blocks) == 3:
+            break
+    return blocks
 
 
 # =============================
-# Exporters
+# PDF export
 # =============================
-def build_pdf_bytes(title: str, indicators: dict, exec_bullets: list[str], next_analyses_text: str) -> bytes:
+def wrap_text(text: str, max_chars: int):
+    words = text.split()
+    lines = []
+    cur = []
+    for w in words:
+        if len(" ".join(cur + [w])) <= max_chars:
+            cur.append(w)
+        else:
+            lines.append(" ".join(cur))
+            cur = [w]
+    if cur:
+        lines.append(" ".join(cur))
+    return lines
+
+
+def build_pdf_bytes(title: str, indicators: dict, exec_bullets: list[str], analyses: list[dict]) -> bytes:
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
@@ -331,11 +359,17 @@ def build_pdf_bytes(title: str, indicators: dict, exec_bullets: list[str], next_
     c.drawString(x, y, "Indicators")
     y -= 0.5 * cm
     c.setFont("Helvetica", 9)
-    c.drawString(x, y, f"Coverage: {indicators['coverage_pct']}% | Avg Missing: {indicators['missing_avg_pct']}% | "
-                       f"Confidence: {indicators['confidence_score']} ({indicators['confidence_label']})")
+    c.drawString(
+        x, y,
+        f"Coverage: {indicators['coverage_pct']}% | Avg Missing: {indicators['missing_avg_pct']}% | "
+        f"Confidence: {indicators['confidence_score']} ({indicators['confidence_label']})"
+    )
     y -= 0.5 * cm
-    c.drawString(x, y, f"Numeric cols: {indicators['num_cols']} | Categorical cols: {indicators['cat_cols']} | "
-                       f"Date cols: {indicators['date_cols']} | Strong pairs: {indicators['strong_pairs']}")
+    c.drawString(
+        x, y,
+        f"Numeric cols: {indicators['num_cols']} | Categorical cols: {indicators['cat_cols']} | "
+        f"Date cols: {indicators['date_cols']} | Strong pairs: {indicators['strong_pairs']}"
+    )
 
     # Executive Summary
     y -= 0.9 * cm
@@ -354,7 +388,7 @@ def build_pdf_bytes(title: str, indicators: dict, exec_bullets: list[str], next_
             c.drawString(x, y, wline)
             y -= 0.45 * cm
 
-    # Suggested next analyses
+    # Next analyses
     y -= 0.3 * cm
     c.setFont("Helvetica-Bold", 11)
     if y < 2 * cm:
@@ -364,45 +398,52 @@ def build_pdf_bytes(title: str, indicators: dict, exec_bullets: list[str], next_
     y -= 0.6 * cm
     c.setFont("Helvetica", 9)
 
-    for line in next_analyses_text.splitlines():
-        if not line.strip():
-            continue
-        wrapped = wrap_text(line.strip(), 95)
-        for wline in wrapped:
+    for idx, a in enumerate(analyses[:3], start=1):
+        header = f"{idx}) {a['title']}"
+        for line in wrap_text(header, 95):
             if y < 2 * cm:
                 c.showPage()
                 y = height - 2 * cm
                 c.setFont("Helvetica", 9)
-            c.drawString(x, y, wline)
+            c.drawString(x, y, line)
             y -= 0.45 * cm
+
+        # body lines (already bullet-like)
+        for raw in a["lines"][:30]:
+            wrapped = wrap_text(raw.strip(), 95)
+            for wline in wrapped:
+                if y < 2 * cm:
+                    c.showPage()
+                    y = height - 2 * cm
+                    c.setFont("Helvetica", 9)
+                c.drawString(x + 0.4 * cm, y, wline)
+                y -= 0.45 * cm
+
+        y -= 0.2 * cm
 
     c.save()
     buffer.seek(0)
     return buffer.read()
 
 
-def wrap_text(text: str, max_chars: int):
-    words = text.split()
-    lines = []
-    cur = []
-    for w in words:
-        if len(" ".join(cur + [w])) <= max_chars:
-            cur.append(w)
-        else:
-            lines.append(" ".join(cur))
-            cur = [w]
-    if cur:
-        lines.append(" ".join(cur))
-    return lines
+# =============================
+# PPTX export (no overflow)
+# =============================
+def _pick_font_size(text_len: int) -> int:
+    # simple heuristic: longer text -> smaller font
+    if text_len <= 700:
+        return 18
+    if text_len <= 1100:
+        return 16
+    if text_len <= 1500:
+        return 14
+    return 12
 
 
-def build_pptx_bytes(title: str, indicators: dict, exec_bullets: list[str], next_analyses_text: str) -> bytes:
-    """
-    Slide export (PPTX). Uses python-pptx.
-    If python-pptx isn't installed, return empty bytes and we show a message.
-    """
+def build_pptx_bytes(title: str, indicators: dict, exec_bullets: list[str], analyses: list[dict]) -> bytes:
     try:
         from pptx import Presentation
+        from pptx.util import Pt
     except Exception:
         return b""
 
@@ -411,33 +452,52 @@ def build_pptx_bytes(title: str, indicators: dict, exec_bullets: list[str], next
     # Slide 1 - Title
     slide = prs.slides.add_slide(prs.slide_layouts[0])
     slide.shapes.title.text = title
-    slide.placeholders[1].text = (
+    subtitle = slide.placeholders[1]
+    subtitle.text = (
         f"Coverage: {indicators['coverage_pct']}% | Avg Missing: {indicators['missing_avg_pct']}%\n"
-        f"Confidence: {indicators['confidence_score']} ({indicators['confidence_label']})"
+        f"Confidence: {indicators['confidence_score']} ({indicators['confidence_label']}) | "
+        f"Strong pairs: {indicators['strong_pairs']}"
     )
 
-    # Slide 2 - Executive Summary
+    # Slide 2 - Executive Summary (max 8 bullets)
     slide = prs.slides.add_slide(prs.slide_layouts[1])
     slide.shapes.title.text = "Executive Summary"
     tf = slide.shapes.placeholders[1].text_frame
     tf.clear()
-    for b in exec_bullets[:10]:
+
+    exec_bullets_trim = exec_bullets[:8]
+    for i, b in enumerate(exec_bullets_trim):
         p = tf.add_paragraph()
         p.text = b
         p.level = 0
 
-    # Slide 3 - Suggested Next Analyses
-    slide = prs.slides.add_slide(prs.slide_layouts[1])
-    slide.shapes.title.text = "Suggested Next Analyses"
-    tf = slide.shapes.placeholders[1].text_frame
-    tf.clear()
-    for line in next_analyses_text.splitlines():
-        l = line.strip()
-        if not l:
-            continue
-        p = tf.add_paragraph()
-        p.text = l
-        p.level = 0
+    # Set font size for exec slide
+    all_text = "\n".join(exec_bullets_trim)
+    fs = _pick_font_size(len(all_text))
+    for p in tf.paragraphs:
+        for run in p.runs:
+            run.font.size = Pt(fs)
+
+    # Slides 3-5 - One analysis per slide to avoid overflow
+    for idx, a in enumerate(analyses[:3], start=1):
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = f"Suggested Next Analysis {idx}: {a['title']}"
+
+        tf = slide.shapes.placeholders[1].text_frame
+        tf.clear()
+
+        # Keep concise but meaningful: cap lines
+        lines = a["lines"][:18]
+        for line in lines:
+            p = tf.add_paragraph()
+            p.text = line
+            p.level = 0
+
+        all_text = "\n".join(lines)
+        fs = _pick_font_size(len(all_text))
+        for p in tf.paragraphs:
+            for run in p.runs:
+                run.font.size = Pt(fs)
 
     out = io.BytesIO()
     prs.save(out)
@@ -452,7 +512,6 @@ st.markdown(f"## {APP_TITLE}")
 st.caption(APP_TAGLINE)
 
 uploaded = st.file_uploader("Upload CSV file", type=["csv"])
-
 if not uploaded:
     st.info("Upload a CSV file to begin.")
     st.stop()
@@ -463,19 +522,14 @@ except UnicodeDecodeError:
     df_raw = pd.read_csv(uploaded, encoding="latin1")
 
 df = smart_clean(df_raw)
-
 st.success(f"Loaded dataset: {df.shape[0]:,} rows × {df.shape[1]:,} columns")
 
-# Preview
 with st.expander("Preview data", expanded=True):
     st.dataframe(df.head(50), use_container_width=True)
 
-# Data profile
 st.markdown("### Data profile")
-profile_df = basic_profile(df)
-st.dataframe(profile_df, use_container_width=True, height=360)
+st.dataframe(basic_profile(df), use_container_width=True, height=360)
 
-# Signals + indicators
 signals = extract_analysis_signals(df)
 ind = compute_coverage_and_confidence(df, signals)
 
@@ -485,10 +539,8 @@ m1.metric("Coverage", f"{ind['coverage_pct']}%")
 m2.metric("Avg Missing", f"{ind['missing_avg_pct']}%")
 m3.metric("Confidence", f"{ind['confidence_score']} ({ind['confidence_label']})")
 m4.metric("Strong R² Pairs", f"{ind['strong_pairs']}")
-
 st.progress(ind["confidence_score"] / 100)
 
-# Quick exploration
 st.markdown("### Quick exploration")
 num_cols = df.select_dtypes(include=np.number).columns.tolist()
 cat_cols = [c for c in df.columns if c not in num_cols and not np.issubdtype(df[c].dtype, np.datetime64)]
@@ -512,7 +564,6 @@ with c2:
     else:
         st.info("No categorical columns detected.")
 
-# Correlation
 if len(num_cols) >= 2:
     st.markdown("### Correlation (numeric)")
     corr = df[num_cols].corr().round(2)
@@ -525,9 +576,8 @@ if len(num_cols) >= 2:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# AI Output (auto, once per upload)
+# AI output (auto once per upload)
 file_sig = f"{uploaded.name}_{uploaded.size}"
-
 if "ai_sig" not in st.session_state or st.session_state.ai_sig != file_sig:
     with st.spinner("Generating Executive Summary and Suggested Next Analyses..."):
         st.session_state.ai_output = generate_ai_output(signals, ind)
@@ -536,13 +586,14 @@ if "ai_sig" not in st.session_state or st.session_state.ai_sig != file_sig:
 ai_output = st.session_state.ai_output
 st.markdown(ai_output)
 
-# Exports
+# Export
 st.markdown("### Export")
-exec_bullets, next_analyses_text = parse_sections(ai_output)
+exec_bullets = parse_exec_bullets(ai_output)
+analyses = parse_next_analyses_blocks(ai_output)
 
-title = f"EC-AI Insight Brief — {uploaded.name}"
+brief_title = f"EC-AI Insight Brief — {uploaded.name}"
 
-pdf_bytes = build_pdf_bytes(title, ind, exec_bullets, next_analyses_text)
+pdf_bytes = build_pdf_bytes(brief_title, ind, exec_bullets, analyses)
 st.download_button(
     label="📄 Download Executive Brief (PDF)",
     data=pdf_bytes,
@@ -550,7 +601,7 @@ st.download_button(
     mime="application/pdf"
 )
 
-pptx_bytes = build_pptx_bytes(title, ind, exec_bullets, next_analyses_text)
+pptx_bytes = build_pptx_bytes(brief_title, ind, exec_bullets, analyses)
 if pptx_bytes:
     st.download_button(
         label="📊 Download Slides (PPTX)",
@@ -561,4 +612,4 @@ if pptx_bytes:
 else:
     st.caption("Slides export requires `python-pptx`. Add it to requirements.txt to enable PPTX download.")
 
-st.caption("Note: This app is for demo/testing. Please avoid uploading confidential or regulated data.")
+st.caption("Note: Demo/testing only. Avoid uploading confidential or regulated data.")
