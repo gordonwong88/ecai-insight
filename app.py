@@ -21,6 +21,7 @@ APP_TAGLINE = "Upload any dataset. Get an executive understanding. Know what to 
 
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "").strip()
 
+
 # =============================
 # Utility functions
 # =============================
@@ -62,6 +63,47 @@ def basic_profile(df: pd.DataFrame) -> pd.DataFrame:
         "missing_%": (df.isna().mean() * 100).round(2),
         "unique_values": [df[c].nunique(dropna=True) for c in df.columns]
     }).sort_values("missing_%", ascending=False)
+
+
+def prioritize_numeric_columns(num_cols: list[str]) -> list[str]:
+    """
+    Rank numeric columns by business importance using naming heuristics.
+    """
+    priority_keywords = [
+        ("revenue", 1),
+        ("sales", 1),
+        ("income", 1),
+        ("profit", 2),
+        ("margin", 2),
+        ("gross", 2),
+        ("cogs", 3),
+        ("cost", 3),
+        ("price", 4),
+        ("amount", 4),
+        ("balance", 4),
+        ("outstanding", 4),
+        ("exposure", 4),
+        ("volume", 5),
+        ("units", 5),
+        ("qty", 5),
+        ("quantity", 5),
+        ("count", 6),
+        ("flag", 7),
+        ("id", 9),
+    ]
+
+    scored = []
+    for c in num_cols:
+        score = 99
+        lc = c.lower()
+        for kw, s in priority_keywords:
+            if kw in lc:
+                score = s
+                break
+        scored.append((score, c))
+
+    scored.sort(key=lambda x: (x[0], x[1].lower()))
+    return [c for _, c in scored]
 
 
 # =============================
@@ -424,14 +466,14 @@ def build_pdf_bytes(title: str, indicators: dict, exec_bullets: list[str], analy
 
 
 # =============================
-# PPTX export (no overflow)
+# PPTX export (overflow-safe)
 # =============================
 def _pick_font_size(text_len: int) -> int:
-    if text_len <= 700:
+    if text_len <= 650:
         return 18
-    if text_len <= 1100:
+    if text_len <= 950:
         return 16
-    if text_len <= 1500:
+    if text_len <= 1250:
         return 14
     return 12
 
@@ -481,7 +523,7 @@ def build_pptx_bytes(title: str, indicators: dict, exec_bullets: list[str], anal
         tf = slide.shapes.placeholders[1].text_frame
         tf.clear()
 
-        lines = a["lines"][:18]
+        lines = a["lines"][:16]
         for line in lines:
             p = tf.add_paragraph()
             p.text = line
@@ -536,14 +578,36 @@ m4.metric("Strong R² Pairs", f"{ind['strong_pairs']}")
 st.progress(ind["confidence_score"] / 100)
 
 st.markdown("### Quick exploration")
-num_cols = df.select_dtypes(include=np.number).columns.tolist()
-cat_cols = [c for c in df.columns if c not in num_cols and not np.issubdtype(df[c].dtype, np.datetime64)]
+
+raw_num_cols = df.select_dtypes(include=np.number).columns.tolist()
+num_cols = prioritize_numeric_columns(raw_num_cols)
+
+cat_cols = [c for c in df.columns if c not in raw_num_cols and not np.issubdtype(df[c].dtype, np.datetime64)]
 
 c1, c2 = st.columns(2)
+
 with c1:
     if num_cols:
-        col = st.selectbox("Numeric column", num_cols)
-        fig = px.box(df, y=col, points="all") if len(df) < 100 else px.histogram(df, x=col)
+        # Default to Revenue if present
+        default_idx = 0
+        for i, c in enumerate(num_cols):
+            if "revenue" in c.lower():
+                default_idx = i
+                break
+
+        col = st.selectbox("Numeric column (prioritized)", num_cols, index=default_idx)
+
+        unique_vals = df[col].nunique(dropna=True)
+
+        if unique_vals <= 10:
+            vc = df[col].value_counts().sort_index().reset_index()
+            vc.columns = [col, "Count"]
+            fig = px.bar(vc, x=col, y="Count", text_auto=True, title=f"Distribution of {col}")
+        elif len(df) < 200:
+            fig = px.box(df, y=col, points="outliers", title=f"Distribution of {col}")
+        else:
+            fig = px.histogram(df, x=col, nbins=30, title=f"Distribution of {col}")
+
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No numeric columns detected.")
@@ -553,7 +617,7 @@ with c2:
         col = st.selectbox("Categorical column", cat_cols)
         vc = df[col].astype(str).value_counts().head(20).reset_index()
         vc.columns = [col, "count"]
-        fig = px.bar(vc, x=col, y="count", text_auto=True)
+        fig = px.bar(vc, x=col, y="count", text_auto=True, title=f"Top values of {col}")
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No categorical columns detected.")
