@@ -6,3 +6,5 @@ plotly
 openai
 python-dotenv
 ydata-profiling
+reportlab
+python-pptx
