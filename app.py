@@ -712,7 +712,7 @@ def build_suggested_next_analyses(df: pd.DataFrame, signals: dict) -> list[dict]
                 "Before/after impact on missingness and stability.",
                 "Green-light for deeper modeling."
             ]
-        )
+        })
 
     return suggestions[:3]
 
