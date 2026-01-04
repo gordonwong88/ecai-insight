@@ -8,3 +8,4 @@ python-dotenv
 ydata-profiling
 reportlab
 python-pptx
+openpyxl
