@@ -33,6 +33,15 @@ st.set_page_config(
     page_icon="📊",
     layout="wide",
 )
+st.markdown("""
+<style>
+/* Hide Streamlit top header and toolbar */
+header[data-testid="stHeader"] {display: none;}
+div[data-testid="stToolbar"] {display: none;}
+/* Remove extra top padding that appears after hiding header */
+section.main > div {padding-top: 1rem;}
+</style>
+""", unsafe_allow_html=True)
 
 APP_TITLE = "EC-AI Insight (MVP)"
 APP_TAGLINE = "Turning Data Into Intelligence — Upload a CSV/Excel to get instant profiling + insights."
