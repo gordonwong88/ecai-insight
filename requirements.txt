@@ -9,3 +9,4 @@ ydata-profiling
 reportlab
 python-pptx
 openpyxl
+kaleido==0.2.1
