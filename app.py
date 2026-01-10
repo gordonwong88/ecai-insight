@@ -1,36 +1,37 @@
-# app.py
-# EC-AI Insight (MVP) — single-file Streamlit app (Stage 3A)
-# DASHBOARD-FIRST layout (LOCKED):
-#   1) Executive Dashboard (KPIs + Hero charts) at the top
-#   2) Executive Summary + Key Insights narrative below
-#   3) Deeper sections + AI report + Further analyses + Export
-
-from __future__ import annotations
+# app.py — EC-AI Insight (MVP)
+# ------------------------------------------------------------
+# Features:
+# - Upload CSV/XLSX
+# - Executive Dashboard (top): KPI cards + revenue charts (Tableau-style layout)
+# - Data profile + Indicators (coverage, avg missing, confidence)
+# - Auto business cuts + trends (colorful) + short commentary + top labels
+# - Correlation heatmap (R² default) with strength labels + tooltip
+# - AI Insights Report (Executive Summary + Key Insights + Suggested Next Analyses)
+# - One-click "Run all 3 analyses" (rule-based + AI-aligned) with charts + bullet commentary
+# - Export PDF / PPTX (with charts if kaleido available; else text-only)
+# ------------------------------------------------------------
 
 import io
-import os
 import re
 import math
 import json
 import textwrap
-import datetime as dt
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
-from scipy import stats
+import streamlit as st
 
-# --- Optional libraries for export ---
+# Optional exports
 try:
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib.units import inch
-    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Image as RLImage
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
     REPORTLAB_OK = True
 except Exception:
     REPORTLAB_OK = False
@@ -43,815 +44,675 @@ try:
 except Exception:
     PPTX_OK = False
 
-# plotly image export requires kaleido
+# Plotly image export (kaleido)
 try:
     import plotly.io as pio
-    _ = pio.to_image(go.Figure(), format="png")  # capability check
+    _ = pio.to_image(go.Figure(), format="png")  # quick probe
     KALEIDO_OK = True
 except Exception:
     KALEIDO_OK = False
 
-# --- OpenAI ---
-OPENAI_KEY = None
-if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
-    OPENAI_KEY = st.secrets["OPENAI_API_KEY"]
-elif os.getenv("OPENAI_API_KEY"):
-    OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 
-
-# ----------------------------
-# Page config + styling
-# ----------------------------
+# -----------------------------
+# Page config
+# -----------------------------
 st.set_page_config(
     page_title="EC-AI Insight (MVP)",
     page_icon="📊",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
-# Color palettes (Plotly qualitative)
-PALETTE_MAIN = px.colors.qualitative.Set2
-PALETTE_ALT = px.colors.qualitative.Safe
-PALETTE_BOLD = px.colors.qualitative.Bold
-
+# -----------------------------
+# Styling (simple, clean, "Tableau-ish")
+# -----------------------------
 st.markdown(
     """
-<style>
-.small-note { color: #6b7280; font-size: 0.9rem; }
-.section-title { margin-top: 0.25rem; }
-hr { margin: 1.2rem 0; }
-</style>
-""",
+    <style>
+      .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+      .small-note { color: #6b7280; font-size: 0.9rem; }
+      .section-title { font-size: 1.6rem; font-weight: 800; margin-top: 0.2rem; }
+      .subtle { color: #6b7280; }
+      .kpi-card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px 14px 10px 14px; }
+      .kpi-label { color: #6b7280; font-size: 0.85rem; }
+      .kpi-value { font-weight: 800; font-size: 1.3rem; margin-top: 4px; }
+      .kpi-sub { color: #6b7280; font-size: 0.85rem; margin-top: 2px; }
+      .divider { height: 1px; background: #e5e7eb; margin: 10px 0 18px 0; }
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 
+COLOR_SEQ = px.colors.qualitative.Set2 + px.colors.qualitative.Safe + px.colors.qualitative.Pastel
 
-# ----------------------------
-# Helpers: type detection
-# ----------------------------
-def _clean_colname(c: str) -> str:
-    c = str(c).strip()
-    c = re.sub(r"\s+", "_", c)
-    return c
+# -----------------------------
+# Utilities
+# -----------------------------
+CURRENCY_HINTS = ["revenue", "sales", "amount", "income", "gm", "profit", "nop", "fee", "cost", "cogs", "margin", "balance"]
+DATE_HINTS = ["date", "time", "month", "day", "dt", "period"]
+DIM_HINTS = ["country", "region", "store", "channel", "category", "segment", "team", "industry", "sector", "product", "payment", "method"]
 
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(s).strip().lower())
 
-def load_table(uploaded_file) -> pd.DataFrame:
-    name = uploaded_file.name.lower()
-    raw = uploaded_file.getvalue()
-    bio = io.BytesIO(raw)
+def human_money(x: float) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "-"
+    x = float(x)
+    sign = "-" if x < 0 else ""
+    x = abs(x)
+    if x >= 1_000_000_000:
+        return f"{sign}${x/1_000_000_000:.1f}B"
+    if x >= 1_000_000:
+        return f"{sign}${x/1_000_000:.1f}M"
+    if x >= 1_000:
+        return f"{sign}${x/1_000:.1f}K"
+    return f"{sign}${x:.0f}"
 
-    if name.endswith(".csv"):
-        try:
-            df = pd.read_csv(bio)
-        except Exception:
-            bio.seek(0)
-            df = pd.read_csv(bio, encoding="latin-1")
-    elif name.endswith(".xlsx") or name.endswith(".xls"):
-        df = pd.read_excel(bio)
-    else:
-        raise ValueError("Unsupported file type. Please upload CSV or Excel (.xlsx/.xls).")
+def fmt_1dp(x: float) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "-"
+    return f"{float(x):.1f}"
 
-    df.columns = [_clean_colname(c) for c in df.columns]
-    return df
+def safe_to_datetime(series: pd.Series) -> Optional[pd.Series]:
+    try:
+        dt = pd.to_datetime(series, errors="coerce", infer_datetime_format=True)
+        if dt.notna().mean() >= 0.6:
+            return dt
+    except Exception:
+        return None
+    return None
 
-
-def coerce_types(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-
-    date_like = [c for c in out.columns if re.search(r"(date|time|day|month|year)", c, re.I)]
-    for c in out.columns:
-        if c in date_like or out[c].dtype == "object":
-            try:
-                parsed = pd.to_datetime(out[c], errors="coerce", infer_datetime_format=True, utc=False)
-                if parsed.notna().mean() >= 0.4:
-                    out[c] = parsed
-            except Exception:
-                pass
-
-    for c in out.columns:
-        if out[c].dtype == "object":
-            s = out[c].astype(str).str.replace(",", "", regex=False)
-            s = s.str.replace("$", "", regex=False)
-            s = s.str.replace("%", "", regex=False)
-            num = pd.to_numeric(s, errors="coerce")
-            if num.notna().mean() >= 0.7:
-                out[c] = num
-
-    return out
-
-
-def get_numeric_cols(df: pd.DataFrame) -> List[str]:
-    return [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-
-
-def get_categorical_cols(df: pd.DataFrame) -> List[str]:
-    cats = []
+def find_date_column(df: pd.DataFrame) -> Optional[str]:
+    # prefer explicit datetime dtype
     for c in df.columns:
-        if pd.api.types.is_object_dtype(df[c]) or pd.api.types.is_categorical_dtype(df[c]):
-            nun = df[c].nunique(dropna=True)
-            if 2 <= nun <= 50:
-                cats.append(c)
-    return cats
+        if np.issubdtype(df[c].dtype, np.datetime64):
+            return c
+    # else try parse for columns with date hints
+    candidates = []
+    for c in df.columns:
+        cn = _norm(c)
+        if any(h in cn for h in DATE_HINTS):
+            candidates.append(c)
+    for c in candidates + list(df.columns):
+        dt = safe_to_datetime(df[c])
+        if dt is not None:
+            return c
+    return None
 
+def find_numeric_targets(df: pd.DataFrame) -> List[str]:
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    if not num_cols:
+        return []
+    # score by "business metric" hints
+    scores = []
+    for c in num_cols:
+        cn = _norm(c)
+        score = 0
+        for h in CURRENCY_HINTS:
+            if h in cn:
+                score += 3
+        # prefer non-binary
+        uniq = df[c].nunique(dropna=True)
+        if uniq <= 2:
+            score -= 2
+        # prefer wider variance
+        if df[c].std(skipna=True) > 0:
+            score += 1
+        scores.append((score, c))
+    scores.sort(reverse=True, key=lambda x: x[0])
+    # take top 3-5 as "key metrics"
+    return [c for _, c in scores[:5]]
 
-def get_datetime_cols(df: pd.DataFrame) -> List[str]:
-    return [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
-
-
-def pick_metric_candidates(numeric_cols: List[str]) -> List[str]:
-    priority_patterns = [
-        r"revenue|sales|gmv|income",
-        r"profit|margin|ebit|pnl",
-        r"amount|approved|limit|outstanding|balance|exposure|loan",
-        r"cost|cogs|expense|spend",
-        r"units|qty|volume|count",
-        r"rate|pct|percent|ratio|util|usage",
-    ]
-    scores = {c: 0 for c in numeric_cols}
-    for c in numeric_cols:
-        for i, pat in enumerate(priority_patterns):
-            if re.search(pat, c, re.I):
-                scores[c] = max(scores[c], 100 - i * 10)
-
-    # fallback: variance as weak signal (uses df_global if available)
-    for c in numeric_cols:
-        if scores[c] == 0:
-            try:
-                scores[c] = float(np.nanstd(df_global[c]))  # df_global set after upload
-            except Exception:
-                scores[c] = 1
-
-    ranked = sorted(numeric_cols, key=lambda x: scores.get(x, 0), reverse=True)
-    return ranked
-
-
-def pick_primary_metric(df: pd.DataFrame) -> Optional[str]:
-    nums = get_numeric_cols(df)
-    if not nums:
+def find_primary_metric(df: pd.DataFrame) -> Optional[str]:
+    candidates = find_numeric_targets(df)
+    if not candidates:
         return None
-    ranked = pick_metric_candidates(nums)
-    return ranked[0] if ranked else None
+    # prefer revenue/sales if present
+    for c in candidates:
+        cn = _norm(c)
+        if "revenue" in cn or "sales" in cn:
+            return c
+    return candidates[0]
 
+def find_dimension_candidates(df: pd.DataFrame) -> List[str]:
+    cat_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    # include low-cardinality ints as dims if sensible
+    for c in df.select_dtypes(include=[np.number]).columns:
+        if df[c].nunique(dropna=True) <= 12 and df[c].nunique(dropna=True) > 2:
+            cat_cols.append(c)
+    # score by hints and cardinality
+    scored = []
+    for c in cat_cols:
+        cn = _norm(c)
+        nun = df[c].nunique(dropna=True)
+        if nun < 2:
+            continue
+        score = 0
+        for h in DIM_HINTS:
+            if h in cn:
+                score += 3
+        if 2 <= nun <= 20:
+            score += 2
+        elif nun <= 60:
+            score += 1
+        else:
+            score -= 1
+        scored.append((score, c))
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return [c for _, c in scored[:6]]
 
-def detect_best_dimension(df: pd.DataFrame, prefer_keywords: List[str]) -> Optional[str]:
-    cats = get_categorical_cols(df)
-    if not cats:
-        return None
-    for kw in prefer_keywords:
-        for c in cats:
-            if re.search(kw, c, re.I):
-                return c
-    cand = sorted(cats, key=lambda c: df[c].nunique(dropna=True))
-    return cand[0] if cand else None
+def coverage_and_missing(df: pd.DataFrame) -> Tuple[float, float]:
+    # coverage = fraction of non-null cells
+    total = df.shape[0] * df.shape[1] if df.shape[0] and df.shape[1] else 0
+    if total == 0:
+        return 0.0, 0.0
+    non_null = df.notna().sum().sum()
+    coverage = non_null / total
+    avg_missing = 1.0 - coverage
+    return coverage, avg_missing
 
+def compute_confidence(df: pd.DataFrame, strong_r2_pairs: int) -> int:
+    """
+    A simple, explainable heuristic score 0-100:
+    - Data completeness (coverage)
+    - Row count (stability)
+    - Presence of datetime (trend-readiness)
+    - Numeric richness (# numeric)
+    - Signal density (strong R² pairs)
+    """
+    cov, avg_miss = coverage_and_missing(df)
+    n_rows, n_cols = df.shape
+    n_num = len(df.select_dtypes(include=[np.number]).columns)
+    has_date = find_date_column(df) is not None
 
-def format_money(x: float) -> str:
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return "-"
-    ax = abs(float(x))
-    if ax >= 1e9:
-        return f"${x/1e9:.1f}B"
-    if ax >= 1e6:
-        return f"${x/1e6:.1f}M"
-    if ax >= 1e3:
-        return f"${x/1e3:.1f}K"
-    return f"${x:.1f}"
+    score = 0
+    score += int(50 * cov)  # up to 50
+    score += min(15, int(math.log10(max(n_rows, 1)) * 7))  # up to ~15
+    score += min(10, n_num * 2)  # up to 10
+    score += 8 if has_date else 0
+    score += min(17, strong_r2_pairs * 3)  # up to 17
 
+    return max(0, min(100, score))
 
-def format_number(x: float) -> str:
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return "-"
-    ax = abs(float(x))
-    if ax >= 1e9:
-        return f"{x/1e9:.1f}B"
-    if ax >= 1e6:
-        return f"{x/1e6:.1f}M"
-    if ax >= 1e3:
-        return f"{x/1e3:.1f}K"
-    return f"{x:.1f}"
-
-
-# ----------------------------
-# Indicators logic
-# ----------------------------
-@dataclass
-class Indicators:
-    coverage: float
-    avg_missing: float
-    confidence_score: int
-    strong_r2_pairs: int
-
-
-def compute_indicators(df: pd.DataFrame) -> Indicators:
-    total_cells = df.shape[0] * df.shape[1] if df.shape[0] and df.shape[1] else 0
-    missing_cells = int(df.isna().sum().sum()) if total_cells else 0
-    coverage = 100.0 * (1.0 - (missing_cells / total_cells)) if total_cells else 0.0
-
-    miss_by_col = df.isna().mean() * 100.0 if df.shape[1] else pd.Series([], dtype=float)
-    avg_missing = float(miss_by_col.mean()) if len(miss_by_col) else 0.0
-
-    nums = get_numeric_cols(df)
-    strong = 0
-    if len(nums) >= 2:
-        corr = df[nums].corr(method="pearson")
-        r2 = corr**2
-        m = r2.values
-        for i in range(m.shape[0]):
-            for j in range(i + 1, m.shape[1]):
-                if not np.isnan(m[i, j]) and m[i, j] >= 0.7:
-                    strong += 1
-
-    nrows, ncols = df.shape
-    numeric_ratio = (len(get_numeric_cols(df)) / ncols) if ncols else 0
-    date_bonus = 1 if len(get_datetime_cols(df)) > 0 else 0
-    size_score = min(1.0, math.log10(max(nrows, 1) + 1) / 5.0)
-    missing_score = max(0.0, 1.0 - avg_missing / 40.0)
-    richness_score = min(1.0, numeric_ratio * 1.2 + 0.2 * date_bonus)
-
-    conf = int(round(100 * (0.45 * size_score + 0.35 * missing_score + 0.20 * richness_score)))
-    conf = max(5, min(98, conf))
-
-    return Indicators(
-        coverage=coverage,
-        avg_missing=avg_missing,
-        confidence_score=conf,
-        strong_r2_pairs=strong,
-    )
-
-
-def confidence_label(score: int) -> str:
-    if score >= 85:
-        return f"{score} (High)"
-    if score >= 65:
-        return f"{score} (Medium)"
-    return f"{score} (Low)"
-
-
-def r2_strength_label(r2: float) -> str:
-    if np.isnan(r2):
-        return "n/a"
-    if r2 < 0.10:
+def r_strength_label(r: float) -> str:
+    a = abs(r)
+    if a < 0.2:
         return "Very weak"
-    if r2 < 0.30:
+    if a < 0.4:
         return "Weak"
-    if r2 < 0.60:
+    if a < 0.6:
         return "Moderate"
-    if r2 < 0.80:
+    if a < 0.8:
         return "Strong"
     return "Very strong"
 
+def r2_strength_label(r2: float) -> str:
+    if r2 < 0.10:
+        return "Very low"
+    if r2 < 0.30:
+        return "Low"
+    if r2 < 0.50:
+        return "Moderate"
+    if r2 < 0.70:
+        return "Strong"
+    return "Very strong"
 
-# ----------------------------
-# Plot helpers (colorful)
-# ----------------------------
-def bar_topk(df: pd.DataFrame, dim: str, metric: str, agg: str = "sum", k: int = 12) -> pd.DataFrame:
-    g = df.groupby(dim, dropna=False)[metric]
-    s = g.mean() if agg == "mean" else g.sum()
-    out = s.sort_values(ascending=False).head(k).reset_index()
-    out.columns = [dim, metric]
+def make_r2_matrix(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
+    if len(cols) < 2:
+        return pd.DataFrame()
+    corr = df[cols].corr(numeric_only=True)
+    r2 = corr**2
+    return r2
+
+def top_r2_pairs(r2: pd.DataFrame, k: int = 5, min_r2: float = 0.5) -> List[Tuple[str, str, float]]:
+    pairs = []
+    cols = list(r2.columns)
+    for i in range(len(cols)):
+        for j in range(i+1, len(cols)):
+            v = float(r2.iloc[i, j])
+            if not np.isnan(v) and v >= min_r2:
+                pairs.append((cols[i], cols[j], v))
+    pairs.sort(key=lambda x: x[2], reverse=True)
+    return pairs[:k]
+
+def short_bar_commentary(grouped: pd.DataFrame, dim: str, metric: str) -> str:
+    if grouped.empty:
+        return ""
+    top = grouped.iloc[0]
+    return f"Top segment is **{top[dim]}** with **{human_money(top[metric])}**."
+
+def add_value_labels_bar(fig: go.Figure, prefix: str = "$") -> go.Figure:
+    # assumes single-trace bar
+    fig.update_traces(
+        texttemplate=f"{prefix}%{{text}}",
+        textposition="inside",
+        insidetextanchor="middle",
+    )
+    return fig
+
+def make_bar_topN(df: pd.DataFrame, dim: str, metric: str, topn: int = 12) -> pd.DataFrame:
+    g = df.groupby(dim, dropna=False)[metric].sum().reset_index()
+    g = g.sort_values(metric, ascending=False).head(topn)
+    # keep consistent formatting
+    g[metric] = g[metric].astype(float)
+    return g
+
+def maybe_cast_currency(df: pd.DataFrame, metric: str) -> pd.Series:
+    # ensure numeric float
+    return pd.to_numeric(df[metric], errors="coerce")
+
+def best_discount_band(df: pd.DataFrame, discount_col: str, metric: str) -> Optional[pd.DataFrame]:
+    if discount_col not in df.columns or metric not in df.columns:
+        return None
+    s = pd.to_numeric(df[discount_col], errors="coerce")
+    if s.notna().mean() < 0.6:
+        return None
+
+    # band in percent-like (0-1 or 0-100)
+    maxv = s.max(skipna=True)
+    if maxv <= 1.5:
+        pct = s * 100
+    else:
+        pct = s
+
+    bins = [-1e9, 2, 5, 10, 15, 20, 1e9]
+    labels = ["0–2%", "2–5%", "5–10%", "10–15%", "15–20%", "20%+"]
+    band = pd.cut(pct, bins=bins, labels=labels)
+    tmp = df.copy()
+    tmp["Discount_Band"] = band
+    tmp[metric] = pd.to_numeric(tmp[metric], errors="coerce")
+    out = tmp.groupby("Discount_Band")[metric].mean().reset_index()
+    out["n"] = tmp.groupby("Discount_Band")[metric].count().values
+    out = out.dropna(subset=["Discount_Band"])
     return out
 
+def detect_discount_column(df: pd.DataFrame) -> Optional[str]:
+    for c in df.columns:
+        cn = _norm(c)
+        if "discount" in cn and df[c].dtype != "object":
+            return c
+    return None
 
-def fig_bar(df: pd.DataFrame, dim: str, metric: str, title: str, money: bool = False, top_k: int = 12) -> go.Figure:
-    d = bar_topk(df, dim, metric, agg="sum", k=top_k)
+def detect_return_flag(df: pd.DataFrame) -> Optional[str]:
+    for c in df.columns:
+        cn = _norm(c)
+        if "return" in cn and df[c].nunique(dropna=True) <= 6:
+            return c
+    return None
+
+def detect_cost_col(df: pd.DataFrame) -> Optional[str]:
+    for c in df.select_dtypes(include=[np.number]).columns:
+        cn = _norm(c)
+        if "cogs" in cn or "cost" in cn:
+            return c
+    return None
+
+def detect_profit_col(df: pd.DataFrame) -> Optional[str]:
+    for c in df.select_dtypes(include=[np.number]).columns:
+        cn = _norm(c)
+        if "profit" in cn or "margin" in cn or "gm" in cn:
+            return c
+    return None
+
+def ensure_datetime_col(df: pd.DataFrame, date_col: str) -> pd.DataFrame:
+    out = df.copy()
+    out[date_col] = pd.to_datetime(out[date_col], errors="coerce")
+    return out
+
+def line_chart_total_and_split(
+    df: pd.DataFrame,
+    date_col: str,
+    metric: str,
+    dim: Optional[str] = None,
+    topk: int = 5
+) -> Tuple[Optional[go.Figure], List[go.Figure], str]:
+    """
+    Returns:
+      - total trend fig (metric over time)
+      - small multiples figs if dim provided
+      - message
+    """
+    if date_col is None or date_col not in df.columns:
+        return None, [], "No date column detected for time trend."
+
+    dfx = df.copy()
+    dfx[metric] = pd.to_numeric(dfx[metric], errors="coerce")
+    dfx = dfx.dropna(subset=[date_col, metric])
+    if dfx.empty:
+        return None, [], "No valid rows for time trend."
+
+    dfx = ensure_datetime_col(dfx, date_col)
+    dfx = dfx.dropna(subset=[date_col])
+    if dfx.empty:
+        return None, [], "No valid datetime values for time trend."
+
+    # daily aggregation
+    g_total = dfx.groupby(pd.Grouper(key=date_col, freq="D"))[metric].sum().reset_index()
+    fig_total = px.line(
+        g_total,
+        x=date_col,
+        y=metric,
+        markers=True,
+        title=f"{metric} trend (total)",
+        template="plotly_white",
+    )
+    fig_total.update_layout(margin=dict(l=10, r=10, t=50, b=10))
+    fig_total.update_traces(
+        hovertemplate=f"Date=%{{x|%Y-%m-%d}}<br>{metric}=%{{y:,.2f}}<extra></extra>"
+    )
+
+    split_figs = []
+    if dim and dim in dfx.columns:
+        # top categories by total metric
+        top = dfx.groupby(dim)[metric].sum().sort_values(ascending=False).head(topk).index.tolist()
+        dfx2 = dfx[dfx[dim].isin(top)].copy()
+        if not dfx2.empty:
+            for cat in top:
+                g = dfx2[dfx2[dim] == cat].groupby(pd.Grouper(key=date_col, freq="D"))[metric].sum().reset_index()
+                fig = px.line(
+                    g,
+                    x=date_col,
+                    y=metric,
+                    markers=True,
+                    title=f"{metric} trend — {dim}: {cat}",
+                    template="plotly_white",
+                )
+                fig.update_layout(margin=dict(l=10, r=10, t=50, b=10), height=260)
+                fig.update_traces(
+                    hovertemplate=f"{dim}={cat}<br>Date=%{{x|%Y-%m-%d}}<br>{metric}=%{{y:,.2f}}<extra></extra>"
+                )
+                split_figs.append(fig)
+
+    return fig_total, split_figs, "ok"
+
+def chart_commentary_top_point(df_agg: pd.DataFrame, dim: str, metric: str) -> str:
+    if df_agg.empty:
+        return ""
+    top = df_agg.iloc[0]
+    return f"Finding: **{top[dim]}** leads with **{human_money(top[metric])}**."
+
+def annotate_top_bar(fig: go.Figure, x_vals: List, y_vals: List, metric: str) -> go.Figure:
+    if not x_vals or not y_vals:
+        return fig
+    idx = int(np.nanargmax(y_vals))
+    fig.add_annotation(
+        x=x_vals[idx],
+        y=y_vals[idx],
+        text=f"Top: {human_money(y_vals[idx])}",
+        showarrow=True,
+        arrowhead=2,
+        yshift=10,
+    )
+    return fig
+
+def build_bar(df_agg: pd.DataFrame, dim: str, metric: str, title: str) -> go.Figure:
     fig = px.bar(
-        d,
+        df_agg,
         x=dim,
         y=metric,
         title=title,
-        text=metric,
+        template="plotly_white",
         color=dim,
-        color_discrete_sequence=PALETTE_MAIN,
+        color_discrete_sequence=COLOR_SEQ,
     )
-
-    if money:
-        fig.update_traces(
-            text=[format_money(v) for v in d[metric].values],
-            textposition="inside",
-            hovertemplate=f"{dim}=%{{x}}<br>{metric}=%{{y:.2f}}<extra></extra>",
-        )
-        fig.update_yaxes(title_text=metric, tickprefix="$")
-    else:
-        fig.update_traces(
-            text=[format_number(v) for v in d[metric].values],
-            textposition="inside",
-            hovertemplate=f"{dim}=%{{x}}<br>{metric}=%{{y:.2f}}<extra></extra>",
-        )
-
-    fig.update_layout(showlegend=False, margin=dict(l=10, r=10, t=60, b=10), height=420)
+    # label on bar (1 decimal K/M etc)
+    texts = [human_money(v).replace("$", "") for v in df_agg[metric].tolist()]
+    fig.update_traces(text=texts, textposition="inside", insidetextanchor="middle")
+    # add $ prefix in text template
+    fig.update_traces(texttemplate="$%{text}")
+    fig.update_layout(showlegend=False, margin=dict(l=10, r=10, t=50, b=10))
     return fig
 
-
-def fig_trend_total(df: pd.DataFrame, date_col: str, metric: str, money: bool = False) -> go.Figure:
-    d = df[[date_col, metric]].dropna().copy()
-    d[date_col] = pd.to_datetime(d[date_col], errors="coerce")
-    d = d.dropna(subset=[date_col])
-    if d.empty:
-        return go.Figure()
-
-    d = d.groupby(pd.Grouper(key=date_col, freq="D"))[metric].sum().reset_index()
-    fig = px.line(
-        d,
-        x=date_col,
-        y=metric,
-        title=f"{metric} trend (total)",
-        markers=True,
-        color_discrete_sequence=PALETTE_BOLD,
-    )
-    fig.update_layout(margin=dict(l=10, r=10, t=60, b=10), height=420)
-    if money:
-        fig.update_yaxes(tickprefix="$")
-    return fig
-
-
-def fig_trend_by_dim(df: pd.DataFrame, date_col: str, dim: str, metric: str, top_n: int = 5, money: bool = False) -> go.Figure:
-    d = df[[date_col, dim, metric]].dropna().copy()
-    d[date_col] = pd.to_datetime(d[date_col], errors="coerce")
-    d = d.dropna(subset=[date_col])
-    if d.empty:
-        return go.Figure()
-
-    totals = d.groupby(dim)[metric].sum().sort_values(ascending=False)
-    keep = list(totals.head(top_n).index)
-    d = d[d[dim].isin(keep)]
-
-    d = d.groupby([pd.Grouper(key=date_col, freq="D"), dim])[metric].sum().reset_index()
-    fig = px.line(
-        d,
-        x=date_col,
-        y=metric,
-        color=dim,
-        markers=True,
-        title=f"{metric} trend by {dim} (top {len(keep)})",
-        color_discrete_sequence=PALETTE_MAIN,
-    )
-    fig.update_layout(margin=dict(l=10, r=10, t=60, b=10), height=460, legend_title_text=dim)
-    if money:
-        fig.update_yaxes(tickprefix="$")
-    return fig
-
-
-def fig_corr_r2(df: pd.DataFrame, numeric_cols: List[str]) -> go.Figure:
-    corr = df[numeric_cols].corr(method="pearson")
-    r2 = corr**2
+def build_heatmap_r2(r2: pd.DataFrame) -> go.Figure:
+    # heatmap with tooltip R²
+    z = r2.values
+    x = r2.columns.tolist()
+    y = r2.index.tolist()
+    text = [[f"R² = {z[i][j]:.2f}<br>{r2_strength_label(z[i][j])}" for j in range(len(x))] for i in range(len(y))]
     fig = go.Figure(
         data=go.Heatmap(
-            z=r2.values,
-            x=numeric_cols,
-            y=numeric_cols,
+            z=z,
+            x=x,
+            y=y,
+            text=text,
+            hovertemplate="%{text}<extra></extra>",
             colorscale="Blues",
-            zmin=0,
-            zmax=1,
-            hovertemplate="X=%{x}<br>Y=%{y}<br>R²=%{z:.2f}<extra></extra>",
-            colorbar=dict(title="R²"),
         )
     )
-    fig.update_layout(title="Correlation (R²)", margin=dict(l=10, r=10, t=60, b=10), height=520)
+    fig.update_layout(
+        title="Correlation (R²)",
+        template="plotly_white",
+        margin=dict(l=10, r=10, t=50, b=10),
+        height=520,
+    )
     return fig
 
-
-# ----------------------------
-# Narrative generation: rule-based insights
-# ----------------------------
-def build_profile_table(df: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for c in df.columns:
-        rows.append(
-            {
-                "column": c,
-                "dtype": str(df[c].dtype),
-                "missing_%": round(float(df[c].isna().mean() * 100.0), 1),
-                "unique_values": int(df[c].nunique(dropna=True)),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def executive_summary_points(df: pd.DataFrame, primary_metric: Optional[str], date_col: Optional[str], indicators: Indicators) -> List[str]:
-    nrows, ncols = df.shape
-    pts = []
-    pts.append(
-        f"Dataset size: {nrows:,} rows × {ncols:,} columns; overall coverage is {indicators.coverage:.1f}% with avg missing {indicators.avg_missing:.1f}%."
-    )
-    if primary_metric:
-        s = df[primary_metric]
-        pts.append(
-            f"Primary metric detected: **{primary_metric}** (mean {format_number(float(np.nanmean(s)))}; median {format_number(float(np.nanmedian(s)))}; range {format_number(float(np.nanmin(s)))}–{format_number(float(np.nanmax(s)))})."
-        )
-    nums = get_numeric_cols(df)
-    cats = get_categorical_cols(df)
-    dts = get_datetime_cols(df)
-    pts.append(f"Column mix: {len(nums)} numeric, {len(cats)} categorical (2–50 unique), {len(dts)} datetime.")
-    if date_col:
-        dmin = pd.to_datetime(df[date_col], errors="coerce").min()
-        dmax = pd.to_datetime(df[date_col], errors="coerce").max()
-        if pd.notna(dmin) and pd.notna(dmax):
-            pts.append(f"Time coverage detected in **{date_col}** from {dmin.date()} to {dmax.date()}.")
-    if indicators.strong_r2_pairs > 0:
-        pts.append(f"Found **{indicators.strong_r2_pairs}** strong numeric relationships (R² ≥ 0.70) worth prioritising.")
-    else:
-        pts.append("No very-strong numeric relationships (R² ≥ 0.70) detected; focus may be more segment-driven or require feature engineering.")
-
-    top_missing = (df.isna().mean().sort_values(ascending=False) * 100).head(3)
-    if len(top_missing) and top_missing.iloc[0] > 0:
-        missing_txt = ", ".join([f"{c} ({v:.1f}%)" for c, v in top_missing.items() if v > 0])
-        if missing_txt:
-            pts.append(f"Highest missing columns: {missing_txt}. Consider imputation/filters before deeper modelling.")
-    else:
-        pts.append("Missingness is minimal across the dataset, supporting stable descriptive analysis.")
-
-    return pts[:10]
-
-
-def key_insights_points(df: pd.DataFrame, primary_metric: Optional[str], date_col: Optional[str]) -> List[str]:
-    pts = []
-    if not primary_metric:
-        return ["No numeric primary metric detected; upload data with at least one numeric column to generate insights."]
-
-    moneyish = bool(re.search(r"revenue|sales|income|amount|profit|cost|cogs", primary_metric, re.I))
-
-    cats = get_categorical_cols(df)
-    best_dim = None
-    best_spread = -1.0
-    best_tbl = None
-    for c in cats:
-        g = df.groupby(c)[primary_metric].sum()
-        if g.shape[0] < 2:
-            continue
-        spread = float((g.max() - g.min()) / (g.mean() + 1e-9))
-        if spread > best_spread:
-            best_spread = spread
-            best_dim = c
-            best_tbl = g.sort_values(ascending=False)
-
-    if best_dim and best_tbl is not None:
-        top = best_tbl.index[0]
-        bot = best_tbl.index[-1]
-        pts.append(
-            f"Performance is most differentiated by **{best_dim}**: top segment is **{top}** with "
-            f"{format_money(best_tbl.iloc[0]) if moneyish else format_number(best_tbl.iloc[0])}; "
-            f"lowest is **{bot}** with {format_money(best_tbl.iloc[-1]) if moneyish else format_number(best_tbl.iloc[-1])}."
-        )
-        share_top = float(best_tbl.iloc[0] / (best_tbl.sum() + 1e-9))
-        pts.append(f"Concentration check: top {best_dim} contributes about **{share_top*100:.1f}%** of total {primary_metric}.")
-    else:
-        pts.append("No suitable categorical cut detected (need 2–50 unique values) to produce segment insights.")
-
-    if date_col:
-        d = df[[date_col, primary_metric]].dropna().copy()
-        d[date_col] = pd.to_datetime(d[date_col], errors="coerce")
-        d = d.dropna(subset=[date_col])
-        if not d.empty:
-            daily = d.groupby(pd.Grouper(key=date_col, freq="D"))[primary_metric].sum()
-            if daily.shape[0] >= 7:
-                slope = np.polyfit(np.arange(len(daily)), daily.values, 1)[0]
-                direction = "upward" if slope > 0 else "downward" if slope < 0 else "flat"
-                pts.append(f"Trend read: total {primary_metric} shows an overall **{direction}** movement across the period (simple linear trend).")
-                cv = float(np.nanstd(daily.values) / (np.nanmean(daily.values) + 1e-9))
-                pts.append(f"Volatility: daily coefficient of variation is ~**{cv:.2f}** (higher means more day-to-day swings).")
-
-    nums = get_numeric_cols(df)
-    if len(nums) >= 2:
-        corr = df[nums].corr(method="pearson")
-        r2 = (corr**2).where(~np.eye(len(nums), dtype=bool))
-        max_idx = np.unravel_index(np.nanargmax(r2.values), r2.shape)
-        a = nums[max_idx[0]]
-        b = nums[max_idx[1]]
-        r2max = float(r2.values[max_idx])
-        pts.append(
-            f"Strongest numeric relationship: **{a} ↔ {b}** with **R²={r2max:.2f}** ({r2_strength_label(r2max)}). "
-            f"This can guide driver hypotheses (not causation)."
-        )
-
-    return pts[:10]
-
-
-# ----------------------------
-# Suggested next analyses (OpenAI + fallback)
-# ----------------------------
-def openai_chat(prompt: str, model: str = "gpt-4o-mini") -> str:
-    if not OPENAI_KEY:
-        raise RuntimeError("OPENAI_API_KEY not set.")
+def ai_client():
+    """
+    OpenAI client. Requires:
+      - st.secrets["OPENAI_API_KEY"]  (preferred)
+    """
+    key = None
+    if "OPENAI_API_KEY" in st.secrets:
+        key = st.secrets["OPENAI_API_KEY"]
+    if not key:
+        return None
 
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_KEY)
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You are a senior analytics consultant. Be concise but highly specific and actionable."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.2,
-        )
-        return resp.choices[0].message.content.strip()
+        return OpenAI(api_key=key)
     except Exception:
-        pass
+        return None
 
-    import requests
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": model,
-        "temperature": 0.2,
-        "messages": [
-            {"role": "system", "content": "You are a senior analytics consultant. Be concise but highly specific and actionable."},
-            {"role": "user", "content": prompt},
-        ],
-    }
-    r = requests.post(url, headers=headers, json=payload, timeout=45)
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"].strip()
-
-
-def suggested_next_analyses_fallback(df: pd.DataFrame, primary_metric: str, date_col: Optional[str], dims: List[str]) -> List[Dict[str, str]]:
-    dims = [d for d in dims if d]
-    dim1 = dims[0] if len(dims) > 0 else "segment"
-    dim2 = dims[1] if len(dims) > 1 else dim1
-
-    recs = []
-    recs.append({
-        "title": f"{primary_metric} driver & segment performance deep-dive",
-        "Business Context": f"Identify which {dim1} segments contribute most to {primary_metric} and whether performance is concentrated or broadly distributed. This supports targeted investment and helps surface underperforming segments that may need intervention.",
-        "Risks": "Segment-level correlations can be distorted by mix effects (seasonality, pricing tiers, product mix). Validate with controls before acting.",
-        "Outputs": [
-            f"Ranked contribution table for {dim1} (top/bottom, share of total)",
-            "Variance decomposition / concentration check",
-            "Short ‘so-what’ narrative: what differentiates best vs worst segments",
-        ]
-    })
-
-    if date_col:
-        recs.append({
-            "title": f"{primary_metric} trend & seasonality scan (with anomaly flags)",
-            "Business Context": f"Understand whether {primary_metric} is growing, declining, or cyclical across the observed period, and which segments (e.g., {dim1}/{dim2}) are driving changes. Useful for forecasting readiness and planning.",
-            "Risks": "Short windows can overfit false seasonality; outliers can dominate. Separate structural shifts from one-off spikes.",
-            "Outputs": [
-                "Total trend chart + peak/trough identification",
-                f"Segment trend view for top {dim1}/{dim2}",
-                f"Anomaly list (dates/segments with unusually high/low {primary_metric})",
-            ]
+def ai_suggested_next_analyses(
+    df: pd.DataFrame,
+    metric: str,
+    date_col: Optional[str],
+    dims: List[str],
+    r2_pairs: List[Tuple[str, str, float]],
+    max_items: int = 3
+) -> List[Dict[str, str]]:
+    """
+    Consultant-grade: 3 items with Business Context / Risks / Outputs.
+    """
+    client = ai_client()
+    if client is None:
+        # fallback rule-based suggestions
+        base = []
+        dims_pick = dims[:2] if dims else []
+        base.append({
+            "title": f"{metric} driver & segment performance",
+            "business_context": f"Identify which segments drive {metric} and where performance gaps exist to focus actions and resource allocation.",
+            "risks": "Risk of confounding (e.g., mix changes). Validate with controlled comparisons and consistent time windows.",
+            "outputs": f"Top/bottom segments by {metric}; contribution waterfall; drivers vs. segment chart; short narrative of what changed and why."
         })
-    else:
-        recs.append({
-            "title": "Time dimension setup (to enable forecasting later)",
-            "Business Context": "No clear date/time column detected. Adding a time index enables trend, seasonality, and forecasting value.",
-            "Risks": "Inconsistent date formats or mixed granularities (daily vs monthly) can create misleading trends.",
-            "Outputs": [
-                "Recommended date column mapping",
-                "Standard granularity suggestion (daily/weekly/monthly)",
-                "Validation checks for continuity",
-            ]
+        if date_col:
+            base.append({
+                "title": f"{metric} trend & seasonality scan",
+                "business_context": f"Detect trend, volatility, and potential seasonality to plan staffing, inventory, and targets.",
+                "risks": "Short history can overstate patterns. Check for one-off spikes and calendar effects.",
+                "outputs": f"Weekly trend, rolling averages, spike annotations, and split trends by {dims_pick[0] if dims_pick else 'top segments'}."
+            })
+        base.append({
+            "title": "Discount / price-mix sanity check",
+            "business_context": "Assess whether discounting is driving incremental value or eroding margins and quality of revenue.",
+            "risks": "Discount bands may be correlated with channel/store mix. Segment the analysis before concluding causality.",
+            "outputs": "Revenue/units by discount band, margin proxy if available, and recommended test design for validation."
         })
+        return base[:max_items]
 
-    recs.append({
-        "title": "Price/discount effectiveness & margin sanity check",
-        "Business Context": f"Assess whether pricing levers (discount rates, unit prices) are improving {primary_metric} or eroding profitability. This helps refine promotion rules and prevents over-discounting.",
-        "Risks": "Observed uplift may come from selection bias (discounts applied to slow movers). Confirm with segmentation or experiments.",
-        "Outputs": [
-            "Metric by discount bands",
-            "Comparison across key segments",
-            "Recommendation: ‘healthy’ vs ‘erosive’ discount bands",
-        ]
-    })
-
-    return recs[:3]
-
-
-def suggested_next_analyses(df: pd.DataFrame, primary_metric: str, date_col: Optional[str], dims: List[str]) -> List[Dict[str, str]]:
-    facts = {
+    # Build a compact profile payload (safe: no raw rows)
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    profile = {
         "rows": int(df.shape[0]),
         "cols": int(df.shape[1]),
-        "primary_metric": primary_metric,
-        "datetime_cols": get_datetime_cols(df),
-        "categorical_cols": get_categorical_cols(df)[:12],
-        "numeric_cols": get_numeric_cols(df)[:12],
+        "date_col": date_col,
+        "key_metric": metric,
+        "numeric_cols": num_cols[:20],
+        "categorical_cols": cat_cols[:20],
+        "top_dims": dims[:6],
+        "r2_pairs": [{"a": a, "b": b, "r2": round(v, 3)} for a, b, v in r2_pairs],
+        "missing_pct_avg": float(df.isna().mean().mean()),
     }
 
-    if not OPENAI_KEY:
-        return suggested_next_analyses_fallback(df, primary_metric, date_col, dims)
+    prompt = f"""
+You are a senior strategy & analytics consultant.
+Given this dataset profile (NO raw rows), produce EXACTLY {max_items} "Suggested Next Analyses".
+
+Rules:
+- Each item must be specific to the columns present.
+- Avoid vague phrasing.
+- Each item must include:
+  1) Title (short, business-style)
+  2) Business Context (2-3 sentences, concrete)
+  3) Risks (1-2 sentences, practical)
+  4) Outputs (2-4 bullets of deliverables, concrete)
+- Prefer analyses that a client would actually run next week.
+- If a date column exists, include at least one time-based analysis.
+- Use the strongest R² pairs to justify at least one recommendation.
+
+Return JSON only as a list of objects with keys:
+title, business_context, risks, outputs
+where outputs is a single string with bullet points separated by "\\n- ".
+
+Dataset profile:
+{json.dumps(profile, ensure_ascii=False)}
+""".strip()
+
+    try:
+        resp = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt,
+            temperature=0.2,
+        )
+        txt = resp.output_text.strip()
+        items = json.loads(txt)
+        # sanitize
+        cleaned = []
+        for it in items[:max_items]:
+            cleaned.append({
+                "title": str(it.get("title", "")).strip(),
+                "business_context": str(it.get("business_context", "")).strip(),
+                "risks": str(it.get("risks", "")).strip(),
+                "outputs": str(it.get("outputs", "")).strip(),
+            })
+        return cleaned[:max_items]
+    except Exception:
+        return ai_suggested_next_analyses(df, metric, date_col, dims, r2_pairs, max_items=max_items)
+
+def ai_executive_summary_and_insights(
+    df: pd.DataFrame,
+    metric: str,
+    date_col: Optional[str],
+    dims: List[str],
+    r2_pairs: List[Tuple[str, str, float]],
+    key_facts: List[str],
+    exec_points: int = 8,
+    insight_points: int = 10,
+) -> Tuple[List[str], List[str]]:
+    """
+    Returns (executive_summary_bullets, key_insights_bullets).
+    Falls back to rule-based if no OpenAI.
+    """
+    client = ai_client()
+    if client is None:
+        # rule-based fallback
+        exec_bullets = []
+        exec_bullets.append(f"Dataset size: **{df.shape[0]:,} rows × {df.shape[1]:,} columns**.")
+        cov, avg_miss = coverage_and_missing(df)
+        exec_bullets.append(f"Data completeness: **{cov*100:.1f}% coverage**; average missing **{avg_miss*100:.1f}%**.")
+        exec_bullets.append(f"Primary metric detected: **{metric}**.")
+        if date_col:
+            dmin = pd.to_datetime(df[date_col], errors="coerce").min()
+            dmax = pd.to_datetime(df[date_col], errors="coerce").max()
+            if pd.notna(dmin) and pd.notna(dmax):
+                exec_bullets.append(f"Time span: **{dmin.date()} → {dmax.date()}** based on **{date_col}**.")
+        if r2_pairs:
+            a, b, v = r2_pairs[0]
+            exec_bullets.append(f"Strongest relationship: **{a} ↔ {b} (R²={v:.2f}, {r2_strength_label(v)})**.")
+        exec_bullets.extend(key_facts[:max(0, exec_points - len(exec_bullets))])
+        exec_bullets = exec_bullets[:exec_points]
+
+        insights = []
+        # top segment insight
+        dim0 = dims[0] if dims else None
+        if dim0 and metric in df.columns:
+            g = df.groupby(dim0)[metric].sum().sort_values(ascending=False)
+            if len(g) >= 1:
+                insights.append(f"Top {dim0} by total {metric}: **{g.index[0]}** with **{human_money(g.iloc[0])}**.")
+            if len(g) >= 2:
+                insights.append(f"Bottom {dim0} by total {metric}: **{g.index[-1]}** with **{human_money(g.iloc[-1])}**.")
+        # volatility insight
+        if metric in df.columns:
+            s = pd.to_numeric(df[metric], errors="coerce")
+            if s.notna().any():
+                insights.append(f"{metric} distribution: median **{s.median():,.2f}**, 75th percentile **{s.quantile(0.75):,.2f}**.")
+        insights.extend(key_facts[: max(0, insight_points - len(insights))])
+        return exec_bullets[:exec_points], insights[:insight_points]
+
+    # AI path: compact profile only
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = df.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    profile = {
+        "rows": int(df.shape[0]),
+        "cols": int(df.shape[1]),
+        "date_col": date_col,
+        "key_metric": metric,
+        "top_dims": dims[:6],
+        "numeric_cols": num_cols[:20],
+        "categorical_cols": cat_cols[:20],
+        "r2_pairs": [{"a": a, "b": b, "r2": round(v, 3)} for a, b, v in r2_pairs[:6]],
+        "facts_pack": key_facts[:12],
+        "missing_pct_avg": float(df.isna().mean().mean()),
+    }
 
     prompt = f"""
-You are generating a 'Suggested next analyses' section for a data analytics app.
+You are a senior analytics consultant writing for business executives.
 
-Constraints:
-- Provide EXACTLY 3 suggestions.
-- Each suggestion must include:
-  1) Title
-  2) Business Context (3-5 sentences, specific to the dataset)
-  3) Risks (1-2 sentences)
-  4) Outputs (2-4 bullet points, concrete deliverables)
-- Keep wording crisp. Avoid generic fluff.
-- If a time column exists, include at least one trend/seasonality analysis.
+Task:
+1) Produce an Executive Summary with {exec_points} bullet points (7–10 range).
+2) Produce Key Insights with {insight_points} bullet points (about 10).
+Both must be data-specific and mention actual columns (from profile).
 
-Dataset facts (JSON):
-{json.dumps(facts, indent=2)}
+Rules:
+- No raw rows, no confidential claims.
+- Use R² pairs to justify at least 2 bullets.
+- If date_col exists, include at least 2 time/trend bullets.
+- Make bullets crisp, actionable, and specific.
+- Avoid generic filler.
 
-Return format MUST be valid JSON:
-[
-  {{"title":"...","Business Context":"...","Risks":"...","Outputs":["...","..."]}},
-  ...
-]
-"""
+Return JSON with keys:
+executive_summary (list of strings),
+key_insights (list of strings)
+
+Dataset profile:
+{json.dumps(profile, ensure_ascii=False)}
+""".strip()
+
     try:
-        out = openai_chat(prompt, model="gpt-4o-mini")
-        data = json.loads(out)
-        cleaned = []
-        for item in data[:3]:
-            outputs = item.get("Outputs", [])
-            if isinstance(outputs, str):
-                outputs = [outputs]
-            cleaned.append({
-                "title": str(item.get("title", "")).strip(),
-                "Business Context": str(item.get("Business Context", "")).strip(),
-                "Risks": str(item.get("Risks", "")).strip(),
-                "Outputs": [str(x).strip() for x in outputs if str(x).strip()],
-            })
-        if len(cleaned) == 3 and all(x["title"] for x in cleaned):
-            return cleaned
+        resp = client.responses.create(
+            model="gpt-4.1-mini",
+            input=prompt,
+            temperature=0.2,
+        )
+        obj = json.loads(resp.output_text.strip())
+        es = [str(x).strip() for x in obj.get("executive_summary", [])][:exec_points]
+        ki = [str(x).strip() for x in obj.get("key_insights", [])][:insight_points]
+        if len(es) < exec_points:
+            es += key_facts[: (exec_points - len(es))]
+        if len(ki) < insight_points:
+            ki += key_facts[: (insight_points - len(ki))]
+        return es[:exec_points], ki[:insight_points]
     except Exception:
-        pass
-
-    return suggested_next_analyses_fallback(df, primary_metric, date_col, dims)
+        return ai_executive_summary_and_insights(df, metric, date_col, dims, r2_pairs, key_facts, exec_points, insight_points)
 
 
-# ----------------------------
-# 3 Analyses (auto runnable) with commentary
-# ----------------------------
-@dataclass
-class AnalysisResult:
-    title: str
-    narrative_bullets: List[str]
-    figs: List[go.Figure]
-
-
-def analysis_driver_relationship(df: pd.DataFrame, metric: str, dims: List[str]) -> AnalysisResult:
-    nums = get_numeric_cols(df)
-    figs: List[go.Figure] = []
-    bullets: List[str] = []
-
-    if len(nums) >= 2:
-        corr = df[nums].corr(method="pearson")
-        r2 = corr**2
-
-        other = None
-        r2v = np.nan
-        chosen_metric = metric
-
-        if metric in nums:
-            cand = r2[metric].drop(index=metric, errors="ignore").sort_values(ascending=False)
-            if len(cand):
-                other = cand.index[0]
-                r2v = float(cand.iloc[0])
-        else:
-            r2_mask = r2.where(~np.eye(len(nums), dtype=bool))
-            idx = np.unravel_index(np.nanargmax(r2_mask.values), r2_mask.shape)
-            chosen_metric = nums[idx[0]]
-            other = nums[idx[1]]
-            r2v = float(r2_mask.values[idx])
-
-        if other:
-            bullets.append(f"Top relationship found: **{chosen_metric} vs {other}** with **R²={r2v:.2f}** ({r2_strength_label(r2v)}).")
-            bullets.append("Interpretation: higher R² means the variables move together more consistently; it does **not** prove causation.")
-            bullets.append("Next step: segment this relationship by a key cut (e.g., Store/Channel/Category) to see where it strengthens or breaks.")
-
-            d = df[[chosen_metric, other]].dropna()
-            if not d.empty:
-                fig = px.scatter(
-                    d,
-                    x=other,
-                    y=chosen_metric,
-                    trendline="ols",
-                    title=f"Driver view: {chosen_metric} vs {other} (with trendline)",
-                    color_discrete_sequence=PALETTE_MAIN,
-                )
-                fig.update_layout(height=420, margin=dict(l=10, r=10, t=60, b=10))
-                figs.append(fig)
-
-    dim = dims[0] if dims else None
-    if dim and dim in df.columns and metric in df.columns:
-        g = df.groupby(dim)[metric].sum().sort_values(ascending=False)
-        if len(g) >= 2:
-            bullets.append(f"Segment highlight: **{dim}** top is **{g.index[0]}** with {format_number(g.iloc[0])}.")
-            bullets.append("Action idea: validate whether the top segment is driven by volume, price, or mix (compare with Units / Unit_Price if present).")
-
-    return AnalysisResult(
-        title="1) Revenue/Metric driver relationship scan",
-        narrative_bullets=bullets[:6],
-        figs=figs,
-    )
-
-
-def analysis_variability_by_best_cut(df: pd.DataFrame, metric: str) -> AnalysisResult:
-    cats = get_categorical_cols(df)
-    figs: List[go.Figure] = []
-    bullets: List[str] = []
-
-    best_dim = None
-    best_cv = -1.0
-    best_tbl = None
-
-    for c in cats:
-        g = df.groupby(c)[metric]
-        if g.size().min() < 5:
-            continue
-        mean = g.mean()
-        std = g.std()
-        cv = (std / (mean.abs() + 1e-9)).replace([np.inf, -np.inf], np.nan)
-        cv_mean = float(np.nanmean(cv.values)) if len(cv) else np.nan
-        if not np.isnan(cv_mean) and cv_mean > best_cv:
-            best_cv = cv_mean
-            best_dim = c
-            best_tbl = pd.DataFrame({
-                c: mean.index,
-                "mean": mean.values,
-                "std": std.values,
-                "count": g.count().values,
-                "cv (coefficient of variation)": cv.values,
-            }).sort_values("cv (coefficient of variation)", ascending=False)
-
-    if best_dim is None or best_tbl is None or best_tbl.empty:
-        bullets.append("No strong variability cut detected (need a categorical column with enough observations per group).")
-        return AnalysisResult("2) Variability by best cut", bullets, [])
-
-    bullets.append(f"Detected best cut: **{best_dim}** (highest average variability across groups).")
-    bullets.append("**CV (coefficient of variation)** = std / mean. Higher CV means the metric is less stable within that segment.")
-    bullets.append("Use this to spot segments where performance is unpredictable (risk) or highly opportunity-driven (target deeper analysis).")
-
-    top = best_tbl.iloc[0]
-    bullets.append(f"Highest-variability group: **{top[best_dim]}** (CV={top['cv (coefficient of variation)']:.2f}, n={int(top['count'])}).")
-
-    show = best_tbl.head(10).copy()
-    fig = px.bar(
-        show,
-        x=best_dim,
-        y="cv (coefficient of variation)",
-        title=f"Variability (CV) of {metric} by {best_dim}",
-        color=best_dim,
-        color_discrete_sequence=PALETTE_ALT,
-        text="cv (coefficient of variation)",
-    )
-    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-    fig.update_layout(height=420, margin=dict(l=10, r=10, t=60, b=10), showlegend=False)
-    figs.append(fig)
-
-    return AnalysisResult("2) Variability by best cut", bullets[:6], figs)
-
-
-def analysis_discount_effectiveness_simple(df: pd.DataFrame, metric: str) -> AnalysisResult:
-    figs: List[go.Figure] = []
-    bullets: List[str] = []
-
-    disc_col = None
-    for c in df.columns:
-        if re.search(r"discount", c, re.I) and pd.api.types.is_numeric_dtype(df[c]):
-            disc_col = c
-            break
-    if not disc_col:
-        bullets.append("No numeric discount column detected (e.g., Discount_Rate). Skipping discount effectiveness.")
-        return AnalysisResult("3) Discount effectiveness", bullets, figs)
-
-    d = df[[disc_col, metric]].dropna().copy()
-    if d.empty:
-        bullets.append("Not enough data to evaluate discount vs metric (missing values).")
-        return AnalysisResult("3) Discount effectiveness", bullets, figs)
-
-    if d[disc_col].max() > 1.5:
-        d[disc_col] = d[disc_col] / 100.0
-
-    bins = [-1, 0.02, 0.05, 0.10, 0.15, 0.20, 10]
-    labels = ["0–2%", "2–5%", "5–10%", "10–15%", "15–20%", "20%+"]
-    d["Discount_Band"] = pd.cut(d[disc_col], bins=bins, labels=labels)
-
-    agg = d.groupby("Discount_Band")[metric].mean().reset_index()
-    agg["n"] = d.groupby("Discount_Band")[metric].count().values
-
-    bullets.append(f"Chart shows **average {metric} per record** by discount band (not per customer unless a customer ID is provided).")
-    best = agg.loc[agg[metric].idxmax()]
-    worst = agg.loc[agg[metric].idxmin()]
-    bullets.append(f"Best-performing band: **{best['Discount_Band']}** with avg {format_number(best[metric])} (n={int(best['n'])}).")
-    bullets.append(f"Weakest band: **{worst['Discount_Band']}** with avg {format_number(worst[metric])} (n={int(worst['n'])}).")
-    bullets.append("Use this as a starting read; confirm with controls (e.g., Store/Channel/Category) to avoid mixing effects.")
-
-    fig = px.bar(
-        agg,
-        x="Discount_Band",
-        y=metric,
-        title="Discount effectiveness (simple): average metric per record by discount band",
-        color="Discount_Band",
-        color_discrete_sequence=PALETTE_MAIN,
-        text=metric,
-    )
-    fig.update_traces(texttemplate="%{text:.1f}", textposition="inside")
-    fig.update_layout(height=420, margin=dict(l=10, r=10, t=60, b=10), showlegend=False)
-    figs.append(fig)
-
-    return AnalysisResult("3) Discount effectiveness (simple)", bullets[:6], figs)
-
-
-# ----------------------------
-# Export helpers (PDF / PPTX)
-# ----------------------------
-def fig_to_png_bytes(fig: go.Figure, width: int = 1200, height: int = 700) -> Optional[bytes]:
+# -----------------------------
+# Export helpers
+# -----------------------------
+def fig_to_png_bytes(fig: go.Figure, width: int = 1400, height: int = 800) -> Optional[bytes]:
     if not KALEIDO_OK:
         return None
     try:
@@ -860,547 +721,730 @@ def fig_to_png_bytes(fig: go.Figure, width: int = 1200, height: int = 700) -> Op
     except Exception:
         return None
 
-
-def build_pdf_bytes(
-    title: str,
-    exec_points: List[str],
-    insight_points: List[str],
-    next_analyses: List[Dict[str, str]],
-    figs: List[go.Figure],
-    analyses: List[AnalysisResult],
-) -> Optional[bytes]:
+def export_pdf_text_only(title: str, sections: List[Tuple[str, List[str]]]) -> bytes:
     if not REPORTLAB_OK:
-        return None
+        return b""
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    w, h = A4
+    x = 2 * cm
+    y = h - 2 * cm
 
-    buff = io.BytesIO()
-    doc = SimpleDocTemplate(buff, pagesize=letter, rightMargin=36, leftMargin=36, topMargin=36, bottomMargin=36)
-    styles = getSampleStyleSheet()
-    story = []
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(x, y, title)
+    y -= 1.0 * cm
 
-    story.append(Paragraph(f"<b>{title}</b>", styles["Title"]))
-    story.append(Spacer(1, 10))
+    c.setFont("Helvetica", 10)
+    for sec_title, bullets in sections:
+        if y < 4 * cm:
+            c.showPage()
+            y = h - 2 * cm
+            c.setFont("Helvetica", 10)
 
-    story.append(Paragraph("<b>Executive Summary</b>", styles["Heading2"]))
-    for p in exec_points:
-        story.append(Paragraph(f"• {p}", styles["BodyText"]))
-    story.append(Spacer(1, 10))
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(x, y, sec_title)
+        y -= 0.6 * cm
 
-    story.append(Paragraph("<b>Key Insights</b>", styles["Heading2"]))
-    for p in insight_points:
-        story.append(Paragraph(f"• {p}", styles["BodyText"]))
-    story.append(Spacer(1, 10))
+        c.setFont("Helvetica", 10)
+        for b in bullets:
+            lines = textwrap.wrap("• " + b, width=110)
+            for line in lines:
+                if y < 2 * cm:
+                    c.showPage()
+                    y = h - 2 * cm
+                    c.setFont("Helvetica", 10)
+                c.drawString(x, y, line)
+                y -= 0.45 * cm
+            y -= 0.1 * cm
 
-    story.append(Paragraph("<b>Suggested Next Analyses</b>", styles["Heading2"]))
-    for i, a in enumerate(next_analyses, 1):
-        story.append(Paragraph(f"<b>{i}. {a.get('title','')}</b>", styles["BodyText"]))
-        story.append(Paragraph(f"<b>Business Context:</b> {a.get('Business Context','')}", styles["BodyText"]))
-        story.append(Paragraph(f"<b>Risks:</b> {a.get('Risks','')}", styles["BodyText"]))
-        outs = a.get("Outputs", [])
-        if isinstance(outs, list) and outs:
-            story.append(Paragraph("<b>Outputs:</b>", styles["BodyText"]))
-            for o in outs:
-                story.append(Paragraph(f"• {o}", styles["BodyText"]))
-        story.append(Spacer(1, 8))
-    story.append(Spacer(1, 8))
+        y -= 0.3 * cm
 
-    if figs:
-        story.append(Paragraph("<b>Charts</b>", styles["Heading2"]))
-        for fig in figs[:6]:
-            png = fig_to_png_bytes(fig, width=1100, height=650)
-            if not png:
-                continue
-            img = RLImage(io.BytesIO(png))
-            img.drawHeight = 3.5 * inch
-            img.drawWidth = 6.5 * inch
-            story.append(img)
-            story.append(Spacer(1, 10))
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
 
-    if analyses:
-        story.append(Paragraph("<b>Further Analyses (Run All)</b>", styles["Heading2"]))
-        for ar in analyses:
-            story.append(Paragraph(f"<b>{ar.title}</b>", styles["BodyText"]))
-            for b in ar.narrative_bullets:
-                story.append(Paragraph(f"• {b}", styles["BodyText"]))
-            for fig in ar.figs[:2]:
-                png = fig_to_png_bytes(fig, width=1100, height=650)
-                if not png:
-                    continue
-                img = RLImage(io.BytesIO(png))
-                img.drawHeight = 3.5 * inch
-                img.drawWidth = 6.5 * inch
-                story.append(img)
-                story.append(Spacer(1, 10))
-            story.append(Spacer(1, 10))
-
-    doc.build(story)
-    return buff.getvalue()
-
-
-def _ppt_add_textbox(slide, left, top, width, height, text, bold=False, font_size=20, align="left"):
-    tb = slide.shapes.add_textbox(left, top, width, height)
-    tf = tb.text_frame
-    tf.clear()
-    p = tf.paragraphs[0]
-    run = p.add_run()
-    run.text = text
-    run.font.size = Pt(font_size)
-    run.font.bold = bool(bold)
-    if align == "center":
-        p.alignment = PP_ALIGN.CENTER
-    else:
-        p.alignment = PP_ALIGN.LEFT
-    tf.word_wrap = True
-    return tb
-
-
-def _ppt_fit_font(text: str, base: int = 22) -> int:
-    n = len(text)
-    if n <= 140:
-        return base
-    if n <= 240:
-        return max(16, base - 4)
-    if n <= 360:
-        return max(14, base - 6)
-    return 12
-
-
-def build_pptx_bytes(
+def export_pdf_with_charts(
     title: str,
-    exec_points: List[str],
-    insight_points: List[str],
-    next_analyses: List[Dict[str, str]],
-    charts: List[go.Figure],
-    analyses: List[AnalysisResult],
-) -> Optional[bytes]:
-    if not PPTX_OK:
-        return None
+    sections: List[Tuple[str, List[str]]],
+    chart_pngs: List[Tuple[str, bytes]],
+) -> bytes:
+    # Simple: write text pages + embed charts full-width
+    if not REPORTLAB_OK:
+        return b""
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    w, h = A4
+    x = 2 * cm
+    y = h - 2 * cm
 
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(x, y, title)
+    y -= 1.0 * cm
+
+    c.setFont("Helvetica", 10)
+    for sec_title, bullets in sections:
+        if y < 4 * cm:
+            c.showPage()
+            y = h - 2 * cm
+            c.setFont("Helvetica", 10)
+
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(x, y, sec_title)
+        y -= 0.6 * cm
+
+        c.setFont("Helvetica", 10)
+        for b in bullets:
+            lines = textwrap.wrap("• " + b, width=110)
+            for line in lines:
+                if y < 2 * cm:
+                    c.showPage()
+                    y = h - 2 * cm
+                    c.setFont("Helvetica", 10)
+                c.drawString(x, y, line)
+                y -= 0.45 * cm
+            y -= 0.1 * cm
+
+        y -= 0.3 * cm
+
+    # charts
+    for chart_title, png in chart_pngs:
+        c.showPage()
+        y = h - 2 * cm
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(x, y, chart_title)
+        y -= 0.8 * cm
+
+        img_buf = io.BytesIO(png)
+        # Fit image to page width
+        img_w = w - 4 * cm
+        img_h = h - 4 * cm
+        c.drawImage(img_buf, x, 2 * cm, width=img_w, height=img_h, preserveAspectRatio=True, anchor='c')
+
+    c.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+def _fit_font_size(text: str, base: int = 20, min_size: int = 12) -> int:
+    # crude but effective for overflow control
+    n = len(text)
+    if n <= 80:
+        return base
+    if n <= 140:
+        return max(min_size, base - 4)
+    if n <= 220:
+        return max(min_size, base - 7)
+    return min_size
+
+def export_pptx(
+    title: str,
+    sections: List[Tuple[str, List[str]]],
+    chart_pngs: List[Tuple[str, Optional[bytes]]],
+) -> bytes:
+    if not PPTX_OK:
+        return b""
     prs = Presentation()
+    # Use wide layout if available
+    try:
+        prs.slide_width = Inches(13.33)
+        prs.slide_height = Inches(7.5)
+    except Exception:
+        pass
 
     def add_title_slide():
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _ppt_add_textbox(slide, Inches(0.6), Inches(0.7), Inches(12.0), Inches(1.0), title, bold=True, font_size=34)
-        _ppt_add_textbox(slide, Inches(0.6), Inches(1.6), Inches(12.0), Inches(0.7),
-                         "Executive Summary • Key Insights • Suggested Next Analyses", bold=False, font_size=16)
-        return slide
+        slide = prs.slides.add_slide(prs.slide_layouts[0])
+        slide.shapes.title.text = title
+        slide.placeholders[1].text = "Generated by EC-AI Insight (MVP)"
 
-    def add_bullets_slide(heading: str, bullets: List[str]):
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _ppt_add_textbox(slide, Inches(0.6), Inches(0.4), Inches(12.0), Inches(0.8), heading, bold=True, font_size=28)
-        box = slide.shapes.add_textbox(Inches(0.8), Inches(1.3), Inches(12.4), Inches(5.6))
-        tf = box.text_frame
-        tf.clear()
-        tf.word_wrap = True
-        for i, b in enumerate(bullets[:10]):
-            p = tf.add_paragraph() if i > 0 else tf.paragraphs[0]
-            p.text = f"• {b}"
-            p.font.size = Pt(16)
-        return slide
+    def add_bullets_slide(sec_title: str, bullets: List[str]):
+        slide = prs.slides.add_slide(prs.slide_layouts[1])
+        slide.shapes.title.text = sec_title
+        body = slide.shapes.placeholders[1].text_frame
+        body.clear()
+        for i, b in enumerate(bullets):
+            p = body.paragraphs[0] if i == 0 else body.add_paragraph()
+            p.text = b
+            p.level = 0
+            p.font.size = Pt(18 if len(b) < 110 else 16)
 
-    def add_next_analyses_slide():
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _ppt_add_textbox(slide, Inches(0.6), Inches(0.4), Inches(12.0), Inches(0.8), "Suggested Next Analyses", bold=True, font_size=28)
+    def add_chart_slide(chart_title: str, png: Optional[bytes]):
+        slide = prs.slides.add_slide(prs.slide_layouts[5])  # title only
+        slide.shapes.title.text = chart_title
 
-        y = 1.2
-        for i, a in enumerate(next_analyses[:3], 1):
-            title_line = f"{i}. {a.get('title','')}"
-            fs = _ppt_fit_font(title_line, base=18)
-            _ppt_add_textbox(slide, Inches(0.8), Inches(y), Inches(12.6), Inches(0.35), title_line, bold=True, font_size=fs)
-            y += 0.35
+        if png is None:
+            # fallback text
+            tx = slide.shapes.add_textbox(Inches(0.8), Inches(1.6), Inches(11.8), Inches(5.4))
+            tf = tx.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            p.text = "Chart image export not available (kaleido missing)."
+            p.font.size = Pt(18)
+            return
 
-            bc = a.get("Business Context", "")
-            risks = a.get("Risks", "")
-            outs = a.get("Outputs", [])
-            if isinstance(outs, list):
-                outs_txt = "\n".join([f"• {o}" for o in outs[:4]])
-            else:
-                outs_txt = f"• {outs}"
-
-            block = f"Business Context: {bc}\nRisks: {risks}\nOutputs:\n{outs_txt}"
-            fs2 = _ppt_fit_font(block, base=14)
-            _ppt_add_textbox(slide, Inches(0.95), Inches(y), Inches(12.3), Inches(1.35), block, bold=False, font_size=fs2)
-            y += 1.45
-
-        return slide
-
-    def add_chart_slide(fig: go.Figure, heading: str):
-        slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _ppt_add_textbox(slide, Inches(0.6), Inches(0.35), Inches(12.0), Inches(0.6), heading, bold=True, font_size=24)
-        png = fig_to_png_bytes(fig, width=1400, height=800)
-        if not png:
-            _ppt_add_textbox(slide, Inches(0.8), Inches(1.4), Inches(12.0), Inches(1.0),
-                             "Chart export requires Kaleido. Add 'kaleido' to requirements.txt.", bold=False, font_size=16)
-            return slide
-        slide.shapes.add_picture(io.BytesIO(png), Inches(0.8), Inches(1.2), width=Inches(12.8))
-        return slide
+        img_stream = io.BytesIO(png)
+        # Fit within margins
+        slide.shapes.add_picture(img_stream, Inches(0.7), Inches(1.4), width=Inches(12.0))
 
     add_title_slide()
-    add_bullets_slide("Executive Summary", exec_points)
-    add_bullets_slide("Key Insights", insight_points)
-    add_next_analyses_slide()
 
-    for i, fig in enumerate(charts[:6], 1):
-        add_chart_slide(fig, f"Key Charts ({i})")
+    # sections slides
+    for sec_title, bullets in sections:
+        # split long sections into chunks of ~8 bullets
+        chunk = []
+        for b in bullets:
+            chunk.append(b)
+            if len(chunk) >= 8:
+                add_bullets_slide(sec_title, chunk)
+                chunk = []
+        if chunk:
+            add_bullets_slide(sec_title, chunk)
 
-    if analyses:
-        for ar in analyses:
-            add_bullets_slide(ar.title, ar.narrative_bullets)
-            for fig in ar.figs[:2]:
-                add_chart_slide(fig, ar.title)
+    # charts slides
+    for chart_title, png in chart_pngs:
+        add_chart_slide(chart_title, png)
 
     out = io.BytesIO()
     prs.save(out)
+    out.seek(0)
     return out.getvalue()
 
 
-# ----------------------------
-# DASHBOARD-FIRST (Hero UI)
-# ----------------------------
-def render_dashboard_first(
-    df: pd.DataFrame,
-    primary_metric: Optional[str],
-    date_col: Optional[str],
-    numeric_cols: List[str],
-    money_like: bool,
-    ind: Indicators,
-):
-    st.markdown("## Executive Dashboard")
-
-    # KPI row
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Coverage", f"{ind.coverage:.1f}%")
-    k2.metric("Avg Missing", f"{ind.avg_missing:.1f}%")
-    k3.metric("Confidence", confidence_label(ind.confidence_score))
-    k4.metric("Strong R² pairs", f"{ind.strong_r2_pairs}")
-
-    st.caption("Snapshot view — KPIs + key charts. Scroll down for narrative insights and deeper analysis.")
-    st.markdown("---")
-
-    if not primary_metric:
-        st.warning("No numeric primary metric detected yet — upload data with at least one numeric column to render charts.")
-        return
-
-    store_like = detect_best_dimension(df, ["store", "branch", "site", "location"])
-    channel_like = detect_best_dimension(df, ["channel", "platform", "source"])
-    category_like = detect_best_dimension(df, ["category", "product", "segment", "industry", "sector"])
-    country_like = detect_best_dimension(df, ["country", "region", "market", "geo"])
-
-    left, right = st.columns(2)
-
-    # Business cut (prefer store, else channel, else category, else country)
-    cut_dim = store_like or channel_like or category_like or country_like
-    if cut_dim:
-        fig1 = fig_bar(df, cut_dim, primary_metric, f"{primary_metric} by {cut_dim}", money=money_like, top_k=12)
-        top_seg = bar_topk(df, cut_dim, primary_metric, agg="sum", k=1).iloc[0]
-        left.plotly_chart(fig1, use_container_width=True)
-        left.caption(
-            f"Finding: Top **{cut_dim}** is **{top_seg[cut_dim]}** with "
-            f"**{format_money(top_seg[primary_metric]) if money_like else format_number(top_seg[primary_metric])}**."
-        )
-    else:
-        left.info("No suitable segment column detected for a business cut chart (need 2–50 unique values).")
-
-    # Trend (if date exists), else another cut if available
-    if date_col:
-        fig2 = fig_trend_total(df, date_col, primary_metric, money=money_like)
-        right.plotly_chart(fig2, use_container_width=True)
-        right.caption("Finding: Trend shows overall direction and volatility over time.")
-    else:
-        right.info("No datetime column detected for trend. Add a date/time field to enable time-based insights.")
-
-    st.markdown("---")
-
-    # Correlation (R²)
-    if len(numeric_cols) >= 2:
-        fig_r2 = fig_corr_r2(df, numeric_cols)
-        st.plotly_chart(fig_r2, use_container_width=True)
-        st.caption("Finding: Heatmap shows **R² strength** (0–1). Higher R² indicates stronger association (not causation).")
-    else:
-        st.info("Need at least 2 numeric columns to show correlation (R²).")
-
-    st.markdown("---")
+# -----------------------------
+# Load data
+# -----------------------------
+def read_uploaded_file(uploaded) -> pd.DataFrame:
+    name = uploaded.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(uploaded)
+    if name.endswith(".xlsx") or name.endswith(".xls"):
+        return pd.read_excel(uploaded)
+    raise ValueError("Unsupported file type. Please upload a CSV or Excel file.")
 
 
-# ----------------------------
-# UI
-# ----------------------------
+# -----------------------------
+# Main UI
+# -----------------------------
 st.title("EC-AI Insight (MVP)")
-st.caption("Turning Data Into Intelligence — Upload a CSV or Excel file to get profiling + insights.")
-st.markdown('<div class="small-note">Note: This is a demo/testing app. Please avoid uploading confidential or regulated data.</div>', unsafe_allow_html=True)
+st.caption("Turning Data Into Intelligence — Upload a CSV/Excel to get instant profiling + insights.")
 
 uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"])
-
-if "df" not in st.session_state:
-    st.session_state.df = None
-if "analysis_results" not in st.session_state:
-    st.session_state.analysis_results = []
-if "ai_report" not in st.session_state:
-    st.session_state.ai_report = None
-
-if uploaded:
-    try:
-        df0 = load_table(uploaded)
-        df0 = coerce_types(df0)
-        st.session_state.df = df0
-        st.session_state.analysis_results = []
-        st.session_state.ai_report = None
-    except Exception as e:
-        st.error(f"Failed to load file: {e}")
-        st.stop()
-
-df = st.session_state.df
-if df is None:
-    st.info("Upload a dataset to begin.")
+if not uploaded:
+    st.info("Upload a file to begin.")
     st.stop()
 
-# global for variance fallback (used in pick_metric_candidates)
-df_global = df
+try:
+    df_raw = read_uploaded_file(uploaded)
+except Exception as e:
+    st.error(f"Failed to read file: {e}")
+    st.stop()
 
-nrows, ncols = df.shape
-st.success(f"Loaded dataset: {nrows:,} rows × {ncols:,} columns")
+if df_raw.empty:
+    st.warning("The uploaded file is empty.")
+    st.stop()
 
-numeric_cols = get_numeric_cols(df)
-cat_cols = get_categorical_cols(df)
-dt_cols = get_datetime_cols(df)
-primary_metric = pick_primary_metric(df)
+# Light cleaning: trim column names
+df = df_raw.copy()
+df.columns = [str(c).strip() for c in df.columns]
 
-money_like = bool(primary_metric and re.search(r"revenue|sales|income|amount|profit|cost|cogs|price", primary_metric, re.I))
+# Detect key columns
+date_col = find_date_column(df)
+if date_col:
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
 
-# Choose date col
-date_col = None
-if dt_cols:
-    for c in dt_cols:
-        if re.search("date", c, re.I):
-            date_col = c
-            break
-    date_col = date_col or dt_cols[0]
+key_metric = find_primary_metric(df)
+if not key_metric:
+    st.error("No numeric metric detected. Please upload a dataset with at least one numeric column.")
+    st.stop()
 
-ind = compute_indicators(df)
+df[key_metric] = pd.to_numeric(df[key_metric], errors="coerce")
 
-# ============================
-# DASHBOARD-FIRST (LOCKED)
-# ============================
-render_dashboard_first(
+dims = find_dimension_candidates(df)
+num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+r2 = make_r2_matrix(df, cols=num_cols[:12]) if len(num_cols) >= 2 else pd.DataFrame()
+pairs = top_r2_pairs(r2, k=6, min_r2=0.5) if not r2.empty else []
+strong_pairs_count = len(pairs)
+
+cov, avg_miss = coverage_and_missing(df)
+confidence = compute_confidence(df, strong_pairs_count)
+
+# Facts pack (rule-based)
+facts_pack = []
+facts_pack.append(f"Detected primary metric: **{key_metric}**.")
+if date_col:
+    dmin = df[date_col].min()
+    dmax = df[date_col].max()
+    if pd.notna(dmin) and pd.notna(dmax):
+        facts_pack.append(f"Time span: **{dmin.date()} → {dmax.date()}**.")
+facts_pack.append(f"Numeric columns: **{len(num_cols)}**; categorical-like columns: **{len(df.columns) - len(num_cols)}**.")
+facts_pack.append(f"Completeness: **{cov*100:.1f}% coverage**, avg missing **{avg_miss*100:.1f}%**.")
+if pairs:
+    a, b, v = pairs[0]
+    facts_pack.append(f"Strongest relationship: **{a} ↔ {b} (R²={v:.2f}, {r2_strength_label(v)})**.")
+
+# AI-generated Executive Summary + Insights + Suggested Next Analyses (auto, no click)
+exec_summary, key_insights = ai_executive_summary_and_insights(
     df=df,
-    primary_metric=primary_metric,
+    metric=key_metric,
     date_col=date_col,
-    numeric_cols=numeric_cols,
-    money_like=money_like,
-    ind=ind,
+    dims=dims,
+    r2_pairs=pairs,
+    key_facts=facts_pack,
+    exec_points=8,
+    insight_points=10,
 )
+suggested = ai_suggested_next_analyses(df, key_metric, date_col, dims, pairs, max_items=3)
 
-# ============================
-# Narrative (after dashboard)
-# ============================
-st.markdown("## Executive Summary")
-exec_pts = executive_summary_points(df, primary_metric, date_col, ind)
-for p in exec_pts:
-    st.markdown(f"- {p}")
 
-st.markdown("## Key Insights")
-ins_pts = key_insights_points(df, primary_metric, date_col)
-for p in ins_pts:
-    st.markdown(f"- {p}")
+# =============================
+# 1) EXECUTIVE DASHBOARD (TOP)
+# =============================
+st.markdown('<div class="section-title">Executive Dashboard</div>', unsafe_allow_html=True)
+st.caption("A quick, executive view of the most important numbers and revenue cuts.")
 
-with st.expander("How these indicators work"):
+# KPI cards
+k1, k2, k3, k4 = st.columns(4)
+with k1:
+    st.markdown('<div class="kpi-card"><div class="kpi-label">Rows × Columns</div>'
+                f'<div class="kpi-value">{df.shape[0]:,} × {df.shape[1]:,}</div>'
+                f'<div class="kpi-sub">Data size</div></div>', unsafe_allow_html=True)
+with k2:
+    st.markdown('<div class="kpi-card"><div class="kpi-label">Coverage</div>'
+                f'<div class="kpi-value">{cov*100:.1f}%</div>'
+                f'<div class="kpi-sub">Non-missing cells</div></div>', unsafe_allow_html=True)
+with k3:
+    st.markdown('<div class="kpi-card"><div class="kpi-label">Avg Missing</div>'
+                f'<div class="kpi-value">{avg_miss*100:.1f}%</div>'
+                f'<div class="kpi-sub">Across all columns</div></div>', unsafe_allow_html=True)
+with k4:
+    st.markdown('<div class="kpi-card"><div class="kpi-label">Confidence</div>'
+                f'<div class="kpi-value">{confidence} ({ "High" if confidence>=80 else "Medium" if confidence>=60 else "Low"})</div>'
+                f'<div class="kpi-sub">Heuristic reliability score</div></div>', unsafe_allow_html=True)
+
+with st.expander("How Coverage / Avg Missing / Confidence work (logic)"):
     st.markdown(
         """
-- **Coverage**: percentage of all cells that are **not missing** across the whole dataset.
-- **Avg Missing**: the **average missing rate across columns** (mean of each column’s missing%).
-- **Strong R² pairs**: among numeric columns, count of pairs with **R² ≥ 0.70**.
-- **Confidence** (0–100): combines dataset size, missingness, and numeric/time richness.
-"""
+- **Coverage** = (non-null cells) / (total cells). If coverage is 100%, it means no missing values anywhere.
+- **Avg Missing** = 1 − Coverage.
+- **Confidence** (0–100) is a transparent heuristic:
+  - Higher **coverage** boosts the score (largest weight).
+  - More **rows** improves stability.
+  - More **numeric columns** increases analyzable signal.
+  - Having a **date** column increases trend-readiness.
+  - More **strong R² pairs** increases signal density.
+        """.strip()
     )
 
-st.markdown("---")
+# Executive charts (prefer revenue/sales if present, otherwise key_metric)
+metric_exec = key_metric
 
-# ============================
-# Data preview + profile
-# ============================
+# Choose 2 dims for executive cuts
+exec_dims = dims[:2] if dims else []
+c1, c2 = st.columns(2)
+
+if exec_dims:
+    d0 = exec_dims[0]
+    agg0 = make_bar_topN(df.dropna(subset=[metric_exec]), d0, metric_exec, topn=12)
+    fig0 = build_bar(agg0, d0, metric_exec, title=f"{metric_exec} by {d0}")
+    with c1:
+        st.plotly_chart(fig0, use_container_width=True)
+        st.caption(chart_commentary_top_point(agg0, d0, metric_exec))
+
+if len(exec_dims) > 1:
+    d1 = exec_dims[1]
+    agg1 = make_bar_topN(df.dropna(subset=[metric_exec]), d1, metric_exec, topn=12)
+    fig1 = build_bar(agg1, d1, metric_exec, title=f"{metric_exec} by {d1}")
+    with c2:
+        st.plotly_chart(fig1, use_container_width=True)
+        st.caption(chart_commentary_top_point(agg1, d1, metric_exec))
+
+# Total trend (executive)
+if date_col:
+    fig_total, _, msg = line_chart_total_and_split(df, date_col, metric_exec, dim=None)
+    if fig_total is not None:
+        st.plotly_chart(fig_total, use_container_width=True)
+        st.caption("Finding: This chart shows overall movement over time; use it to spot spikes, trend direction, and volatility.")
+else:
+    st.info("No date column detected — trend charts will be limited to non-time cuts.")
+
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+
+# =============================
+# 2) EXEC SUMMARY + KEY INSIGHTS (before preview)
+# =============================
+st.markdown('<div class="section-title">Executive Summary</div>', unsafe_allow_html=True)
+for b in exec_summary:
+    st.markdown(f"- {b}")
+
+st.markdown('<div class="section-title" style="margin-top:10px;">Key Insights</div>', unsafe_allow_html=True)
+for b in key_insights:
+    st.markdown(f"- {b}")
+
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+
+# =============================
+# Preview data
+# =============================
 with st.expander("Preview data", expanded=False):
     st.dataframe(df.head(50), use_container_width=True)
 
-st.markdown("## Data profile")
-profile = build_profile_table(df)
-st.dataframe(profile, use_container_width=True)
+# Data profile
+st.markdown('<div class="section-title">Data profile</div>', unsafe_allow_html=True)
+profile = pd.DataFrame({
+    "column": df.columns,
+    "dtype": [str(df[c].dtype) for c in df.columns],
+    "missing_%": [(df[c].isna().mean() * 100) for c in df.columns],
+    "unique_values": [df[c].nunique(dropna=True) for c in df.columns],
+})
+profile["missing_%"] = profile["missing_%"].map(lambda x: round(float(x), 1))
+st.dataframe(profile.sort_values("missing_%", ascending=False), use_container_width=True)
 
-st.markdown("---")
+# Indicators row (repeat for visibility)
+st.markdown('<div class="section-title">Indicators</div>', unsafe_allow_html=True)
+i1, i2, i3, i4 = st.columns(4)
+with i1:
+    st.metric("Coverage", f"{cov*100:.1f}%")
+with i2:
+    st.metric("Avg Missing", f"{avg_miss*100:.1f}%")
+with i3:
+    st.metric("Confidence", f"{confidence} ({ 'High' if confidence>=80 else 'Medium' if confidence>=60 else 'Low'})")
+with i4:
+    st.metric("Strong R² Pairs", f"{strong_pairs_count}")
 
-# ============================
-# AI Insights Report
-# ============================
-st.markdown("## AI Insights Report")
+# Correlation / R² explanation
+with st.expander("How to read Correlation and R² (quick guide)", expanded=False):
+    st.markdown(
+        """
+**Correlation (R)** ranges from -1 to +1 and measures direction + strength (linear).  
+**R²** ranges from 0 to 1 and measures **how much variance is explained** (linear).
 
-auto_ai = st.checkbox(
-    "Auto-generate AI summary (uses OpenAI credits)",
-    value=True,
-    help="Auto-runs once per upload and caches results.",
-)
-regen = st.button("Regenerate AI report")
+**R² strength guide (rule-of-thumb, context dependent):**
+- **0.00–0.10**: Very low  
+- **0.10–0.30**: Low  
+- **0.30–0.50**: Moderate  
+- **0.50–0.70**: Strong  
+- **0.70–1.00**: Very strong
 
-facts_pack = {
-    "rows": int(df.shape[0]),
-    "cols": int(df.shape[1]),
-    "primary_metric": primary_metric,
-    "numeric_cols": numeric_cols[:15],
-    "categorical_cols": cat_cols[:15],
-    "datetime_cols": dt_cols[:6],
-    "indicators": {
-        "coverage_pct": round(ind.coverage, 1),
-        "avg_missing_pct": round(ind.avg_missing, 1),
-        "confidence_score": ind.confidence_score,
-        "strong_r2_pairs": ind.strong_r2_pairs,
-    },
-}
+Important: high R² does **not** prove causality — validate with business logic, segmentation, and controls.
+        """.strip()
+    )
 
-def build_ai_report() -> Dict[str, object]:
-    dims_hint = [d for d in [
-        detect_best_dimension(df, ["store"]),
-        detect_best_dimension(df, ["channel"]),
-        detect_best_dimension(df, ["category"]),
-        detect_best_dimension(df, ["country", "region"]),
-    ] if d]
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    next3 = suggested_next_analyses(df, primary_metric or "metric", date_col, dims_hint)
-    return {
-        "executive_summary": exec_pts,
-        "key_insights": ins_pts,
-        "suggested_next_analyses": next3,
-    }
 
-if (auto_ai and st.session_state.ai_report is None) or regen:
-    if not OPENAI_KEY:
-        st.warning("OPENAI_API_KEY not found. The app will use rule-based suggestions (still high quality).")
-    st.session_state.ai_report = build_ai_report()
+# =============================
+# 3) Key business cuts + trends
+# =============================
+st.markdown('<div class="section-title">Key business cuts</div>', unsafe_allow_html=True)
 
-ai_report = st.session_state.ai_report
+# Choose up to 2 best dims for bar cuts
+bar_dims = dims[:2]
+if not bar_dims:
+    st.info("No suitable dimension columns detected for business cuts.")
+else:
+    left, right = st.columns(2)
+    for idx, dim in enumerate(bar_dims[:2]):
+        agg = make_bar_topN(df.dropna(subset=[metric_exec]), dim, metric_exec, topn=12)
+        fig = build_bar(agg, dim, metric_exec, title=f"{metric_exec} by {dim}")
+        # label top point
+        fig = annotate_top_bar(fig, agg[dim].tolist(), agg[metric_exec].tolist(), metric_exec)
+        caption = short_bar_commentary(agg, dim, metric_exec)
+        if idx == 0:
+            with left:
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(f"Commentary: {caption}")
+        else:
+            with right:
+                st.plotly_chart(fig, use_container_width=True)
+                st.caption(f"Commentary: {caption}")
 
-if ai_report:
-    st.subheader("Suggested Next Analyses")
-    next3 = ai_report.get("suggested_next_analyses", [])
-    for i, a in enumerate(next3[:3], 1):
-        st.markdown(f"**{i}. {a.get('title','')}**")
-        st.markdown(f"- **Business Context:** {a.get('Business Context','')}")
-        st.markdown(f"- **Risks:** {a.get('Risks','')}")
-        outs = a.get("Outputs", [])
-        if isinstance(outs, list) and outs:
-            st.markdown("- **Outputs:**")
-            for o in outs[:6]:
-                st.markdown(f"  - {o}")
-        st.markdown("")
+# Trend breakdown: prefer country/region/store/channel/category/payment/team keywords; fallback dims[0]
+trend_dim = None
+if dims:
+    # choose a "trend-friendly" dim by keyword
+    for c in dims:
+        cn = _norm(c)
+        if any(k in cn for k in ["country", "region", "store", "channel", "category", "payment", "team"]):
+            trend_dim = c
+            break
+    if trend_dim is None:
+        trend_dim = dims[0]
 
-st.markdown("---")
+if date_col:
+    st.markdown('<div class="section-title">Trends</div>', unsafe_allow_html=True)
+    fig_total, smalls, msg = line_chart_total_and_split(df, date_col, metric_exec, dim=trend_dim, topk=5)
+    if fig_total is not None:
+        st.plotly_chart(fig_total, use_container_width=True)
+        st.caption("Finding: Total trend highlights overall momentum and volatility across the full dataset.")
 
-# ============================
-# Further analyses (one click)
-# ============================
-st.markdown("## Further analyses (one click)")
+    if smalls:
+        st.caption(f"Breakdown: small-multiple trends for top {trend_dim} categories (one chart per category).")
+        # show as a grid (2 per row)
+        for i in range(0, len(smalls), 2):
+            cA, cB = st.columns(2)
+            with cA:
+                st.plotly_chart(smalls[i], use_container_width=True)
+                st.caption("Finding: Use this mini-chart to see whether the segment is trending up/down and when spikes occur.")
+            if i + 1 < len(smalls):
+                with cB:
+                    st.plotly_chart(smalls[i+1], use_container_width=True)
+                    st.caption("Finding: Compare timing of peaks/troughs vs other segments to spot mix-driven changes.")
+    else:
+        st.info(f"No suitable {trend_dim}-based trend breakdown available.")
+else:
+    st.info("No date column detected — trend charts are not available.")
+
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+
+# =============================
+# 4) Correlation (R²)
+# =============================
+st.markdown('<div class="section-title">Correlation</div>', unsafe_allow_html=True)
+if r2.empty or r2.shape[0] < 2:
+    st.info("Not enough numeric columns to compute correlation.")
+else:
+    fig_hm = build_heatmap_r2(r2)
+    st.plotly_chart(fig_hm, use_container_width=True)
+    if pairs:
+        st.markdown("**Key R² relationships (selected pairs):**")
+        for a, b, v in pairs:
+            st.markdown(f"- **{a} ↔ {b}**: R² = **{v:.3f}** ({r2_strength_label(v)})")
+
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+
+# =============================
+# 5) Suggested Next Analyses
+# =============================
+st.markdown('<div class="section-title">Suggested Next Analyses</div>', unsafe_allow_html=True)
+for i, it in enumerate(suggested, 1):
+    st.markdown(f"**{i}. {it['title']}**")
+    st.markdown(f"- **Business Context:** {it['business_context']}")
+    st.markdown(f"- **Risks:** {it['risks']}")
+    st.markdown(f"- **Outputs:**")
+    for line in it["outputs"].split("\n- "):
+        line = line.replace("- ", "").strip()
+        if line:
+            st.markdown(f"  - {line}")
+
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+
+# =============================
+# 6) Run all 3 analyses (with commentary)
+# =============================
+st.markdown('<div class="section-title">Further analyses (one click)</div>', unsafe_allow_html=True)
+
 run_all = st.button("Run all 3 analyses")
+analysis_charts: List[Tuple[str, go.Figure]] = []
+analysis_notes: Dict[str, List[str]] = {}
 
 if run_all:
-    dims_hint = [d for d in [
-        detect_best_dimension(df, ["store"]),
-        detect_best_dimension(df, ["channel"]),
-        detect_best_dimension(df, ["category"]),
-        detect_best_dimension(df, ["country", "region", "payment"]),
-    ] if d]
-    metric_for_analysis = primary_metric or (numeric_cols[0] if numeric_cols else None)
-    if metric_for_analysis is None:
-        st.error("No numeric columns available for analyses.")
-    else:
-        res1 = analysis_driver_relationship(df, metric_for_analysis, dims_hint)
-        res2 = analysis_variability_by_best_cut(df, metric_for_analysis)
-        res3 = analysis_discount_effectiveness_simple(df, metric_for_analysis)
-        st.session_state.analysis_results = [res1, res2, res3]
+    # 1) Driver analysis using strongest R² pair if available
+    if pairs:
+        a, b, v = pairs[0]
+        tmp = df[[a, b]].copy()
+        tmp[a] = pd.to_numeric(tmp[a], errors="coerce")
+        tmp[b] = pd.to_numeric(tmp[b], errors="coerce")
+        tmp = tmp.dropna()
+        if not tmp.empty:
+            fig = px.scatter(tmp, x=a, y=b, trendline="ols", template="plotly_white",
+                             title=f"1) Driver scan: {b} vs {a} (R²≈{v:.2f})",
+                             color_discrete_sequence=COLOR_SEQ)
+            fig.update_layout(margin=dict(l=10, r=10, t=50, b=10))
+            analysis_charts.append(("Driver scan", fig))
+            analysis_notes["Driver scan"] = [
+                f"Relationship strength is **R²={v:.2f}** ({r2_strength_label(v)}).",
+                "Use this as a screening signal — validate with segmentation (e.g., store/channel/category) to avoid mix effects.",
+                "If business logic supports it, this pair can be a candidate feature/driver in later predictive work (separate EC Predict phase).",
+            ]
 
-analysis_results: List[AnalysisResult] = st.session_state.analysis_results
+    # 2) Variability by best cut (Coefficient of Variation = CV)
+    best_dim = dims[0] if dims else None
+    if best_dim and metric_exec in df.columns:
+        s = pd.to_numeric(df[metric_exec], errors="coerce")
+        tmp = df[[best_dim, metric_exec]].copy()
+        tmp[metric_exec] = s
+        tmp = tmp.dropna(subset=[best_dim, metric_exec])
+        if not tmp.empty:
+            g = tmp.groupby(best_dim)[metric_exec].agg(["mean", "std", "count"]).reset_index()
+            g["CV (Coefficient of Variation)"] = (g["std"] / g["mean"]).replace([np.inf, -np.inf], np.nan)
+            g = g.sort_values("CV (Coefficient of Variation)", ascending=False)
+            fig = px.bar(
+                g.head(10),
+                x=best_dim,
+                y="CV (Coefficient of Variation)",
+                color=best_dim,
+                color_discrete_sequence=COLOR_SEQ,
+                template="plotly_white",
+                title=f"2) Variability by best cut: CV of {metric_exec} by {best_dim}",
+            )
+            fig.update_layout(showlegend=False, margin=dict(l=10, r=10, t=50, b=10))
+            analysis_charts.append(("Variability", fig))
+            top_row = g.iloc[0]
+            analysis_notes["Variability"] = [
+                f"Highest variability segment is **{top_row[best_dim]}** (CV={top_row['CV (Coefficient of Variation)']:.2f}).",
+                "Higher CV means the metric is less stable and may need tighter controls or deeper segmentation.",
+                "Use this to prioritize which segments deserve diagnostic deep dives first.",
+            ]
 
-if analysis_results:
-    for ar in analysis_results:
-        st.subheader(ar.title)
-        for b in ar.narrative_bullets:
-            st.markdown(f"- {b}")
-        for fig in ar.figs:
+    # 3) Discount effectiveness (simple)
+    disc_col = detect_discount_column(df)
+    if disc_col:
+        out = best_discount_band(df, disc_col, metric_exec)
+        if out is not None and not out.empty:
+            fig = px.bar(
+                out,
+                x="Discount_Band",
+                y=metric_exec,
+                template="plotly_white",
+                color="Discount_Band",
+                color_discrete_sequence=COLOR_SEQ,
+                title=f"3) Discount effectiveness: average {metric_exec} per transaction by discount band",
+            )
+            # clarify meaning in axis title
+            fig.update_yaxes(title=f"Average {metric_exec} per row (transaction/order)")
+            fig.update_layout(showlegend=False, margin=dict(l=10, r=10, t=50, b=10))
+            # label bars
+            fig.update_traces(text=[f"{v/1000:.1f}k" if v >= 1000 else f"{v:.0f}" for v in out[metric_exec]],
+                              textposition="inside", texttemplate="%{text}")
+            analysis_charts.append(("Discount effectiveness", fig))
+
+            # notes
+            best_idx = int(np.nanargmax(out[metric_exec].values))
+            worst_idx = int(np.nanargmin(out[metric_exec].values))
+            best_band = out.iloc[best_idx]["Discount_Band"]
+            worst_band = out.iloc[worst_idx]["Discount_Band"]
+            analysis_notes["Discount effectiveness"] = [
+                f"Chart shows **average {metric_exec} per row (transaction/order)** across discount bands.",
+                f"Best-performing band is **{best_band}**; weakest band is **{worst_band}** (directional read).",
+                "Next: split by store/channel/category to confirm the result isn’t driven by mix differences.",
+            ]
+
+    # Render analyses
+    if analysis_charts:
+        for name, fig in analysis_charts:
             st.plotly_chart(fig, use_container_width=True)
+            notes = analysis_notes.get(name, [])
+            if notes:
+                st.markdown("**Commentary**")
+                for n in notes:
+                    st.markdown(f"- {n}")
+    else:
+        st.info("No further analyses could be generated from this dataset (missing required columns).")
 
-st.markdown("---")
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-# ============================
-# Export
-# ============================
-st.markdown("## Export")
+
+# =============================
+# 7) AI Insights Report (Summary)
+# =============================
+st.markdown('<div class="section-title">AI Insights Report</div>', unsafe_allow_html=True)
+
+st.markdown("**1) Executive Summary**")
+for b in exec_summary:
+    st.markdown(f"- {b}")
+
+st.markdown("**2) Key Insights**")
+for b in key_insights:
+    st.markdown(f"- {b}")
+
+st.markdown("**3) Suggested Next Analyses**")
+for i, it in enumerate(suggested, 1):
+    st.markdown(f"**{i}. {it['title']}**")
+    st.markdown(f"- **Business Context:** {it['business_context']}")
+    st.markdown(f"- **Risks:** {it['risks']}")
+    st.markdown(f"- **Outputs:**")
+    for line in it["outputs"].split("\n- "):
+        line = line.replace("- ", "").strip()
+        if line:
+            st.markdown(f"  - {line}")
+
+st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+
+# =============================
+# 8) Export
+# =============================
+st.markdown('<div class="section-title">Export</div>', unsafe_allow_html=True)
+st.caption("Download a brief for sharing. For chart exports, install kaleido (see note below).")
+
+# Collect charts for export (executive + correlation + analyses if run)
+export_figs: List[Tuple[str, go.Figure]] = []
+
+# Executive: include those built if available
+try:
+    if bar_dims:
+        if "agg0" in locals():
+            export_figs.append((f"{metric_exec} by {bar_dims[0]}", fig0))
+        if len(bar_dims) > 1 and "agg1" in locals():
+            export_figs.append((f"{metric_exec} by {bar_dims[1]}", fig1))
+    if date_col and "fig_total" in locals() and fig_total is not None:
+        export_figs.append((f"{metric_exec} trend (total)", fig_total))
+    if not r2.empty:
+        export_figs.append(("Correlation (R²)", fig_hm))
+    if run_all and analysis_charts:
+        for name, fig in analysis_charts:
+            export_figs.append((f"Further analysis — {name}", fig))
+except Exception:
+    pass
+
+sections = [
+    ("Executive Summary", exec_summary),
+    ("Key Insights", key_insights),
+    ("Suggested Next Analyses", [
+        f"{i}. {it['title']} — {it['business_context']}"
+        for i, it in enumerate(suggested, 1)
+    ]),
+]
+
+# Build chart PNGs if possible
+chart_pngs = []
+ppt_chart_pngs = []
+if export_figs:
+    for t, f in export_figs:
+        png = fig_to_png_bytes(f)
+        chart_pngs.append((t, png))
+        ppt_chart_pngs.append((t, png))
 
 colA, colB = st.columns(2)
-
-def collect_core_charts() -> List[go.Figure]:
-    charts: List[go.Figure] = []
-
-    if primary_metric:
-        store_like = detect_best_dimension(df, ["store", "branch", "site", "location"])
-        channel_like = detect_best_dimension(df, ["channel", "platform", "source"])
-        cut_dim = store_like or channel_like
-        if cut_dim:
-            charts.append(fig_bar(df, cut_dim, primary_metric, f"{primary_metric} by {cut_dim}", money=money_like, top_k=12))
-
-    if primary_metric and date_col:
-        charts.append(fig_trend_total(df, date_col, primary_metric, money=money_like))
-
-    if len(numeric_cols) >= 2:
-        charts.append(fig_corr_r2(df, numeric_cols))
-
-    return charts
-
-core_charts = collect_core_charts()
 
 with colA:
     if st.button("Download Executive Brief (PDF)"):
         if not REPORTLAB_OK:
-            st.error("PDF export requires reportlab. Add it to requirements.txt.")
+            st.error("PDF export requires reportlab.")
         else:
-            next_analyses = (
-                ai_report.get("suggested_next_analyses", [])
-                if ai_report else
-                suggested_next_analyses_fallback(df, primary_metric or "metric", date_col, [])
+            if KALEIDO_OK:
+                # include charts
+                pdf_bytes = export_pdf_with_charts("EC-AI Insight — Executive Brief", sections, [(t, p) for t, p in chart_pngs if p is not None])
+                if not pdf_bytes:
+                    pdf_bytes = export_pdf_text_only("EC-AI Insight — Executive Brief", sections)
+            else:
+                st.warning("Chart export not available (install kaleido). Exporting text-only PDF.")
+                pdf_bytes = export_pdf_text_only("EC-AI Insight — Executive Brief", sections)
+
+            st.download_button(
+                "Click to download PDF",
+                data=pdf_bytes,
+                file_name="ecai_executive_brief.pdf",
+                mime="application/pdf",
             )
-            pdf_bytes = build_pdf_bytes(
-                title="EC-AI Insight — Executive Brief",
-                exec_points=exec_pts,
-                insight_points=ins_pts,
-                next_analyses=next_analyses,
-                figs=core_charts,
-                analyses=analysis_results,
-            )
-            if not KALEIDO_OK:
-                st.warning("Charts in PDF require Kaleido (plotly image export). Add 'kaleido' to requirements.txt.")
-            if pdf_bytes:
-                st.download_button("Click to download PDF", data=pdf_bytes, file_name="ecai_executive_brief.pdf", mime="application/pdf")
 
 with colB:
     if st.button("Download Slides (PPTX)"):
         if not PPTX_OK:
-            st.error("PPTX export requires python-pptx. Add it to requirements.txt.")
+            st.error("PPTX export requires python-pptx.")
         else:
-            next_analyses = (
-                ai_report.get("suggested_next_analyses", [])
-                if ai_report else
-                suggested_next_analyses_fallback(df, primary_metric or "metric", date_col, [])
+            pptx_bytes = export_pptx("EC-AI Insight — Slides", sections, ppt_chart_pngs)
+            st.download_button(
+                "Click to download PPTX",
+                data=pptx_bytes,
+                file_name="ecai_insight_slides.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             )
-            pptx_bytes = build_pptx_bytes(
-                title="EC-AI Insight — Slides",
-                exec_points=exec_pts,
-                insight_points=ins_pts,
-                next_analyses=next_analyses,
-                charts=core_charts,
-                analyses=analysis_results,
-            )
-            if not KALEIDO_OK:
-                st.warning("Charts in PPTX require Kaleido (plotly image export). Add 'kaleido' to requirements.txt.")
-            if pptx_bytes:
-                st.download_button(
-                    "Click to download PPTX",
-                    data=pptx_bytes,
-                    file_name="ecai_insight_slides.pptx",
-                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                )
 
-st.markdown('<div class="small-note">Tip: For best exports, add <b>kaleido</b> to requirements.txt so charts embed into PDF/PPTX.</div>', unsafe_allow_html=True)
+if not KALEIDO_OK:
+    st.info("Optional: to include charts in exports, add `kaleido` to requirements.txt (Plotly image export).")
+
+st.caption("Note: This app is for demo/testing. Please avoid uploading confidential or regulated data.")
