@@ -9,4 +9,10 @@ ydata-profiling
 reportlab
 python-pptx
 openpyxl
-kaleido==0.2.1
+kaleido
+scipy
+statsmodels
+openpyxl
+reportlab
+python-pptx
+requests
