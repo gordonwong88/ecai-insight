@@ -1,9 +1,9 @@
 # app.py
-# EC-AI Insight (MVP) — Upload CSV/XLSX → profile + auto charts + R² + consultant-grade suggestions + exports
-# Notes:
-# - Reads OpenAI key from Streamlit Secrets or environment variable (never hardcode).
-# - Exports: Executive-only OR Full pack (includes “Run all 3 analyses” outputs + charts + commentary).
-# - Correlation heatmap uses R² by default (tooltip shows both R and R²).
+# EC-AI Insight (MVP) — Runnable "middle-start" version
+# - Upload CSV/XLSX → profile + auto charts + R² + consultant-grade suggestions + exports (optional)
+# - FIX: More colorful charts (custom Plotly colorway + multi-color bars + nicer heatmap)
+# - FIX: Make heavy deps OPTIONAL so the app still runs even if you didn't install them
+#   (reportlab / python-pptx / kaleido / openai are optional)
 
 import io
 import math
@@ -18,25 +18,36 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-# Optional (export)
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.units import inch
-from reportlab.pdfgen import canvas
+# -----------------------------
+# Optional deps (keep app runnable even if missing)
+# -----------------------------
+REPORTLAB_OK = True
+PPTX_OK = True
+OPENAI_OK = True
 
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
-from pptx.dml.color import RGBColor
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.units import inch
+    from reportlab.pdfgen import canvas as rl_canvas
+except Exception:
+    REPORTLAB_OK = False
 
-# Optional (AI)
+try:
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+    from pptx.dml.color import RGBColor
+except Exception:
+    PPTX_OK = False
+
 try:
     from openai import OpenAI
 except Exception:
-    OpenAI = None
+    OPENAI_OK = False
+    OpenAI = None  # noqa
 
 
 # -----------------------------
-# Page config (add your custom code right after this, as you asked)
+# Page config (start point you requested)
 # -----------------------------
 st.set_page_config(
     page_title="EC-AI Insight (MVP)",
@@ -44,7 +55,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# Example of “code after st.set_page_config” (safe UX polish):
 st.markdown(
     """
     <style>
@@ -57,12 +67,38 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# -----------------------------
+# Plotly theme + COLORS (more colorful)
+# -----------------------------
+# A rich but professional palette
+EC_COLORWAY = (
+    px.colors.qualitative.Set3
+    + px.colors.qualitative.Bold
+    + px.colors.qualitative.Pastel
+    + px.colors.qualitative.Safe
+)
+
+px.defaults.template = "plotly_white"
+px.defaults.color_discrete_sequence = EC_COLORWAY
+
+
+def apply_theme(fig: go.Figure, height: Optional[int] = None) -> go.Figure:
+    """Apply consistent layout styling + colorful palette."""
+    fig.update_layout(
+        template="plotly_white",
+        colorway=EC_COLORWAY,
+        margin=dict(l=10, r=10, t=60, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    if height:
+        fig.update_layout(height=height)
+    return fig
+
 
 # -----------------------------
 # Helpers
 # -----------------------------
 def human_money(x: float, currency="$") -> str:
-    """Format numbers as $86.4K / $1.2M / $0.9B with 1 decimal."""
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return "-"
     sign = "-" if x < 0 else ""
@@ -100,13 +136,11 @@ def safe_to_datetime(s: pd.Series) -> Optional[pd.Series]:
 
 
 def guess_date_col(df: pd.DataFrame) -> Optional[str]:
-    # Prefer columns with date-ish names
     candidates = [c for c in df.columns if re.search(r"(date|dt|time|month|day)", str(c), re.I)]
     for c in candidates:
         dt = safe_to_datetime(df[c])
         if dt is not None:
             return c
-    # Otherwise try any object column that parses well
     for c in df.columns:
         if df[c].dtype == "object":
             dt = safe_to_datetime(df[c])
@@ -131,19 +165,15 @@ def is_categorical_series(s: pd.Series) -> bool:
 
 def pick_revenue_like(df: pd.DataFrame) -> Optional[str]:
     patterns = [
-        r"\brevenue\b", r"\bsales\b", r"\bturnover\b", r"\bincome\b", r"\bgmv\b", r"\bamount\b",
-        r"\bprofit\b", r"\bmargin\b", r"\bfees?\b",
+        r"\brevenue\b", r"\bsales\b", r"\bturnover\b", r"\bincome\b",
+        r"\bgmv\b", r"\bamount\b", r"\bprofit\b", r"\bmargin\b", r"\bfees?\b",
     ]
-    cols = list(df.columns)
     scored = []
-    for c in cols:
+    for c in df.columns:
         if not is_numeric_series(df[c]):
             continue
         name = str(c).lower()
-        score = 0
-        for p in patterns:
-            if re.search(p, name):
-                score += 3
+        score = sum(3 for p in patterns if re.search(p, name))
         if score > 0:
             scored.append((score, c))
     if not scored:
@@ -189,7 +219,6 @@ def calc_profile(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def coverage_indicator(df: pd.DataFrame) -> float:
-    # “Coverage”: share of non-missing cells across the entire dataset
     total = df.shape[0] * df.shape[1]
     if total == 0:
         return 0.0
@@ -198,30 +227,23 @@ def coverage_indicator(df: pd.DataFrame) -> float:
 
 
 def avg_missing_indicator(df: pd.DataFrame) -> float:
-    # Average missing percentage across columns
     if df.shape[1] == 0:
         return 100.0
     return float((df.isna().mean() * 100).mean())
 
 
 def confidence_indicator(df: pd.DataFrame, numeric_cols: List[str]) -> Tuple[int, str]:
-    """
-    Confidence (0-100, heuristic):
-    - Coverage, missingness, number of numeric cols, and row count.
-    - This is NOT statistical confidence; it’s a product indicator for “analysis reliability.”
-    """
-    cov = coverage_indicator(df)  # 0-1
-    avg_miss = avg_missing_indicator(df)  # 0-100
-
+    cov = coverage_indicator(df)
+    avg_miss = avg_missing_indicator(df)
     rows = df.shape[0]
     cols = df.shape[1]
     num_count = len(numeric_cols)
 
     score = 0
-    score += min(55, cov * 55)                              # up to 55
-    score += max(0, 20 - (avg_miss / 100) * 20)            # up to 20
-    score += min(15, (num_count / max(1, cols)) * 15)      # up to 15
-    score += min(10, math.log10(max(10, rows)) * 2.5)      # up to 10 (bigger datasets -> slightly higher)
+    score += min(55, cov * 55)
+    score += max(0, 20 - (avg_miss / 100) * 20)
+    score += min(15, (num_count / max(1, cols)) * 15)
+    score += min(10, math.log10(max(10, rows)) * 2.5)
 
     score = int(round(min(100, max(0, score))))
     label = "High" if score >= 80 else ("Medium" if score >= 55 else "Low")
@@ -236,13 +258,6 @@ def pearson_r_and_r2(df: pd.DataFrame, numeric_cols: List[str]) -> Tuple[pd.Data
 
 
 def r_strength_label(r: float) -> str:
-    """
-    Practical heuristic (common in analytics):
-    |r| < 0.2: Weak
-    0.2–0.5: Moderate
-    0.5–0.8: Strong
-    >=0.8: Very strong
-    """
     a = abs(r)
     if a < 0.2:
         return "Weak"
@@ -254,13 +269,6 @@ def r_strength_label(r: float) -> str:
 
 
 def r2_strength_label(r2: float) -> str:
-    """
-    R² heuristic (share of variance explained):
-    <0.04: Weak ( <4% )
-    0.04–0.25: Moderate (4–25%)
-    0.25–0.64: Strong (25–64%)
-    >=0.64: Very strong (>=64%)
-    """
     if r2 < 0.04:
         return "Weak"
     if r2 < 0.25:
@@ -270,22 +278,14 @@ def r2_strength_label(r2: float) -> str:
     return "Very strong"
 
 
-def chart_commentary_bar(top_name: str, top_val: float, metric_name: str) -> str:
-    return f"Top segment is **{top_name}** with **{human_money(top_val) if 'rev' in metric_name.lower() or 'sales' in metric_name.lower() or 'profit' in metric_name.lower() else human_num(top_val)}**."
-
-
 def chart_commentary_trend(metric: str, series: pd.Series) -> str:
-    # simple slope over time using first/last non-null
     y = series.dropna()
     if len(y) < 2:
         return f"Not enough data points to infer a trend for **{metric}**."
     first, last = float(y.iloc[0]), float(y.iloc[-1])
     if first == 0:
-        change = None
-    else:
-        change = (last - first) / abs(first)
-    if change is None:
         return f"Trend view for **{metric}** across time."
+    change = (last - first) / abs(first)
     direction = "increased" if change > 0 else ("decreased" if change < 0 else "remained stable")
     return f"Overall, **{metric}** {direction} from **{human_num(first)}** to **{human_num(last)}** (approx. {change*100:.1f}%)."
 
@@ -311,100 +311,13 @@ def add_max_point_annotation(fig: go.Figure, x_vals, y_vals, label_prefix="Top")
 
 def fig_to_png_bytes(fig: go.Figure) -> Optional[bytes]:
     """
-    Requires kaleido. If unavailable, returns None and exports text-only.
+    Requires kaleido. If unavailable, returns None.
+    Add to requirements: kaleido==0.2.1
     """
     try:
         return fig.to_image(format="png", scale=2)
     except Exception:
         return None
-
-
-def fit_font_size(text: str, max_chars: int, base: int = 24, min_size: int = 12) -> int:
-    # crude but effective for slide text overflow
-    if not text:
-        return base
-    ratio = len(text) / max(1, max_chars)
-    if ratio <= 1:
-        return base
-    size = int(base / ratio)
-    return max(min_size, min(base, size))
-
-
-def add_bullets_to_slide(slide, title: str, bullets: List[str]):
-    left = Inches(0.6)
-    top = Inches(0.5)
-    width = Inches(12.0)
-    height = Inches(6.5)
-
-    title_shape = slide.shapes.add_textbox(left, top, width, Inches(0.6))
-    tf = title_shape.text_frame
-    tf.text = title
-    tf.paragraphs[0].font.size = Pt(32)
-    tf.paragraphs[0].font.bold = True
-
-    body = slide.shapes.add_textbox(left, Inches(1.2), width, height)
-    tfb = body.text_frame
-    tfb.word_wrap = True
-    tfb.clear()
-
-    joined = "\n".join(bullets)
-    fs = fit_font_size(joined, max_chars=900, base=18, min_size=12)
-
-    for i, b in enumerate(bullets):
-        p = tfb.paragraphs[0] if i == 0 else tfb.add_paragraph()
-        p.text = b
-        p.level = 0
-        p.font.size = Pt(fs)
-        p.space_after = Pt(6)
-
-
-def add_image_slide(prs, title: str, image_bytes: bytes, caption: Optional[str] = None):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
-    # Title
-    tbox = slide.shapes.add_textbox(Inches(0.6), Inches(0.4), Inches(12.0), Inches(0.6))
-    tf = tbox.text_frame
-    tf.text = title
-    tf.paragraphs[0].font.size = Pt(26)
-    tf.paragraphs[0].font.bold = True
-
-    # Image
-    stream = io.BytesIO(image_bytes)
-    slide.shapes.add_picture(stream, Inches(0.6), Inches(1.2), width=Inches(12.0))
-
-    if caption:
-        cbox = slide.shapes.add_textbox(Inches(0.6), Inches(7.0), Inches(12.0), Inches(0.4))
-        ctf = cbox.text_frame
-        ctf.text = caption
-        ctf.paragraphs[0].font.size = Pt(14)
-        ctf.paragraphs[0].font.color.rgb = RGBColor(80, 80, 80)
-
-
-# -----------------------------
-# AI — suggestions + report (quality lock)
-# -----------------------------
-def get_openai_client() -> Optional["OpenAI"]:
-    key = None
-    try:
-        key = st.secrets.get("OPENAI_API_KEY", None)
-    except Exception:
-        key = None
-    if not key:
-        key = st.session_state.get("OPENAI_API_KEY", None)
-    if not key:
-        key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
-    if not key:
-        key = st.experimental_get_query_params().get("key", [None])[0]  # optional
-    if not key:
-        key = None
-
-    # also allow env var
-    if not key:
-        import os
-        key = os.getenv("OPENAI_API_KEY")
-
-    if not key or OpenAI is None:
-        return None
-    return OpenAI(api_key=key)
 
 
 def build_facts_pack(df: pd.DataFrame, date_col: Optional[str], revenue_col: Optional[str], dims: Dict[str, Optional[str]]) -> Dict:
@@ -433,67 +346,74 @@ def build_facts_pack(df: pd.DataFrame, date_col: Optional[str], revenue_col: Opt
     return facts
 
 
+# -----------------------------
+# AI (optional) — suggestions + report
+# -----------------------------
+def get_openai_client() -> Optional["OpenAI"]:
+    if not OPENAI_OK:
+        return None
+    key = None
+    try:
+        key = st.secrets.get("OPENAI_API_KEY", None)
+    except Exception:
+        key = None
+    if not key:
+        key = st.session_state.get("OPENAI_API_KEY", None)
+    if not key:
+        import os
+        key = os.getenv("OPENAI_API_KEY")
+
+    if not key:
+        return None
+    return OpenAI(api_key=key)
+
+
 def ai_generate_suggestions(facts: Dict) -> List[Dict]:
-    """
-    Returns list of 3 suggestions with:
-    title, business_context, what_to_do, expected_insight, outputs, risks
-    """
-    client = get_openai_client()
-    # Always keep a high-quality fallback (so quality doesn't swing wildly)
     fallback = [
         {
             "title": "Revenue and Profit Trends by Core Segments",
             "business_context": "Pinpoint where value is created (and lost) by comparing revenue (and profit if available) across the most important segments.",
             "what_to_do": "Rank segments by total revenue, then examine margin/profit distribution if present. Validate whether outperformance is driven by price, volume, or mix.",
-            "expected_insight": "Clear identification of top growth engines vs. underperformers, and whether performance is structural or driven by a few spikes/outliers.",
-            "outputs": "Segment leaderboard, contribution waterfall (optional), and a trend chart for the top segments.",
-            "risks": "Mix effects (product/store/channel) can mask true drivers; confirm with controlled cuts.",
+            "expected_insight": "Identification of top growth engines vs. underperformers, and whether performance is structural or driven by spikes/outliers.",
+            "outputs": "Segment leaderboard + contribution view + trend chart for top segments.",
+            "risks": "Mix effects can mask true drivers; confirm with controlled cuts.",
         },
         {
             "title": "Time Trend & Seasonality Scan",
-            "business_context": "Understand whether performance is stable, improving, or volatile over time to support planning, inventory, staffing, and promotion timing.",
-            "what_to_do": "Aggregate the primary metric by day/week/month. Identify peaks/troughs and relate them to segments (store/channel/category) to see who drives volatility.",
-            "expected_insight": "A practical view of baseline vs. spikes, plus which segments amplify volatility and which are stable.",
-            "outputs": "Total trend line + small-multiple trend by top segment; volatility flags for unusual weeks.",
-            "risks": "Short time windows can overfit; avoid over-interpreting 1–2 spikes as seasonality.",
+            "business_context": "Understand stability vs. volatility over time for planning and resource allocation.",
+            "what_to_do": "Aggregate the primary metric by week/month. Identify peaks/troughs and relate them to segments (store/channel/category).",
+            "expected_insight": "Baseline vs. spikes and which segments drive volatility.",
+            "outputs": "Total trend line + trend by top segments; anomaly flags.",
+            "risks": "Short time windows can overfit; avoid over-interpreting a few spikes.",
         },
         {
             "title": "Discount Effectiveness & Price/Mix Sanity Check",
-            "business_context": "Validate whether discounts increase total value (revenue/profit) or simply shift demand and erode margin.",
-            "what_to_do": "Create discount bands and compare average order/transaction economics (revenue/profit/units). Break down by category or channel.",
-            "expected_insight": "A simple “sweet spot” for discount bands and where discounting is likely harmful (low uplift, high margin erosion).",
-            "outputs": "Discount-band bar chart with sample sizes; segment breakdown table; recommendations for controlled testing.",
-            "risks": "Confounding from campaign timing or product mix; treat as directional until confirmed with experiments.",
+            "business_context": "Validate whether discounts increase total value or erode margin.",
+            "what_to_do": "Create discount bands and compare average economics (revenue/profit/units) by band; break down by category/channel.",
+            "expected_insight": "A discount “sweet spot” and where discounting is likely harmful.",
+            "outputs": "Discount-band chart with sample sizes + segment breakdown.",
+            "risks": "Confounding from campaign timing or product mix; treat as directional until tested.",
         },
     ]
 
+    client = get_openai_client()
     if client is None:
         return fallback
 
     prompt = f"""
 You are a top-tier analytics consultant.
 Generate EXACTLY 3 "Suggested Next Analyses" for this dataset.
-They MUST be data-specific, actionable, and consistent quality.
 
 Rules:
 - Use the facts pack as ground truth.
-- Avoid generic fluff.
 - Each suggestion must have:
-  1) title (short)
-  2) business_context (2-3 sentences)
-  3) what_to_do (2-4 sentences, concrete steps)
-  4) expected_insight (2-3 sentences, what decision it enables)
-  5) outputs (1-2 sentences: charts/tables)
-  6) risks (1-2 sentences: key pitfalls)
-- Keep each field concise but meaningful.
-- Do NOT mention external datasets (S&P 500, papers, etc.) unless provided by the user.
+  title, business_context, what_to_do, expected_insight, outputs, risks
+- Return valid JSON list of 3 objects.
 
 Facts pack:
 {facts}
-Return valid JSON list of 3 objects.
 """
     try:
-        # Use a stable low-temperature run for consistency
         resp = client.chat.completions.create(
             model="gpt-4.1-mini",
             temperature=0.2,
@@ -502,50 +422,40 @@ Return valid JSON list of 3 objects.
                 {"role": "user", "content": prompt},
             ],
         )
-        txt = resp.choices[0].message.content.strip()
         import json
-        data = json.loads(txt)
-        # Basic validation
+        data = json.loads(resp.choices[0].message.content.strip())
         if isinstance(data, list) and len(data) == 3:
-            needed = {"title", "business_context", "what_to_do", "expected_insight", "outputs", "risks"}
-            cleaned = []
-            for d in data:
-                if not isinstance(d, dict):
-                    return fallback
-                if not needed.issubset(set(d.keys())):
-                    return fallback
-                cleaned.append(d)
-            return cleaned
+            return data
         return fallback
     except Exception:
         return fallback
 
 
 def ai_generate_report(exec_bullets: List[str], insights_bullets: List[str], suggestions: List[Dict]) -> str:
-    client = get_openai_client()
-    # deterministic fallback: just stitch
     base = []
     base.append("AI Insights Report\n")
     base.append("1) Executive Summary\n" + "\n".join([f"- {b}" for b in exec_bullets]) + "\n")
     base.append("2) Key Insights\n" + "\n".join([f"- {b}" for b in insights_bullets]) + "\n")
     base.append("3) Suggested Next Analyses\n")
     for i, s in enumerate(suggestions, 1):
-        base.append(f"{i}. {s['title']}\n"
-                    f"- Business Context: {s['business_context']}\n"
-                    f"- What to Do: {s['what_to_do']}\n"
-                    f"- Expected Insight: {s['expected_insight']}\n"
-                    f"- Outputs: {s['outputs']}\n"
-                    f"- Risks: {s['risks']}\n")
+        base.append(
+            f"{i}. {s['title']}\n"
+            f"- Business Context: {s['business_context']}\n"
+            f"- What to Do: {s['what_to_do']}\n"
+            f"- Expected Insight: {s['expected_insight']}\n"
+            f"- Outputs: {s['outputs']}\n"
+            f"- Risks: {s['risks']}\n"
+        )
     fallback_text = "\n".join(base)
 
+    client = get_openai_client()
     if client is None:
         return fallback_text
 
     prompt = f"""
-Write a concise "AI Insights Report" using the provided bullets and suggested analyses.
-- Do NOT add new analyses outside the provided list.
-- Tone: consultant-grade, crisp, professional.
-- Output as plain text with numbered sections.
+Write a concise "AI Insights Report" using ONLY the provided bullets and suggested analyses.
+Tone: consultant-grade, crisp, professional.
+Output as plain text with numbered sections.
 
 Executive Summary bullets:
 {exec_bullets}
@@ -553,7 +463,7 @@ Executive Summary bullets:
 Key Insights bullets:
 {insights_bullets}
 
-Suggested Next Analyses (3 items):
+Suggested Next Analyses:
 {suggestions}
 """
     try:
@@ -571,7 +481,7 @@ Suggested Next Analyses (3 items):
 
 
 # -----------------------------
-# “Run all 3 analyses” (auto)
+# “Run all 3 analyses”
 # -----------------------------
 @dataclass
 class AnalysisOutput:
@@ -586,7 +496,6 @@ def run_analysis_1_driver(df: pd.DataFrame, revenue_col: str, dim_a: Optional[st
 
     dims = [d for d in [dim_a, dim_b] if d is not None]
     if not dims:
-        # fallback: top numeric pair correlation
         bullets.append("No segment columns detected; consider adding a categorical field (e.g., Store/Channel/Category).")
         return AnalysisOutput(title=title, figure=None, bullets=bullets)
 
@@ -598,22 +507,23 @@ def run_analysis_1_driver(df: pd.DataFrame, revenue_col: str, dim_a: Optional[st
     bullets.append(f"Top segment: **{top_name}** contributes **{human_money(top_val)}** total {revenue_col}.")
     if len(g) >= 2:
         bullets.append(f"Second segment is **{g.index[1]}** at **{human_money(float(g.iloc[1]))}**.")
-    bullets.append("Use this view to confirm whether concentration risk exists (one segment dominates the outcome).")
+    bullets.append("Use this view to confirm concentration risk (one segment dominates the outcome).")
 
+    # MULTI-COLOR bars: set color=dim, but hide legend for cleanliness
     fig = px.bar(
         g.reset_index(),
         x=dim,
         y=revenue_col,
-        text=revenue_col,
+        color=dim,
         title=f"{revenue_col} by {dim}",
     )
-    fig.update_traces(texttemplate="%{text:.1f}", textposition="inside")
-    # Apply $ labels with 1 decimal (K/M)
     fig.update_traces(
         text=[human_money(v) for v in g.values],
+        textposition="inside",
         hovertemplate=f"{dim}: %{{x}}<br>{revenue_col}: %{{y:.2f}}<extra></extra>",
     )
-    fig.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+    fig.update_layout(showlegend=False)
+    fig = apply_theme(fig)
 
     return AnalysisOutput(title=title, figure=fig, bullets=bullets)
 
@@ -625,7 +535,6 @@ def run_analysis_2_variability(df: pd.DataFrame, revenue_col: str, dim: Optional
         bullets.append("No suitable segment column detected for variability analysis.")
         return AnalysisOutput(title=title, figure=None, bullets=bullets)
 
-    # CV = coefficient of variation = std/mean (dimensionless)
     g = df.groupby(dim)[revenue_col].agg(["mean", "std", "count"])
     g["CV (Coefficient of Variation)"] = g["std"] / g["mean"].replace(0, np.nan)
     g = g.sort_values("CV (Coefficient of Variation)", ascending=False).head(12)
@@ -641,11 +550,12 @@ def run_analysis_2_variability(df: pd.DataFrame, revenue_col: str, dim: Optional
         g.reset_index(),
         x=dim,
         y="CV (Coefficient of Variation)",
-        text="CV (Coefficient of Variation)",
+        color=dim,
         title=f"Revenue volatility (CV) by {dim}",
     )
-    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-    fig.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+    fig.update_traces(text=np.round(g["CV (Coefficient of Variation)"].values, 2), textposition="outside")
+    fig.update_layout(showlegend=False)
+    fig = apply_theme(fig)
 
     return AnalysisOutput(title=title, figure=fig, bullets=bullets)
 
@@ -654,7 +564,7 @@ def run_analysis_3_discount_simple(df: pd.DataFrame, revenue_col: str, discount_
     title = "3) Discount effectiveness (simple)"
     bullets: List[str] = []
     if discount_col is None:
-        bullets.append("No discount-like column detected (e.g., Discount, Discount_Rate).")
+        bullets.append("No discount-like numeric column detected (e.g., Discount, Discount_Rate).")
         return AnalysisOutput(title=title, figure=None, bullets=bullets)
 
     s = pd.to_numeric(df[discount_col], errors="coerce")
@@ -662,7 +572,6 @@ def run_analysis_3_discount_simple(df: pd.DataFrame, revenue_col: str, discount_
         bullets.append("Discount column has too few numeric values to analyze.")
         return AnalysisOutput(title=title, figure=None, bullets=bullets)
 
-    # Discount bands (assumes 0–1 or 0–100; normalize if needed)
     disc = s.copy()
     if disc.max(skipna=True) > 2:  # likely 0-100
         disc = disc / 100.0
@@ -673,16 +582,13 @@ def run_analysis_3_discount_simple(df: pd.DataFrame, revenue_col: str, discount_
     tmp = df.copy()
     tmp["Discount_Band"] = band
 
-    # IMPORTANT: clarify metric — average revenue per row/transaction record in that band
     g = tmp.groupby("Discount_Band")[revenue_col].agg(["mean", "count"]).reset_index()
     g["mean"] = g["mean"].astype(float)
 
     best = g.loc[g["mean"].idxmax()]
     worst = g.loc[g["mean"].idxmin()]
 
-    bullets.append(
-        f"Chart shows **average {revenue_col} per record** by discount band (not per customer unless your data is customer-level)."
-    )
+    bullets.append(f"Chart shows **average {revenue_col} per record** by discount band.")
     bullets.append(f"Best band is **{best['Discount_Band']}** with avg **{human_money(best['mean'])}** (n={int(best['count'])}).")
     bullets.append(f"Weakest band is **{worst['Discount_Band']}** with avg **{human_money(worst['mean'])}** (n={int(worst['count'])}).")
     bullets.append("Treat this as directional; confirm by controlling for Store/Channel/Category to avoid mix effects.")
@@ -691,27 +597,44 @@ def run_analysis_3_discount_simple(df: pd.DataFrame, revenue_col: str, discount_
         g,
         x="Discount_Band",
         y="mean",
-        text="mean",
+        color="Discount_Band",
         title=f"Average {revenue_col} per record by Discount Band",
     )
     fig.update_traces(
         text=[human_money(v) for v in g["mean"].values],
         textposition="inside",
-        hovertemplate="Band: %{x}<br>Avg: %{y:.2f}<br>n=%{customdata}<extra></extra>",
         customdata=g["count"].values,
+        hovertemplate="Band: %{x}<br>Avg: %{y:.2f}<br>n=%{customdata}<extra></extra>",
     )
-    fig.update_layout(yaxis_title=f"Avg {revenue_col} per record", xaxis_title="Discount Band", margin=dict(l=10, r=10, t=60, b=10))
+    fig.update_layout(showlegend=False, yaxis_title=f"Avg {revenue_col} per record", xaxis_title="Discount Band")
+    fig = apply_theme(fig)
+
     return AnalysisOutput(title=title, figure=fig, bullets=bullets)
 
 
 # -----------------------------
-# Exports
+# Exports (optional) — only enabled if deps installed
 # -----------------------------
-def build_pdf(exec_bullets: List[str], insights_bullets: List[str], suggestions: List[Dict],
-              charts: List[Tuple[str, Optional[bytes]]], analyses: List[AnalysisOutput], include_analyses: bool) -> bytes:
+def build_pdf(exec_bullets, insights_bullets, suggestions, charts, analyses, include_analyses) -> bytes:
+    if not REPORTLAB_OK:
+        raise RuntimeError("reportlab not installed. Install reportlab to enable PDF export.")
+
     buff = io.BytesIO()
-    c = canvas.Canvas(buff, pagesize=letter)
+    c = rl_canvas.Canvas(buff, pagesize=letter)
     W, H = letter
+
+    def wrap_text(text, width_chars):
+        words = text.split()
+        out, cur = [], ""
+        for w in words:
+            if len(cur) + len(w) + 1 <= width_chars:
+                cur = (cur + " " + w).strip()
+            else:
+                out.append(cur)
+                cur = w
+        if cur:
+            out.append(cur)
+        return out
 
     def write_title(text, y):
         c.setFont("Helvetica-Bold", 18)
@@ -731,23 +654,9 @@ def build_pdf(exec_bullets: List[str], insights_bullets: List[str], suggestions:
                 lines += 1
         return y, False
 
-    def wrap_text(text, width_chars):
-        words = text.split()
-        out, cur = [], ""
-        for w in words:
-            if len(cur) + len(w) + 1 <= width_chars:
-                cur = (cur + " " + w).strip()
-            else:
-                out.append(cur)
-                cur = w
-        if cur:
-            out.append(cur)
-        return out
-
     # Page 1
     y = H - 0.9 * inch
     y = write_title("EC-AI Executive Brief", y)
-
     c.setFont("Helvetica", 11)
     c.drawString(0.8 * inch, y, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     y -= 0.35 * inch
@@ -769,28 +678,27 @@ def build_pdf(exec_bullets: List[str], insights_bullets: List[str], suggestions:
     y = write_title("Suggested Next Analyses", y)
     sug_lines = []
     for i, s in enumerate(suggestions, 1):
-        sug_lines.append(f"{i}. {s['title']}")
-        sug_lines.append(f"Business Context: {s['business_context']}")
-        sug_lines.append(f"What to Do: {s['what_to_do']}")
-        sug_lines.append(f"Expected Insight: {s['expected_insight']}")
-        sug_lines.append(f"Outputs: {s['outputs']}")
-        sug_lines.append(f"Risks: {s['risks']}")
+        sug_lines += [
+            f"{i}. {s['title']}",
+            f"Business Context: {s['business_context']}",
+            f"What to Do: {s['what_to_do']}",
+            f"Expected Insight: {s['expected_insight']}",
+            f"Outputs: {s['outputs']}",
+            f"Risks: {s['risks']}",
+        ]
     y, overflow = write_bullets(sug_lines, y, font_size=10, max_lines=40)
     if overflow:
         c.showPage()
-        y = H - 0.9 * inch
 
-    # Charts page(s)
+    # Charts
     for title, img in charts:
         if img is None:
             continue
         c.showPage()
         y = H - 0.9 * inch
         y = write_title(title, y)
-        # draw image
         from reportlab.lib.utils import ImageReader
         ir = ImageReader(io.BytesIO(img))
-        # fit width
         img_w = W - 1.6 * inch
         c.drawImage(ir, 0.8 * inch, 1.2 * inch, width=img_w, height=4.8 * inch, preserveAspectRatio=True, anchor="n")
 
@@ -813,13 +721,55 @@ def build_pdf(exec_bullets: List[str], insights_bullets: List[str], suggestions:
     return buff.getvalue()
 
 
-def build_pptx(exec_bullets: List[str], insights_bullets: List[str], suggestions: List[Dict],
-               charts: List[Tuple[str, Optional[bytes]]], analyses: List[AnalysisOutput], include_analyses: bool) -> bytes:
+def build_pptx(exec_bullets, insights_bullets, suggestions, charts, analyses, include_analyses) -> bytes:
+    if not PPTX_OK:
+        raise RuntimeError("python-pptx not installed. Install python-pptx to enable PPTX export.")
+
     prs = Presentation()
-    prs.slide_width = Inches(13.33)  # widescreen-ish
+    prs.slide_width = Inches(13.33)
     prs.slide_height = Inches(7.5)
 
-    # Slide 1: Title
+    def add_bullets_to_slide(slide, title: str, bullets: List[str]):
+        left = Inches(0.6)
+        top = Inches(0.5)
+        width = Inches(12.0)
+        height = Inches(6.5)
+
+        title_shape = slide.shapes.add_textbox(left, top, width, Inches(0.6))
+        tf = title_shape.text_frame
+        tf.text = title
+        tf.paragraphs[0].font.size = Pt(32)
+        tf.paragraphs[0].font.bold = True
+
+        body = slide.shapes.add_textbox(left, Inches(1.2), width, height)
+        tfb = body.text_frame
+        tfb.word_wrap = True
+        tfb.clear()
+
+        for i, b in enumerate(bullets):
+            p = tfb.paragraphs[0] if i == 0 else tfb.add_paragraph()
+            p.text = b
+            p.font.size = Pt(16)
+
+    def add_image_slide(prs, title: str, image_bytes: bytes, caption: Optional[str] = None):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        tbox = slide.shapes.add_textbox(Inches(0.6), Inches(0.4), Inches(12.0), Inches(0.6))
+        tf = tbox.text_frame
+        tf.text = title
+        tf.paragraphs[0].font.size = Pt(26)
+        tf.paragraphs[0].font.bold = True
+
+        stream = io.BytesIO(image_bytes)
+        slide.shapes.add_picture(stream, Inches(0.6), Inches(1.2), width=Inches(12.0))
+
+        if caption:
+            cbox = slide.shapes.add_textbox(Inches(0.6), Inches(7.0), Inches(12.0), Inches(0.4))
+            ctf = cbox.text_frame
+            ctf.text = caption
+            ctf.paragraphs[0].font.size = Pt(14)
+            ctf.paragraphs[0].font.color.rgb = RGBColor(80, 80, 80)
+
+    # Slides
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     tbox = slide.shapes.add_textbox(Inches(0.8), Inches(1.0), Inches(12.0), Inches(1.2))
     tf = tbox.text_frame
@@ -832,38 +782,34 @@ def build_pptx(exec_bullets: List[str], insights_bullets: List[str], suggestions
     stf.text = f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
     stf.paragraphs[0].font.size = Pt(18)
 
-    # Slide 2: Executive Summary
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_bullets_to_slide(slide, "Executive Summary", exec_bullets)
 
-    # Slide 3: Key Insights
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     add_bullets_to_slide(slide, "Key Insights", insights_bullets)
 
-    # Slide 4: Suggested Next Analyses
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     sug_bullets = []
     for i, s in enumerate(suggestions, 1):
-        sug_bullets.append(f"{i}. {s['title']}")
-        sug_bullets.append(f"Context: {s['business_context']}")
-        sug_bullets.append(f"What to do: {s['what_to_do']}")
-        sug_bullets.append(f"Expected: {s['expected_insight']}")
-        sug_bullets.append(f"Outputs: {s['outputs']}")
-        sug_bullets.append(f"Risks: {s['risks']}")
-        sug_bullets.append("")
+        sug_bullets += [
+            f"{i}. {s['title']}",
+            f"Context: {s['business_context']}",
+            f"What to do: {s['what_to_do']}",
+            f"Expected: {s['expected_insight']}",
+            f"Outputs: {s['outputs']}",
+            f"Risks: {s['risks']}",
+            "",
+        ]
     add_bullets_to_slide(slide, "Suggested Next Analyses", sug_bullets[:35])
 
-    # Chart slides
     for title, img in charts:
         if img:
             add_image_slide(prs, title, img)
 
     if include_analyses and analyses:
         for a in analyses:
-            # bullets slide
             slide = prs.slides.add_slide(prs.slide_layouts[6])
             add_bullets_to_slide(slide, a.title, a.bullets[:12])
-            # chart slide (if any)
             if a.figure is not None:
                 img = fig_to_png_bytes(a.figure)
                 if img:
@@ -881,20 +827,18 @@ def build_pptx(exec_bullets: List[str], insights_bullets: List[str], suggestions
 st.title("EC-AI Insight (MVP)")
 st.caption("Turning Data Into Intelligence — upload CSV or Excel to get instant profiling, charts, R² relationships, and insights.")
 
-# Upload
 uploaded = st.file_uploader("Upload a dataset", type=["csv", "xlsx", "xls"])
-
 if uploaded is None:
-    st.info("Upload a CSV/XLSX to begin. (Tip: try the retail demo dataset you prepared.)")
+    st.info("Upload a CSV/XLSX to begin.")
     st.stop()
 
-# Load data
+
 def load_data(file) -> pd.DataFrame:
     name = file.name.lower()
     if name.endswith(".csv"):
         return pd.read_csv(file)
-    # excel
     return pd.read_excel(file)
+
 
 try:
     df_raw = load_data(uploaded)
@@ -906,7 +850,6 @@ if df_raw is None or df_raw.empty:
     st.warning("Dataset is empty.")
     st.stop()
 
-# Clean: strip colnames
 df = df_raw.copy()
 df.columns = [str(c).strip() for c in df.columns]
 
@@ -923,7 +866,6 @@ cat_cols = [c for c in df.columns if is_categorical_series(df[c]) and c != date_
 revenue_col = pick_revenue_like(df) or (numeric_cols[0] if numeric_cols else None)
 cost_col = pick_cost_like(df)
 
-# segment dimensions by keywords
 dims = {
     "country": pick_dim_like(df, ["country", "region", "market", "geo"]),
     "store": pick_dim_like(df, ["store", "branch", "location", "outlet"]),
@@ -932,8 +874,8 @@ dims = {
     "payment": pick_dim_like(df, ["payment", "pay", "method", "card"]),
     "team": pick_dim_like(df, ["team", "sales_rep", "owner", "rm", "relationship", "agent"]),
 }
-discount_col = pick_dim_like(df, ["discount_rate", "discount", "promo", "rebate"])
-# NOTE: discount_col from pick_dim_like returns categorical; we want numeric discount. Fix:
+
+# discount numeric detection
 discount_col = None
 for c in df.columns:
     if re.search(r"discount|promo|rebate", str(c), re.I) and is_numeric_series(df[c]):
@@ -944,25 +886,24 @@ for c in df.columns:
 cov = coverage_indicator(df)
 avg_miss = avg_missing_indicator(df)
 conf_score, conf_label = confidence_indicator(df, numeric_cols)
-
-# Facts pack
 facts = build_facts_pack(df, date_col, revenue_col, dims)
 
 # -----------------------------
-# Executive Summary + Key Insights (top)
+# Executive Summary + Key Insights
 # -----------------------------
 st.subheader("Executive Summary")
 
 exec_bullets: List[str] = []
-exec_bullets.append(f"Dataset has **{df.shape[0]} rows** and **{df.shape[1]} columns**; coverage is **{cov*100:.1f}%** with average missing **{avg_miss:.1f}%**.")
+exec_bullets.append(
+    f"Dataset has **{df.shape[0]} rows** and **{df.shape[1]} columns**; coverage is **{cov*100:.1f}%** with average missing **{avg_miss:.1f}%**."
+)
 if date_col:
-    exec_bullets.append(f"Time field detected: **{date_col}** (useful for trend analysis).")
+    exec_bullets.append(f"Time field detected: **{date_col}** (usable for trend analysis).")
 if revenue_col:
     s = pd.to_numeric(df[revenue_col], errors="coerce")
     exec_bullets.append(f"Primary metric detected: **{revenue_col}** — total **{human_money(s.sum())}**, average **{human_money(s.mean())}**.")
 if len(numeric_cols) >= 2:
     corr, r2 = pearson_r_and_r2(df, numeric_cols)
-    # strongest pair
     r2u = r2.where(~np.eye(r2.shape[0], dtype=bool))
     max_pair = r2u.stack().sort_values(ascending=False).head(1)
     if len(max_pair) == 1:
@@ -972,15 +913,13 @@ if len(numeric_cols) >= 2:
 exec_bullets.append(f"Confidence indicator is **{conf_score} ({conf_label})** based on coverage, missingness, and numeric signal availability.")
 exec_bullets.append("Next: review key business cuts + trends, then use the suggested analyses for deeper dives.")
 
-# display
 for b in exec_bullets:
-    st.write("• " + re.sub(r"\*\*(.*?)\*\*", r"**\1**", b))
+    st.write("• " + b)
 
 st.subheader("Key Insights")
 
 insights_bullets: List[str] = []
 if revenue_col:
-    # best cut among available dims
     best_dim = None
     best_gap = 0
     best_top = None
@@ -1000,16 +939,16 @@ if revenue_col:
                 best_top = (str(g.index[0]), float(g.iloc[0]))
     if best_dim and best_top:
         insights_bullets.append(f"Top segment by {revenue_col}: **{best_top[0]}** (by **{best_dim}**) at **{human_money(best_top[1])}** total.")
-    # time trend
+
     if date_col:
         tmp = df[[date_col, revenue_col]].copy()
         tmp[revenue_col] = pd.to_numeric(tmp[revenue_col], errors="coerce")
         ts = tmp.groupby(date_col)[revenue_col].sum().sort_index()
         insights_bullets.append(chart_commentary_trend(revenue_col, ts))
-        # peak day
         if len(ts) >= 3:
             peak_date = ts.idxmax()
             insights_bullets.append(f"Peak {revenue_col} occurs on **{peak_date.date()}** at **{human_money(float(ts.max()))}**.")
+
     if cost_col:
         tmp = df[[revenue_col, cost_col]].copy()
         tmp[revenue_col] = pd.to_numeric(tmp[revenue_col], errors="coerce")
@@ -1017,7 +956,6 @@ if revenue_col:
         m = (tmp[revenue_col] - tmp[cost_col]).mean(skipna=True)
         insights_bullets.append(f"Estimated average (Revenue − Cost) using **{revenue_col}** and **{cost_col}** is **{human_money(m)}** per record (directional).")
 
-# add a few generic-but-useful bullets if short
 while len(insights_bullets) < 10:
     if len(numeric_cols) > 0:
         c = numeric_cols[min(len(insights_bullets), len(numeric_cols) - 1)]
@@ -1030,24 +968,17 @@ while len(insights_bullets) < 10:
 for b in insights_bullets[:10]:
     st.write("• " + b)
 
-# Explanations: correlation / R²
 with st.expander("How correlation (R) and R² are interpreted (in this app)"):
     st.markdown(
         """
-**What the chart shows**
-- **R (Pearson correlation)** ranges from **-1 to +1** and keeps direction (positive/negative).
-- **R² (R square)** is **R squared**, ranges from **0 to 1**, and shows **strength only** (direction removed).
-
-**Why we use R² by default**
-- It is easier for business users: “how much of the variation is explained.”
+- **R (Pearson correlation)** ranges **-1 to +1** and keeps direction (positive/negative).
+- **R²** ranges **0 to 1** and shows **strength only** (direction removed).
 
 **Strength labels (heuristic)**
-- **R² < 0.04** → Weak ( <4% )
-- **0.04–0.25** → Moderate (4–25%)
-- **0.25–0.64** → Strong (25–64%)
-- **≥0.64** → Very strong (≥64%)
-
-(These are practical guidelines for exploration, not a statistical proof.)
+- **R² < 0.04** → Weak
+- **0.04–0.25** → Moderate
+- **0.25–0.64** → Strong
+- **≥0.64** → Very strong
 """
     )
 
@@ -1066,7 +997,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("Coverage", f"{cov*100:.0f}%")
 c2.metric("Avg Missing", f"{avg_miss:.1f}%")
 c3.metric("Confidence", f"{conf_score} ({conf_label})")
-# strong pairs count
+
 strong_pairs = 0
 if len(numeric_cols) >= 2:
     corr, r2 = pearson_r_and_r2(df, numeric_cols)
@@ -1074,20 +1005,14 @@ if len(numeric_cols) >= 2:
     strong_pairs = int((r2u.stack() >= 0.64).sum())
 c4.metric("Strong R² pairs", f"{strong_pairs}")
 
-st.caption(
-    "Logic: Coverage = non-missing cells / total cells. Avg Missing = average missing% across columns. "
-    "Confidence is a heuristic score combining coverage, missingness, dataset size, and numeric signal."
-)
-
 # -----------------------------
-# Quick Exploration (prioritize key metric)
+# Quick Exploration (more colorful charts)
 # -----------------------------
 st.subheader("Quick exploration")
 
 if not numeric_cols:
     st.warning("No numeric columns found — quick exploration needs numeric measures.")
 else:
-    # default to revenue-like
     default_numeric = revenue_col if revenue_col in numeric_cols else numeric_cols[0]
     default_cat = dims.get("store") or dims.get("channel") or dims.get("category") or (cat_cols[0] if cat_cols else None)
 
@@ -1096,9 +1021,13 @@ else:
     with left:
         num_col = st.selectbox("Numeric column", numeric_cols, index=numeric_cols.index(default_numeric))
         s = pd.to_numeric(df[num_col], errors="coerce")
-        fig_hist = px.histogram(s.dropna(), nbins=12, title=f"Distribution of {num_col}")
-        fig_hist.update_layout(margin=dict(l=10, r=10, t=60, b=10))
-        # commentary
+
+        fig_hist = px.histogram(
+            s.dropna(),
+            nbins=18,
+            title=f"Distribution of {num_col}",
+        )
+        fig_hist = apply_theme(fig_hist)
         med = float(s.median(skipna=True)) if s.notna().sum() else np.nan
         p90 = float(s.quantile(0.9)) if s.notna().sum() else np.nan
         st.caption(f"Commentary: median is **{human_num(med)}**; 90th percentile is **{human_num(p90)}** (skew check).")
@@ -1110,49 +1039,62 @@ else:
         else:
             cat_col = st.selectbox("Categorical column", [c for c in cat_cols], index=[c for c in cat_cols].index(default_cat))
             g = df.groupby(cat_col)[num_col].count().sort_values(ascending=False).head(12)
-            fig_bar = px.bar(g.reset_index(), x=cat_col, y=num_col, title=f"Record count by {cat_col}")
+
+            fig_bar = px.bar(
+                g.reset_index().rename(columns={num_col: "count"}),
+                x=cat_col,
+                y="count",
+                color=cat_col,          # MULTI-COLOR
+                title=f"Record count by {cat_col}",
+            )
             fig_bar.update_traces(text=g.values, textposition="outside")
-            fig_bar.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+            fig_bar.update_layout(showlegend=False)
+            fig_bar = apply_theme(fig_bar)
+
             st.caption(f"Commentary: top category by volume is **{g.index[0]}** with **{int(g.iloc[0])} records**.")
             st.plotly_chart(fig_bar, use_container_width=True)
 
 # -----------------------------
-# Key business cuts (auto) — add $ labels + short commentary + top label
+# Key business cuts (multi-color bars)
 # -----------------------------
 st.subheader("Key business cuts")
-
 charts_for_export: List[Tuple[str, Optional[bytes]]] = []
 
 if revenue_col is None:
     st.warning("No revenue/sales-like numeric metric detected — key business cuts will be limited.")
 else:
-    # pick up to 2 best dims for revenue
     candidates = [dims.get("store"), dims.get("channel"), dims.get("category"), dims.get("country"), dims.get("payment"), dims.get("team")]
     candidates = [c for c in candidates if c is not None and c in df.columns]
-    shown = 0
+
     cols = st.columns(2)
-    for d in candidates[:2]:
-        # plot
+    for i, d in enumerate(candidates[:2]):
         g = df.groupby(d)[revenue_col].sum(numeric_only=True).sort_values(ascending=False).head(12)
         top_name = str(g.index[0])
         top_val = float(g.iloc[0])
-        fig = px.bar(g.reset_index(), x=d, y=revenue_col, title=f"{revenue_col} by {d}")
+
+        fig = px.bar(
+            g.reset_index(),
+            x=d,
+            y=revenue_col,
+            color=d,                 # MULTI-COLOR
+            title=f"{revenue_col} by {d}",
+        )
         fig.update_traces(
             text=[human_money(v) for v in g.values],
             textposition="inside",
             hovertemplate=f"{d}: %{{x}}<br>{revenue_col}: %{{y:.2f}}<extra></extra>",
         )
-        fig.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+        fig.update_layout(showlegend=False)
+        fig = apply_theme(fig)
 
-        with cols[shown % 2]:
-            st.caption(f"Commentary: {chart_commentary_bar(top_name, top_val, revenue_col)}")
+        with cols[i % 2]:
+            st.caption(f"Commentary: Top segment is **{top_name}** with **{human_money(top_val)}**.")
             st.plotly_chart(fig, use_container_width=True)
 
         charts_for_export.append((f"{revenue_col} by {d}", fig_to_png_bytes(fig)))
-        shown += 1
 
 # -----------------------------
-# Trends (auto) — total + small multiples (store/channel/category/payment if present)
+# Trends (colorful markers/lines by default palette)
 # -----------------------------
 st.subheader("Trends")
 
@@ -1171,30 +1113,25 @@ else:
         title=f"{revenue_col} trend (total)",
     )
     fig_total = add_max_point_annotation(fig_total, ts_total.index, ts_total.values, label_prefix="Peak")
-    fig_total.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+    fig_total = apply_theme(fig_total)
     st.caption("Commentary: " + chart_commentary_trend(revenue_col, ts_total))
     st.plotly_chart(fig_total, use_container_width=True)
     charts_for_export.append((f"{revenue_col} trend (total)", fig_to_png_bytes(fig_total)))
 
-    # Breakdowns — choose a best available dimension for trend
     breakdown_dims = []
     for k in ["country", "store", "channel", "category", "payment", "team"]:
         d = dims.get(k)
         if d and d in df.columns:
             breakdown_dims.append(d)
-    breakdown_dims = list(dict.fromkeys(breakdown_dims))  # unique preserve order
+    breakdown_dims = list(dict.fromkeys(breakdown_dims))
 
-    if not breakdown_dims:
-        st.info("No segment column detected for breakdown trend (e.g., Store/Channel/Category).")
-    else:
-        # If store exists, do small multiples (user requested)
-        for d in breakdown_dims[:2]:  # keep light
+    if breakdown_dims:
+        for d in breakdown_dims[:2]:
             st.markdown(f"**{revenue_col} trend by {d} (top categories)**")
             top = top_categories(df, d, revenue_col, top_n=5)
 
-            # small multiples: one chart per category
             sm_cols = st.columns(2)
-            for i, cat in enumerate(top):
+            for j, cat in enumerate(top):
                 sub = df[df[d].astype(str) == cat][[date_col, revenue_col]].copy()
                 sub[revenue_col] = pd.to_numeric(sub[revenue_col], errors="coerce")
                 s_ts = sub.groupby(date_col)[revenue_col].sum().sort_index()
@@ -1209,18 +1146,18 @@ else:
                     title=f"{cat}",
                 )
                 fig_sm = add_max_point_annotation(fig_sm, s_ts.index, s_ts.values, label_prefix="Peak")
-                fig_sm.update_layout(height=320, margin=dict(l=10, r=10, t=50, b=10))
+                fig_sm = apply_theme(fig_sm, height=320)
 
-                # short commentary (1–2 sentences)
-                comm = chart_commentary_trend(revenue_col, s_ts)
-                with sm_cols[i % 2]:
-                    st.caption("Commentary: " + comm)
+                with sm_cols[j % 2]:
+                    st.caption("Commentary: " + chart_commentary_trend(revenue_col, s_ts))
                     st.plotly_chart(fig_sm, use_container_width=True)
 
                 charts_for_export.append((f"{revenue_col} trend — {d}: {cat}", fig_to_png_bytes(fig_sm)))
+    else:
+        st.info("No segment column detected for breakdown trend (e.g., Store/Channel/Category).")
 
 # -----------------------------
-# Correlation (R² default) — wider layout + tooltip shows R and R²
+# Correlation (R²) — colorful heatmap
 # -----------------------------
 st.subheader("Correlation")
 
@@ -1228,13 +1165,10 @@ if len(numeric_cols) < 2:
     st.info("Need at least 2 numeric columns to compute correlations.")
 else:
     corr, r2 = pearson_r_and_r2(df, numeric_cols)
-
-    # We show R² heatmap by default
     z = r2.values
     x = list(r2.columns)
     y = list(r2.index)
 
-    # tooltip: include both R and R²
     hover = []
     for yi in y:
         row = []
@@ -1253,20 +1187,17 @@ else:
             texttemplate="%{text}",
             hoverinfo="text",
             hovertext=hover,
+            colorscale="Turbo",   # colorful heatmap
             colorbar=dict(title="R²"),
         )
     )
-    fig_corr.update_layout(
-        title="R² relationships (Pearson)",
-        height=520,
-        margin=dict(l=10, r=10, t=60, b=10),
-    )
-    # make it wide on page
-    st.caption("Commentary: R² shows strength (0–1). Higher R² means stronger relationship; direction is not shown (see tooltip for R).")
+    fig_corr.update_layout(title="R² relationships (Pearson)")
+    fig_corr = apply_theme(fig_corr, height=520)
+
+    st.caption("Commentary: R² shows strength (0–1). Higher R² means stronger relationship; direction is in tooltip (R).")
     st.plotly_chart(fig_corr, use_container_width=True)
     charts_for_export.append(("R² relationships (Pearson)", fig_to_png_bytes(fig_corr)))
 
-    # Key R² pairs
     r2u = r2.where(~np.eye(r2.shape[0], dtype=bool))
     pairs = r2u.stack().sort_values(ascending=False).head(6)
     st.markdown("**Key R² relationships (top pairs)**")
@@ -1275,10 +1206,9 @@ else:
         st.write(f"• **{a} ↔ {b}**: R²={v:.2f} ({r2_strength_label(v)}), R={r:.2f} ({r_strength_label(r)})")
 
 # -----------------------------
-# Suggested Next Analyses (auto) + Run all 3 analyses
+# Suggested Next Analyses (AI optional)
 # -----------------------------
 st.subheader("Suggested Next Analyses")
-
 suggestions = ai_generate_suggestions(facts)
 
 for i, s in enumerate(suggestions, 1):
@@ -1290,8 +1220,11 @@ for i, s in enumerate(suggestions, 1):
     st.write(f"• **Risks:** {s['risks']}")
     st.write("")
 
-# Run analyses
+# -----------------------------
+# Deeper dives
+# -----------------------------
 st.subheader("Deeper dives (one click)")
+
 analyses_outputs: List[AnalysisOutput] = st.session_state.get("analyses_outputs", [])
 ran = st.session_state.get("ran_analyses", False)
 
@@ -1299,7 +1232,7 @@ colA, colB = st.columns([1, 2])
 with colA:
     run_btn = st.button("Run all 3 analyses", type="primary")
 with colB:
-    st.caption("Beta: one click generates charts + brief commentary. In the future, this can be a paid tier; for now you can keep it free.")
+    st.caption("One click generates charts + short commentary. (Designed to stay lightweight and runnable.)")
 
 if run_btn:
     analyses_outputs = []
@@ -1311,6 +1244,7 @@ if run_btn:
         analyses_outputs.append(AnalysisOutput("1) Revenue driver & segment performance", None, ["No revenue-like metric detected."]))
         analyses_outputs.append(AnalysisOutput("2) Variability by best cut", None, ["No revenue-like metric detected."]))
         analyses_outputs.append(AnalysisOutput("3) Discount effectiveness (simple)", None, ["No revenue-like metric detected."]))
+
     st.session_state["analyses_outputs"] = analyses_outputs
     st.session_state["ran_analyses"] = True
     ran = True
@@ -1325,47 +1259,46 @@ if ran and analyses_outputs:
         st.divider()
 
 # -----------------------------
-# AI Insights Report (single title)
+# AI Insights Report
 # -----------------------------
 st.subheader("AI Insights Report")
-
 report_text = ai_generate_report(exec_bullets[:10], insights_bullets[:10], suggestions)
 st.text(report_text)
 
 # -----------------------------
-# Export
+# Export (optional)
 # -----------------------------
 st.subheader("Export")
-
-note = "Note: This app is for demo/testing. Please avoid uploading confidential or regulated data."
-st.caption(note)
+st.caption("Note: This app is for demo/testing. Please avoid uploading confidential or regulated data.")
 
 include_analyses = bool(st.session_state.get("ran_analyses", False))
+analyses_outputs = st.session_state.get("analyses_outputs", [])
+
+export_ok = REPORTLAB_OK or PPTX_OK
+if not export_ok:
+    st.warning("Exports are disabled because reportlab/python-pptx are not installed. The app still runs fine without them.")
 
 cE1, cE2, cE3, cE4 = st.columns(4)
 
-# Executive-only pack
 with cE1:
-    if st.button("Build Executive Brief (PDF)"):
+    if st.button("Build Executive Brief (PDF)", disabled=not REPORTLAB_OK):
         pdf_bytes = build_pdf(exec_bullets[:10], insights_bullets[:10], suggestions, charts_for_export, analyses_outputs, include_analyses=False)
         st.download_button("Download Executive Brief (PDF)", data=pdf_bytes, file_name="ecai_executive_brief.pdf", mime="application/pdf")
 
 with cE2:
-    if st.button("Build Slides (PPTX)"):
+    if st.button("Build Slides (PPTX)", disabled=not PPTX_OK):
         ppt_bytes = build_pptx(exec_bullets[:10], insights_bullets[:10], suggestions, charts_for_export, analyses_outputs, include_analyses=False)
         st.download_button("Download Slides (PPTX)", data=ppt_bytes, file_name="ecai_insight_slides.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
 
-# Full pack (includes deeper dives + charts)
 with cE3:
-    if st.button("Build Full Pack (PDF)", disabled=not include_analyses):
+    if st.button("Build Full Pack (PDF)", disabled=(not REPORTLAB_OK or not include_analyses)):
         pdf_bytes = build_pdf(exec_bullets[:10], insights_bullets[:10], suggestions, charts_for_export, analyses_outputs, include_analyses=True)
         st.download_button("Download Full Pack (PDF)", data=pdf_bytes, file_name="ecai_full_pack.pdf", mime="application/pdf")
 
 with cE4:
-    if st.button("Build Full Pack (PPTX)", disabled=not include_analyses):
+    if st.button("Build Full Pack (PPTX)", disabled=(not PPTX_OK or not include_analyses)):
         ppt_bytes = build_pptx(exec_bullets[:10], insights_bullets[:10], suggestions, charts_for_export, analyses_outputs, include_analyses=True)
         st.download_button("Download Full Pack (PPTX)", data=ppt_bytes, file_name="ecai_full_pack.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-
 
 # -----------------------------
 # Dev notes
@@ -1373,22 +1306,22 @@ with cE4:
 with st.expander("Dev notes / FAQ"):
     st.markdown(
         """
-**Q: Do I need to modify GitHub code when setting Streamlit Secrets?**  
-No. Put your key in Streamlit Secrets (`OPENAI_API_KEY`) and the app reads it at runtime. Do not commit keys.
+**Colorful charts**
+- We set a custom Plotly colorway and force multi-color bars using `color=<category>` then hide the legend.
 
-**Q: Why not use external knowledge pools (S&P 500, papers) inside insights?**  
-This MVP focuses on *your dataset only*. External data requires explicit integration + licensing + user consent.  
-(We can add this later as a separate feature: “Bring your own benchmark dataset.”)
+**If your app didn't run before**
+- This version makes exports + OpenAI optional so the app still loads even if those packages/keys are missing.
 
-**Q: Why R² instead of R?**  
-R² is easier for business users (strength). Tooltip still shows R to preserve direction context.
+**Optional dependencies**
+- PDF export: `reportlab`
+- PPT export: `python-pptx`
+- Export charts as images inside PDF/PPT: `kaleido==0.2.1`
+- AI suggestions/report: `openai` + `OPENAI_API_KEY` in Streamlit secrets or env var
 
-**Q: Charts are monotone colors?**  
-Plotly uses a default palette; the “Trend small multiples” naturally become more readable.  
-If you want a Tableau-like theme, we can apply a consistent colorway next.
-
-**Dependencies for chart images in exports**  
-For PPT/PDF to include charts, add **kaleido** in requirements:
-`kaleido==0.2.1`
+**Recommended requirements (minimum to run UI)**
+- streamlit
+- pandas
+- numpy
+- plotly
 """
     )
