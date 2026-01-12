@@ -1,18 +1,12 @@
-streamlit>=1.36
-pandas>=2.2
-numpy>=2.0
-plotly>=5.22
-scipy>=1.11
-openpyxl>=3.1
-python-dotenv>=1.0
-requests>=2.31
-
-# OpenAI (use the new SDK)
-openai>=1.40
-
-# Exports
-reportlab>=4.2
-python-pptx>=1.0.2
-
-# Plotly static image export (for PDF/PPTX chart embedding)
-kaleido>=0.2.1
+streamlit
+pandas
+numpy
+plotly
+scipy
+openpyxl
+python-dotenv
+requests
+openai
+reportlab
+python-pptx
+kaleido
