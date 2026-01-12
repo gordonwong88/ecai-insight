@@ -3,10 +3,11 @@ pandas
 numpy
 plotly
 scipy
+statsmodels
 openpyxl
+reportlab
 python-dotenv
 requests
 openai
-reportlab
 python-pptx
 kaleido
