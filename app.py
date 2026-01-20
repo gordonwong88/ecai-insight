@@ -1306,8 +1306,7 @@ else:
     st.caption("Commentary: " + chart_commentary_trend(revenue_col, ts_total))
     st.plotly_chart(fig_total2, use_container_width=True, key="trend_total_main")
     charts_for_export.append((f"{revenue_col} trend (total)", fig_to_png_bytes(fig_total2)))
-
-    # Trend by Store: multi-line, one color per store (top 5)
+    # Trend by Store: 5 separate mini charts (top 5 stores) — one store per chart
     store_dim = dims.get("store")
     if store_dim and store_dim in df.columns:
         tmp2 = df[[date_col, store_dim, revenue_col]].copy()
@@ -1320,29 +1319,39 @@ else:
             .head(5)
             .index.tolist()
         )
-        tmp2 = tmp2[tmp2[store_dim].isin(top_stores)]
-        ts_store = tmp2.groupby([date_col, store_dim])[revenue_col].sum().reset_index().sort_values(date_col)
         store_colors = stable_color_map(top_stores)
 
-        fig_store = px.line(
-            ts_store,
-            x=date_col,
-            y=revenue_col,
-            color=store_dim,
-            color_discrete_map=store_colors,
-            markers=False,
-            title=f"{revenue_col} trend by Store (Top 5)",
-        )
-        fig_store = apply_chart_style(fig_store, height=440, showlegend=True)
-        fig_store.update_layout(
-            legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0, title=None),
-            margin=dict(l=10, r=10, t=60, b=40),
-        )
-        fig_store.update_xaxes(automargin=True)
-        fig_store.update_yaxes(automargin=True)
+        st.markdown(f"**{revenue_col} trend by Store (Top 5) — mini charts**")
+        grid = st.columns(2)
+        chart_i = 0
 
-        st.plotly_chart(fig_store, use_container_width=True, key="trend_by_store_multiline")
-        charts_for_export.append((f"{revenue_col} trend by Store (Top 5)", fig_to_png_bytes(fig_store)))
+        for sname in top_stores:
+            sub = tmp2[tmp2[store_dim] == sname].copy()
+            s_ts = sub.groupby(date_col)[revenue_col].sum().sort_index()
+            if s_ts.empty:
+                continue
+
+            fig_one = px.line(
+                s_ts.reset_index(),
+                x=date_col,
+                y=revenue_col,
+                markers=True,
+                title=str(sname),
+            )
+            # enforce one color for the whole store chart
+            col = store_colors.get(str(sname))
+            fig_one.update_traces(line=dict(color=col), marker=dict(color=col))
+            fig_one = add_max_point_annotation(fig_one, s_ts.index, s_ts.values, label_prefix="Peak")
+            fig_one = apply_chart_style(fig_one, height=340, showlegend=False)
+            fig_one.update_xaxes(automargin=True)
+            fig_one.update_yaxes(automargin=True)
+
+            with grid[chart_i % 2]:
+                st.caption("Commentary: " + chart_commentary_trend(revenue_col, s_ts))
+                st.plotly_chart(fig_one, use_container_width=True, key=f"trend_store_{chart_i}_{sname}")
+
+            charts_for_export.append((f"{revenue_col} trend — Store: {sname}", fig_to_png_bytes(fig_one)))
+            chart_i += 1
 
 # -----------------------------
 # Correlation (R² default)
