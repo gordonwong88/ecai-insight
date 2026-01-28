@@ -684,7 +684,7 @@ def run_analysis_1_driver(df: pd.DataFrame, revenue_col: str, dim_a: Optional[st
 
     dims = [d for d in [dim_a, dim_b] if d is not None]
     if not dims:
-        bullets.append("No segment columns detected; add a categorical field (Store/Channel/Category) for driver analysis.")
+        bullets.append("No segment columns detected; add a categorical field (e.g., Store/Channel/Category) for driver analysis.")
         return AnalysisOutput(title=title, figure=None, bullets=bullets)
 
     dim = dims[0]
@@ -696,21 +696,23 @@ def run_analysis_1_driver(df: pd.DataFrame, revenue_col: str, dim_a: Optional[st
     bullets.append(f"Top segment: **{top_name}** contributes **{human_money(top_val)}** total {revenue_col}.")
     if len(g) >= 2:
         bullets.append(f"Second segment is **{g.index[1]}** at **{human_money(float(g.iloc[1]))}**.")
-    bullets.append("Use this view to confirm whether concentration risk exists (one segment dominates the outcome).")
+    bullets.append("Use this to confirm what really drives revenue (and whether performance is concentrated).")
 
-    color_map = stable_color_map([str(x) for x in g.index.tolist()])
+    df_plot = g.reset_index()
+    df_plot["Label"] = df_plot[revenue_col].apply(lambda v: human_money(float(v)))
+    color_map = stable_color_map([str(x) for x in df_plot[dim].tolist()])
+
     fig = px.bar(
-        g.reset_index(),
+        df_plot,
         x=dim,
         y=revenue_col,
         color=dim,
+        text="Label",
         color_discrete_map=color_map,
         title=f"{revenue_col} by {dim}",
     )
-    fig.update_traces(
-        text=[human_money(v) for v in g.values],
-        hovertemplate=f"{dim}: %{{x}}<br>{revenue_col}: %{{y:.2f}}<extra></extra>",
-    )
+    fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_traces(hovertemplate=f"{dim}: %{{x}}<br>{revenue_col}: %{{y:.2f}}<extra></extra>")
     fig = apply_chart_style(fig, height=420, showlegend=False)
     fig = fix_label_overlap_for_bar(fig)
 
@@ -725,27 +727,30 @@ def run_analysis_2_variability(df: pd.DataFrame, revenue_col: str, dim: Optional
         return AnalysisOutput(title=title, figure=None, bullets=bullets)
 
     g = df.groupby(dim)[revenue_col].agg(["mean", "std", "count"])
-    g["CV (Coefficient of Variation)"] = g["std"] / g["mean"].replace(0, np.nan)
-    g = g.sort_values("CV (Coefficient of Variation)", ascending=False).head(12)
+    g["CV"] = g["std"] / g["mean"].replace(0, np.nan)
+    g = g.sort_values("CV", ascending=False).head(12)
 
     top = str(g.index[0])
-    top_cv = float(g.iloc[0]["CV (Coefficient of Variation)"])
+    top_cv = float(g.iloc[0]["CV"])
 
-    bullets.append(f"Highest variability segment is **{top}** with **CV={top_cv:.2f}** (more volatile revenue).")
-    bullets.append("CV compares volatility relative to average size; higher CV means less predictable performance.")
-    bullets.append("Use CV to prioritize segments that need deeper diagnostics (mix, pricing, promotions, stockouts).")
+    bullets.append(f"Most volatile segment: **{top}** (CV={top_cv:.2f}).")
+    bullets.append("Higher CV means revenue is less predictable relative to its average size.")
+    bullets.append("Use this to find segments that need deeper diagnosis (mix, pricing, promotions, stockouts).")
 
-    color_map = stable_color_map([str(x) for x in g.index.tolist()])
-    g2 = g.reset_index()
+    df_plot = g.reset_index().rename(columns={"CV": "CV (Coefficient of Variation)"})
+    df_plot["Label"] = df_plot["CV (Coefficient of Variation)"].apply(lambda v: f"{float(v):.2f}" if pd.notna(v) else "-")
+
+    color_map = stable_color_map([str(x) for x in df_plot[dim].tolist()])
     fig = px.bar(
-        g2,
+        df_plot,
         x=dim,
         y="CV (Coefficient of Variation)",
         color=dim,
+        text="Label",
         color_discrete_map=color_map,
         title=f"Revenue volatility (CV) by {dim}",
     )
-    fig.update_traces(text=np.round(g2["CV (Coefficient of Variation)"].values, 2))
+    fig.update_traces(textposition="outside", cliponaxis=False)
     fig = apply_chart_style(fig, height=420, showlegend=False)
     fig = fix_label_overlap_for_bar(fig)
 
@@ -768,45 +773,57 @@ def run_analysis_3_discount_simple(df: pd.DataFrame, revenue_col: str, discount_
     if disc.max(skipna=True) > 2:  # likely 0-100
         disc = disc / 100.0
 
-    bins = [-np.inf, 0.02, 0.05, 0.10, 0.15, 0.20, np.inf]
     labels = ["0–2%", "2–5%", "5–10%", "10–15%", "15–20%", "20%+"]
+    bins = [-np.inf, 0.02, 0.05, 0.10, 0.15, 0.20, np.inf]
+    band = pd.cut(disc, bins=bins, labels=labels)
 
-    tmp = df.copy()
-    tmp["Discount_Band"] = pd.cut(disc, bins=bins, labels=labels)
+    tmp = df[[revenue_col]].copy()
+    tmp[revenue_col] = pd.to_numeric(tmp[revenue_col], errors="coerce")
+    tmp["Discount_Band"] = band.astype(str)
+
     g = tmp.groupby("Discount_Band")[revenue_col].agg(["mean", "count"]).reset_index()
-    g["mean"] = g["mean"].astype(float)
+    g["Discount_Band"] = pd.Categorical(g["Discount_Band"], categories=labels, ordered=True)
+    g = g.sort_values("Discount_Band")
+
+    # keep only bands with enough samples
+    g = g[g["count"] >= 5].copy()
+    if g.empty:
+        bullets.append("Not enough samples per discount band to draw a directional view (need >=5 records per band).")
+        return AnalysisOutput(title=title, figure=None, bullets=bullets)
 
     best = g.loc[g["mean"].idxmax()]
     worst = g.loc[g["mean"].idxmin()]
 
-    bullets.append(f"Chart shows **average {revenue_col} per record** by discount band (directional).")
-    bullets.append(f"Best band is **{best['Discount_Band']}** with avg **{human_money(best['mean'])}** (n={int(best['count'])}).")
-    bullets.append(f"Weakest band is **{worst['Discount_Band']}** with avg **{human_money(worst['mean'])}** (n={int(worst['count'])}).")
-    bullets.append("Confirm by controlling for Store/Channel/Category to avoid mix effects.")
+    bullets.append(f"Shows **average {revenue_col} per record** by discount band (directional).")
+    bullets.append(f"Best band: **{best['Discount_Band']}** (avg {human_money(float(best['mean']))}, n={int(best['count'])}).")
+    bullets.append(f"Weakest band: **{worst['Discount_Band']}** (avg {human_money(float(worst['mean']))}, n={int(worst['count'])}).")
+    bullets.append("If this matters, confirm by controlling for Store/Channel/Category (to avoid mix effects).")
 
-    band_colors = stable_color_map(labels)
+    df_plot = g.rename(columns={"mean": "AvgRevenue"})
+    df_plot["Label"] = df_plot["AvgRevenue"].apply(lambda v: human_money(float(v)))
+
+    band_colors = stable_color_map([str(x) for x in df_plot["Discount_Band"].tolist()])
     fig = px.bar(
-        g,
+        df_plot,
         x="Discount_Band",
-        y="mean",
+        y="AvgRevenue",
         color="Discount_Band",
+        text="Label",
         color_discrete_map=band_colors,
         title=f"Average {revenue_col} per record by Discount Band",
     )
     fig.update_traces(
-        text=[human_money(v) for v in g["mean"].values],
-        customdata=g["count"].values,
+        textposition="outside",
+        cliponaxis=False,
+        customdata=df_plot["count"].values,
         hovertemplate="Band: %{x}<br>Avg: %{y:.2f}<br>n=%{customdata}<extra></extra>",
     )
     fig = apply_chart_style(fig, height=420, showlegend=False)
     fig = fix_label_overlap_for_bar(fig)
-    fig.update_layout(yaxis_title=f"Avg {revenue_col} per record", xaxis_title="Discount Band")
+
     return AnalysisOutput(title=title, figure=fig, bullets=bullets)
 
 
-# -----------------------------
-# Exports
-# -----------------------------
 def build_pdf(exec_bullets: List[str], insights_bullets: List[str], suggestions: List[Dict],
               charts: List[Tuple[str, Optional[bytes]]], analyses: List[AnalysisOutput], include_analyses: bool) -> bytes:
     buff = io.BytesIO()
@@ -1221,6 +1238,8 @@ exec_bullets.append("Next: review key business cuts + trends, then use the sugge
 for b in exec_bullets:
     st.write("• " + b)
 
+st.divider()
+
 st.subheader("Key Insights")
 
 insights_bullets: List[str] = []
@@ -1298,8 +1317,12 @@ with st.expander("How correlation (R) and R² are interpreted (in this app)"):
 # -----------------------------
 # Preview + profile
 # -----------------------------
+st.divider()
+
 with st.expander("Preview data", expanded=True):
     st.dataframe(df.head(50), use_container_width=True)
+
+st.divider()
 
 st.subheader("Data profile")
 profile = calc_profile(df)
@@ -1325,6 +1348,8 @@ st.caption(
 # -----------------------------
 # Quick Exploration
 # -----------------------------
+st.divider()
+
 st.subheader("Trends")
 
 if date_col is None or revenue_col is None:
@@ -1360,25 +1385,23 @@ else:
         ts_store = tmp2.groupby([date_col, store_dim])[revenue_col].sum().reset_index().sort_values(date_col)
         store_colors = stable_color_map(top_stores)
 
-        fig_store = px.line(
-            ts_store,
-            x=date_col,
-            y=revenue_col,
-            color=store_dim,
-            color_discrete_map=store_colors,
-            markers=False,
-            title=f"{revenue_col} trend by Store (Top 5)",
-        )
-        fig_store = apply_chart_style(fig_store, height=440, showlegend=True)
-        fig_store.update_layout(
-            legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0, title=None),
-            margin=dict(l=10, r=10, t=60, b=110),
-        )
-        fig_store.update_xaxes(automargin=True)
-        fig_store.update_yaxes(automargin=True)
-
-        st.plotly_chart(fig_store, use_container_width=True, key="trend_by_store_multiline")
-        charts_for_export.append((f"{revenue_col} trend by Store (Top 5)", fig_to_png_bytes(fig_store)))
+        # Small multiples: one store per chart (cleaner than a multi-line chart)
+        st.markdown(f"**{revenue_col} trend by Store (Top 5)**")
+        cols = st.columns(2)
+        for i, store in enumerate(top_stores):
+            dff = ts_store[ts_store[store_dim] == store]
+            fig_s = px.line(
+                dff,
+                x=date_col,
+                y=revenue_col,
+                markers=False,
+                title=str(store),
+            )
+            fig_s = apply_chart_style(fig_s, height=260, showlegend=False)
+            fig_s.update_layout(margin=dict(l=10, r=10, t=50, b=10))
+            with cols[i % 2]:
+                st.plotly_chart(fig_s, use_container_width=True, key=f"trend_store_{i}_{store}")
+            charts_for_export.append((f"{revenue_col} trend — {store}", fig_to_png_bytes(fig_s)))
 
 # -----------------------------
 # Correlation (R² default)
@@ -1527,17 +1550,44 @@ with st.expander("More charts (optional) — quick exploration", expanded=False)
     # Key business cuts (auto)
     # -----------------------------
 
+st.divider()
+
 st.subheader("Suggested Next Analyses")
+
+# Keep AI suggestions for later (also used in the AI Insights report),
+# but present a simpler, owner-first view here.
 suggestions = ai_generate_suggestions(facts)
 
-for i, s in enumerate(suggestions, 1):
-    st.markdown(f"**{i}. {s['title']}**")
-    st.write(f"• **Business Context:** {s['business_context']}")
-    st.write(f"• **What to Do:** {s['what_to_do']}")
-    st.write(f"• **Expected Insight:** {s['expected_insight']}")
-    st.write(f"• **Outputs:** {s['outputs']}")
-    st.write(f"• **Risks:** {s['risks']}")
-    st.write("")
+st.markdown("Pick one question below — each generates a chart + a short explanation (no jargon).")
+
+cS1, cS2, cS3 = st.columns(3)
+with cS1:
+    st.markdown("#### 1) What drives my revenue?")
+    st.write("• Compare revenue across **Store / Channel / Category**.")
+    st.write("• See the **Top contributors** (focus areas).")
+with cS2:
+    st.markdown("#### 2) Where is performance unstable?")
+    st.write("• Find segments with **high volatility** (less predictable).")
+    st.write("• Prioritize what needs diagnosis.")
+with cS3:
+    st.markdown("#### 3) Are discounts helping or hurting?")
+    st.write("• Compare **average revenue per order** by discount band.")
+    st.write("• Identify a **best band** to validate further.")
+
+st.markdown(
+    "<div class='ec-flow'>"
+    "Data → Charts → Decision"
+    "</div>",
+    unsafe_allow_html=True,
+)
+
+with st.expander("AI suggestions (advanced)"):
+    for i, s in enumerate(suggestions, 1):
+        st.markdown(f"**{i}. {s['title']}**")
+        st.write(f"• {s['expected_insight']}")
+        st.write(f"• Output: {s['outputs']}")
+        st.write(f"• Notes: {s['risks']}")
+        st.write("")
 
 st.subheader("Deeper dives (one click)")
 analyses_outputs: List[AnalysisOutput] = st.session_state.get("analyses_outputs", [])
