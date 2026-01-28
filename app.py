@@ -11,6 +11,7 @@
 import io
 import math
 import re
+import html
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -49,11 +50,44 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+      :root {
+        --ec-font-base: 18px;
+        --ec-font-small: 16px;
+        --ec-font-h1: 38px;
+        --ec-font-h2: 28px;
+        --ec-font-h3: 22px;
+      }
+
+      html, body, [data-testid="stAppViewContainer"] {
+        font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+        font-size: var(--ec-font-base);
+        line-height: 1.5;
+      }
+
       .block-container { padding-top: 1.2rem; padding-bottom: 2.5rem; }
-      h1, h2, h3 { letter-spacing: -0.3px; }
+
+      /* Markdown text */
+      [data-testid="stMarkdownContainer"] p,
+      [data-testid="stMarkdownContainer"] li {
+        font-size: var(--ec-font-base);
+        line-height: 1.55;
+      }
+
+      /* Headings */
+      h1 { font-size: var(--ec-font-h1) !important; letter-spacing: -0.3px; }
+      h2 { font-size: var(--ec-font-h2) !important; letter-spacing: -0.2px; }
+      h3 { font-size: var(--ec-font-h3) !important; letter-spacing: -0.1px; }
+
+      /* Captions */
+      .stCaption, [data-testid="stCaptionContainer"] {
+        font-size: var(--ec-font-small) !important;
+        opacity: 0.9;
+      }
+
       .stDownloadButton button { border-radius: 10px; }
       .stAlert { border-radius: 12px; }
-      /* Make KPI cards look more "dashboard-like" */
+
+      /* KPI cards */
       div[data-testid="metric-container"] {
         background: #ffffff;
         border: 1px solid rgba(49,51,63,0.08);
@@ -61,10 +95,70 @@ st.markdown(
         border-radius: 14px;
         box-shadow: 0 1px 6px rgba(0,0,0,0.04);
       }
+
+      /* Executive summary card */
+      .ec-summary {
+        background: #ffffff;
+        border: 1px solid rgba(49,51,63,0.10);
+        border-radius: 16px;
+        padding: 14px 16px;
+        box-shadow: 0 1px 10px rgba(0,0,0,0.05);
+        margin: 10px 0 14px 0;
+      }
+      .ec-summary-title {
+        font-size: 22px;
+        font-weight: 700;
+        margin: 0 0 6px 0;
+      }
+      .ec-summary-body {
+        font-size: calc(var(--ec-font-base) + 2px);
+        margin: 0;
+      }
+      .ec-pill {
+        display: inline-block;
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(49,51,63,0.18);
+        margin-right: 8px;
+        margin-bottom: 8px;
+      }
+    
+      /* Headings */
+      h1, [data-testid="stMarkdownContainer"] h1 { font-size: var(--ec-font-h1) !important; }
+      h2, [data-testid="stMarkdownContainer"] h2 { font-size: var(--ec-font-h2) !important; }
+      h3, [data-testid="stMarkdownContainer"] h3 { font-size: var(--ec-font-h3) !important; }
+
+      /* Subtitle / caption under title */
+      [data-testid="stCaptionContainer"] p {
+        font-size: 16px !important;
+        color: rgba(49,51,63,0.70) !important;
+        margin-top: -6px;
+      }
+
+      /* AI report card */
+      .ec-report {
+        background: #ffffff;
+        border: 1px solid rgba(49,51,63,0.10);
+        border-radius: 16px;
+        padding: 14px 16px;
+        box-shadow: 0 1px 10px rgba(0,0,0,0.05);
+        font-size: calc(var(--ec-font-base) + 2px);
+        line-height: 1.55;
+        white-space: pre-wrap;
+      }
+
+      /* Make expanders + info text more readable */
+      [data-testid="stExpander"] p,
+      [data-testid="stExpander"] li {
+        font-size: calc(var(--ec-font-base) + 1px) !important;
+      }
+
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 # -----------------------------
 # Global Plotly defaults (Tableau-like colorful tones)
@@ -876,6 +970,30 @@ def build_pptx(exec_bullets: List[str], insights_bullets: List[str], suggestions
 st.title("EC-AI Insight (MVP)")
 st.caption("Turning Data Into Intelligence — upload CSV or Excel to get instant profiling, Tableau-like charts, R² relationships, and insights.")
 
+
+# -----------------------------
+# Product Executive Summary (Owner-first)
+# -----------------------------
+st.markdown(
+    """
+    <div class="ec-summary">
+      <div class="ec-summary-title">Executive Summary</div>
+      <div class="ec-summary-body">
+        EC-AI Insight turns <b>retail sales / transaction data</b> into clear, decision-ready insights in minutes.
+        Upload your dataset and instantly see (1) the revenue trend, (2) what truly drives sales (top stores/products/channels),
+        and (3) where revenue is concentrated — so you can act without building dashboards.
+      </div>
+      <div style="margin-top:10px;">
+        <span class="ec-pill">Scope: Sales / Transactions only</span>
+        <span class="ec-pill">Audience: Owners & Sales Leaders</span>
+        <span class="ec-pill">Goal: Answers → Decisions</span>
+      </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.info("MVP scope for testing: **Retail sales / transaction data only** (e.g., Date, Store, Product/Category, Channel, Revenue).", icon="✅")
+
 uploaded = st.file_uploader("Upload a dataset", type=["csv", "xlsx", "xls"])
 if uploaded is None:
     st.info("Upload a CSV/XLSX to begin.")
@@ -913,6 +1031,16 @@ cat_cols = [c for c in df.columns if is_categorical_series(df[c]) and c != date_
 
 revenue_col = pick_revenue_like(df) or (numeric_cols[0] if numeric_cols else None)
 cost_col = pick_cost_like(df)
+
+# -----------------------------
+# Sales-only guardrails (MVP testing scope)
+# -----------------------------
+if revenue_col is None:
+    st.error("This MVP is for **sales/transaction** datasets. Please include a Revenue/Sales column (e.g., 'Revenue', 'Sales', 'Amount').")
+    st.stop()
+if date_col is None:
+    st.error("This MVP is for **sales/transaction** datasets with a Date column (e.g., 'Date', 'Order Date', 'Transaction Date').")
+    st.stop()
 
 dims = {
     "country": pick_dim_like(df, ["country", "region", "market", "geo"]),
@@ -1013,10 +1141,10 @@ if revenue_col:
                 color_discrete_map=colors,
                 title="Revenue Mix (Channel)",
             )
-            fig_donut = apply_chart_style(fig_donut, height=320, showlegend=True)
+            fig_donut = apply_chart_style(fig_donut, height=380, showlegend=True)
             fig_donut.update_layout(
-                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0, title=None),
-                margin=dict(l=10, r=10, t=60, b=40),
+                legend=dict(orientation="h", yanchor="top", y=-0.28, xanchor="left", x=0, title=None),
+                margin=dict(l=10, r=10, t=60, b=110),
             )
             st.plotly_chart(fig_donut, use_container_width=True, key="exec_donut_channel")
             charts_for_export.append(("Revenue Mix (Channel)", fig_to_png_bytes(fig_donut)))
@@ -1035,10 +1163,10 @@ if revenue_col:
                 color_discrete_map=colors,
                 title="Revenue Mix (Category)",
             )
-            fig_donut2 = apply_chart_style(fig_donut2, height=320, showlegend=True)
+            fig_donut2 = apply_chart_style(fig_donut2, height=380, showlegend=True)
             fig_donut2.update_layout(
-                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0, title=None),
-                margin=dict(l=10, r=10, t=60, b=40),
+                legend=dict(orientation="h", yanchor="top", y=-0.28, xanchor="left", x=0, title=None),
+                margin=dict(l=10, r=10, t=60, b=110),
             )
             st.plotly_chart(fig_donut2, use_container_width=True, key="exec_donut_category")
             charts_for_export.append(("Revenue Mix (Category)", fig_to_png_bytes(fig_donut2)))
@@ -1057,10 +1185,10 @@ if revenue_col:
                 color_discrete_map=colors,
                 title=f"Revenue Mix ({dim3})",
             )
-            fig_donut3 = apply_chart_style(fig_donut3, height=320, showlegend=True)
+            fig_donut3 = apply_chart_style(fig_donut3, height=380, showlegend=True)
             fig_donut3.update_layout(
-                legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0, title=None),
-                margin=dict(l=10, r=10, t=60, b=40),
+                legend=dict(orientation="h", yanchor="top", y=-0.28, xanchor="left", x=0, title=None),
+                margin=dict(l=10, r=10, t=60, b=110),
             )
             st.plotly_chart(fig_donut3, use_container_width=True, key="exec_donut_third")
             charts_for_export.append((f"Revenue Mix ({dim3})", fig_to_png_bytes(fig_donut3)))
@@ -1197,59 +1325,65 @@ st.caption(
 # -----------------------------
 # Quick Exploration
 # -----------------------------
-st.subheader("Quick exploration")
+st.subheader("Trends")
 
-if not numeric_cols:
-    st.warning("No numeric columns found — quick exploration needs numeric measures.")
+if date_col is None or revenue_col is None:
+    st.info("Trend charts require a Date-like field and a primary metric (e.g., Revenue/Sales).")
 else:
-    default_numeric = revenue_col if revenue_col in numeric_cols else numeric_cols[0]
-    default_cat = dims.get("store") or dims.get("channel") or dims.get("category") or (cat_cols[0] if cat_cols else None)
+    tmp = df[[date_col, revenue_col]].copy()
+    tmp[revenue_col] = pd.to_numeric(tmp[revenue_col], errors="coerce")
+    ts_total = tmp.groupby(date_col)[revenue_col].sum().sort_index()
 
-    left, right = st.columns(2)
+    fig_total2 = px.line(ts_total.reset_index(), x=date_col, y=revenue_col, markers=True, title=f"{revenue_col} trend (total)")
+    fig_total2 = add_max_point_annotation(fig_total2, ts_total.index, ts_total.values, label_prefix="Peak")
+    fig_total2 = apply_chart_style(fig_total2, height=420, showlegend=False)
+    fig_total2.update_xaxes(automargin=True)
+    fig_total2.update_yaxes(automargin=True)
+    st.caption("Commentary: " + chart_commentary_trend(revenue_col, ts_total))
+    st.plotly_chart(fig_total2, use_container_width=True, key="trend_total_main")
+    charts_for_export.append((f"{revenue_col} trend (total)", fig_to_png_bytes(fig_total2)))
 
-    with left:
-        num_col = st.selectbox("Numeric column", numeric_cols, index=numeric_cols.index(default_numeric))
-        s = pd.to_numeric(df[num_col], errors="coerce")
-        fig_hist = px.histogram(s.dropna(), nbins=12, title=f"Distribution of {num_col}")
-        fig_hist = apply_chart_style(fig_hist, height=360, showlegend=False)  # fixes overlapping legend
-        fig_hist.update_layout(margin=dict(l=10, r=10, t=60, b=10))
-        med = float(s.median(skipna=True)) if s.notna().sum() else np.nan
-        p90 = float(s.quantile(0.9)) if s.notna().sum() else np.nan
-        st.caption(f"Commentary: median is **{human_num(med)}**; 90th percentile is **{human_num(p90)}** (skew check).")
-        st.plotly_chart(fig_hist, use_container_width=True, key="quick_hist")
+    # Trend by Store: multi-line, one color per store (top 5)
+    store_dim = dims.get("store")
+    if store_dim and store_dim in df.columns:
+        tmp2 = df[[date_col, store_dim, revenue_col]].copy()
+        tmp2[revenue_col] = pd.to_numeric(tmp2[revenue_col], errors="coerce")
+        tmp2[store_dim] = tmp2[store_dim].astype(str)
 
-    with right:
-        if default_cat is None:
-            st.info("No categorical columns detected for a segment cut.")
-        else:
-            cat_choices = [c for c in cat_cols]
-            if not cat_choices:
-                st.info("No categorical columns detected for a segment cut.")
-            else:
-                cat_col = st.selectbox(
-                    "Categorical column",
-                    cat_choices,
-                    index=cat_choices.index(default_cat) if default_cat in cat_choices else 0
-                )
-                g = df.groupby(cat_col)[num_col].count().sort_values(ascending=False).head(12)
-                color_map = stable_color_map([str(x) for x in g.index.tolist()])
-                fig_bar = px.bar(
-                    g.reset_index(),
-                    x=cat_col,
-                    y=num_col,
-                    color=cat_col,
-                    color_discrete_map=color_map,
-                    title=f"Record count by {cat_col}",
-                )
-                fig_bar.update_traces(text=g.values)
-                fig_bar = apply_chart_style(fig_bar, height=360, showlegend=False)
-                fig_bar = fix_label_overlap_for_bar(fig_bar)
-                st.caption(f"Commentary: top category by volume is **{g.index[0]}** with **{int(g.iloc[0])} records**.")
-                st.plotly_chart(fig_bar, use_container_width=True, key="quick_count_bar")
+        top_stores = (
+            tmp2.groupby(store_dim)[revenue_col].sum()
+            .sort_values(ascending=False)
+            .head(5)
+            .index.tolist()
+        )
+        tmp2 = tmp2[tmp2[store_dim].isin(top_stores)]
+        ts_store = tmp2.groupby([date_col, store_dim])[revenue_col].sum().reset_index().sort_values(date_col)
+        store_colors = stable_color_map(top_stores)
+
+        fig_store = px.line(
+            ts_store,
+            x=date_col,
+            y=revenue_col,
+            color=store_dim,
+            color_discrete_map=store_colors,
+            markers=False,
+            title=f"{revenue_col} trend by Store (Top 5)",
+        )
+        fig_store = apply_chart_style(fig_store, height=440, showlegend=True)
+        fig_store.update_layout(
+            legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0, title=None),
+            margin=dict(l=10, r=10, t=60, b=110),
+        )
+        fig_store.update_xaxes(automargin=True)
+        fig_store.update_yaxes(automargin=True)
+
+        st.plotly_chart(fig_store, use_container_width=True, key="trend_by_store_multiline")
+        charts_for_export.append((f"{revenue_col} trend by Store (Top 5)", fig_to_png_bytes(fig_store)))
 
 # -----------------------------
-# Key business cuts (auto)
+# Correlation (R² default)
 # -----------------------------
+
 st.subheader("Key business cuts")
 
 if revenue_col is None:
@@ -1289,73 +1423,7 @@ else:
 # -----------------------------
 # Trends (auto)
 # -----------------------------
-st.subheader("Trends")
 
-if date_col is None or revenue_col is None:
-    st.info("Trend charts require a Date-like field and a primary metric (e.g., Revenue/Sales).")
-else:
-    tmp = df[[date_col, revenue_col]].copy()
-    tmp[revenue_col] = pd.to_numeric(tmp[revenue_col], errors="coerce")
-    ts_total = tmp.groupby(date_col)[revenue_col].sum().sort_index()
-
-    fig_total2 = px.line(ts_total.reset_index(), x=date_col, y=revenue_col, markers=True, title=f"{revenue_col} trend (total)")
-    fig_total2 = add_max_point_annotation(fig_total2, ts_total.index, ts_total.values, label_prefix="Peak")
-    fig_total2 = apply_chart_style(fig_total2, height=420, showlegend=False)
-    fig_total2.update_xaxes(automargin=True)
-    fig_total2.update_yaxes(automargin=True)
-    st.caption("Commentary: " + chart_commentary_trend(revenue_col, ts_total))
-    st.plotly_chart(fig_total2, use_container_width=True, key="trend_total_main")
-    charts_for_export.append((f"{revenue_col} trend (total)", fig_to_png_bytes(fig_total2)))
-    # Trend by Store: 5 separate mini charts (top 5 stores) — one store per chart
-    store_dim = dims.get("store")
-    if store_dim and store_dim in df.columns:
-        tmp2 = df[[date_col, store_dim, revenue_col]].copy()
-        tmp2[revenue_col] = pd.to_numeric(tmp2[revenue_col], errors="coerce")
-        tmp2[store_dim] = tmp2[store_dim].astype(str)
-
-        top_stores = (
-            tmp2.groupby(store_dim)[revenue_col].sum()
-            .sort_values(ascending=False)
-            .head(5)
-            .index.tolist()
-        )
-        store_colors = stable_color_map(top_stores)
-
-        st.markdown(f"**{revenue_col} trend by Store (Top 5) — mini charts**")
-        grid = st.columns(2)
-        chart_i = 0
-
-        for sname in top_stores:
-            sub = tmp2[tmp2[store_dim] == sname].copy()
-            s_ts = sub.groupby(date_col)[revenue_col].sum().sort_index()
-            if s_ts.empty:
-                continue
-
-            fig_one = px.line(
-                s_ts.reset_index(),
-                x=date_col,
-                y=revenue_col,
-                markers=True,
-                title=str(sname),
-            )
-            # enforce one color for the whole store chart
-            col = store_colors.get(str(sname))
-            fig_one.update_traces(line=dict(color=col), marker=dict(color=col))
-            fig_one = add_max_point_annotation(fig_one, s_ts.index, s_ts.values, label_prefix="Peak")
-            fig_one = apply_chart_style(fig_one, height=340, showlegend=False)
-            fig_one.update_xaxes(automargin=True)
-            fig_one.update_yaxes(automargin=True)
-
-            with grid[chart_i % 2]:
-                st.caption("Commentary: " + chart_commentary_trend(revenue_col, s_ts))
-                st.plotly_chart(fig_one, use_container_width=True, key=f"trend_store_{chart_i}_{sname}")
-
-            charts_for_export.append((f"{revenue_col} trend — Store: {sname}", fig_to_png_bytes(fig_one)))
-            chart_i += 1
-
-# -----------------------------
-# Correlation (R² default)
-# -----------------------------
 st.subheader("Correlation")
 
 if len(numeric_cols) < 2:
@@ -1403,6 +1471,62 @@ else:
 # -----------------------------
 # Suggested Next Analyses + Run all 3 analyses
 # -----------------------------
+
+with st.expander("More charts (optional) — quick exploration", expanded=False):
+    st.subheader("Quick exploration")
+
+    if not numeric_cols:
+        st.warning("No numeric columns found — quick exploration needs numeric measures.")
+    else:
+        default_numeric = revenue_col if revenue_col in numeric_cols else numeric_cols[0]
+        default_cat = dims.get("store") or dims.get("channel") or dims.get("category") or (cat_cols[0] if cat_cols else None)
+
+        left, right = st.columns(2)
+
+        with left:
+            num_col = st.selectbox("Numeric column", numeric_cols, index=numeric_cols.index(default_numeric))
+            s = pd.to_numeric(df[num_col], errors="coerce")
+            fig_hist = px.histogram(s.dropna(), nbins=12, title=f"Distribution of {num_col}")
+            fig_hist = apply_chart_style(fig_hist, height=360, showlegend=False)  # fixes overlapping legend
+            fig_hist.update_layout(margin=dict(l=10, r=10, t=60, b=10))
+            med = float(s.median(skipna=True)) if s.notna().sum() else np.nan
+            p90 = float(s.quantile(0.9)) if s.notna().sum() else np.nan
+            st.caption(f"Commentary: median is **{human_num(med)}**; 90th percentile is **{human_num(p90)}** (skew check).")
+            st.plotly_chart(fig_hist, use_container_width=True, key="quick_hist")
+
+        with right:
+            if default_cat is None:
+                st.info("No categorical columns detected for a segment cut.")
+            else:
+                cat_choices = [c for c in cat_cols]
+                if not cat_choices:
+                    st.info("No categorical columns detected for a segment cut.")
+                else:
+                    cat_col = st.selectbox(
+                        "Categorical column",
+                        cat_choices,
+                        index=cat_choices.index(default_cat) if default_cat in cat_choices else 0
+                    )
+                    g = df.groupby(cat_col)[num_col].count().sort_values(ascending=False).head(12)
+                    color_map = stable_color_map([str(x) for x in g.index.tolist()])
+                    fig_bar = px.bar(
+                        g.reset_index(),
+                        x=cat_col,
+                        y=num_col,
+                        color=cat_col,
+                        color_discrete_map=color_map,
+                        title=f"Record count by {cat_col}",
+                    )
+                    fig_bar.update_traces(text=g.values)
+                    fig_bar = apply_chart_style(fig_bar, height=360, showlegend=False)
+                    fig_bar = fix_label_overlap_for_bar(fig_bar)
+                    st.caption(f"Commentary: top category by volume is **{g.index[0]}** with **{int(g.iloc[0])} records**.")
+                    st.plotly_chart(fig_bar, use_container_width=True, key="quick_count_bar")
+
+    # -----------------------------
+    # Key business cuts (auto)
+    # -----------------------------
+
 st.subheader("Suggested Next Analyses")
 suggestions = ai_generate_suggestions(facts)
 
@@ -1458,7 +1582,8 @@ if ran and analyses_outputs:
 # -----------------------------
 st.subheader("AI Insights Report")
 report_text = ai_generate_report(exec_bullets[:10], insights_bullets[:10], suggestions)
-st.text(report_text)
+# Render as a readable executive brief (not monospace)
+st.markdown(f'<div class="ec-report">{html.escape(report_text)}</div>', unsafe_allow_html=True)
 
 # -----------------------------
 # Export
