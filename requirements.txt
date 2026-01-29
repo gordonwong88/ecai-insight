@@ -1,7 +1,6 @@
 streamlit
 pandas
 numpy
-plotly
 scipy
 statsmodels
 openpyxl
@@ -10,4 +9,5 @@ python-dotenv
 requests
 openai
 python-pptx
-kaleido
+plotly==5.22.0
+kaleido==0.2.1
