@@ -1,20 +1,20 @@
+
 # app.py
-# EC-AI Insight — Sales / Retail Transactions MVP
-# Founder-first: Business Summary → Business Implications → 4 core visuals → Advanced (collapsed) → Exports
+# EC-AI Insight — Sales / Retail Transactions MVP (Founder-first)
+# Default: Business Summary → Business Insights → Core Visuals → Further Analysis → Advanced (collapsed) → Exports
 #
-# NOTE: To export charts into PDF/PPT, add `kaleido` to requirements.txt.
-#       Plotly uses Kaleido for fig.to_image().
+# IMPORTANT (exports):
+# - To include charts in PDF/PPT exports, add `kaleido` to requirements.txt (Plotly image renderer).
 
 import io
 from datetime import datetime
-from typing import List, Optional, Tuple, Dict
+from typing import Optional, List, Tuple, Dict
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-
-import plotly.graph_objects as go
 import plotly.express as px
+import plotly.graph_objects as go
 
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
@@ -27,113 +27,132 @@ from pptx.dml.color import RGBColor
 
 
 # -----------------------------
-# UI: Global styling
+# UI / Theme
 # -----------------------------
-BASE_FONT_PX = 18  # bumped for readability (executive-friendly)
+BASE_FONT_PX = 19  # +1 size (executive readable)
+TITLE_FONT_PX = 40
+SUBTITLE_FONT_PX = 18
+
+TABLEAU_COLORS = px.colors.qualitative.T10  # Tableau-like palette
+PLOT_TEMPLATE = "plotly_white"
 
 st.set_page_config(page_title="EC-AI Insight", layout="wide")
 
 st.markdown(
     f"""
 <style>
-  html, body, [class*="css"]  {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  html, body, [class*="css"] {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
     font-size: {BASE_FONT_PX}px;
   }}
-  .ec-muted {{
-    color: rgba(49,51,63,0.72);
-    font-size: {BASE_FONT_PX}px;
+  .ec-subtitle {{
+    font-size: {SUBTITLE_FONT_PX}px;
+    color: #5a5a5a;
+    margin-top: -6px;
+    margin-bottom: 10px;
   }}
-  .ec-caption {{
-    color: rgba(49,51,63,0.72);
-    font-size: {BASE_FONT_PX}px;
-    line-height: 1.5;
+  .ec-hint {{
+    font-size: {BASE_FONT_PX - 1}px;
+    color: #6d6d6d;
   }}
   .ec-card {{
     background: #ffffff;
-    border: 1px solid rgba(49,51,63,0.10);
-    border-radius: 16px;
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 14px;
     padding: 16px 18px;
-    box-shadow: 0 1px 10px rgba(0,0,0,0.04);
+    box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+    margin-top: 4px;
+    margin-bottom: 8px;
   }}
   .ec-card h3 {{
-    margin: 0 0 8px 0;
     font-size: {BASE_FONT_PX + 6}px;
+    margin: 0 0 8px 0;
   }}
   .ec-card p {{
-    margin: 0.35rem 0;
+    font-size: {BASE_FONT_PX + 1}px;
     line-height: 1.55;
+    margin: 6px 0;
+  }}
+  .ec-sec {{
+    font-size: {BASE_FONT_PX + 2}px;
+    margin-top: 10px;
+    margin-bottom: 6px;
+  }}
+  .ec-micro {{
     font-size: {BASE_FONT_PX}px;
-  }}
-  .ec-hint {{
-    font-size: {BASE_FONT_PX}px;
-    color: rgba(49,51,63,0.70);
-  }}
-  /* Make Streamlit captions readable */
-  .stCaption, div[data-testid="stCaptionContainer"] {{
-    font-size: {BASE_FONT_PX}px !important;
-    color: rgba(49,51,63,0.72) !important;
-  }}
-  /* Tighten header spacing */
-  h1 {{
-    font-size: {BASE_FONT_PX + 18}px !important;
-    margin-bottom: 0.2rem !important;
-  }}
-  h2 {{
-    font-size: {BASE_FONT_PX + 10}px !important;
-    margin-top: 0.8rem !important;
-  }}
-  h3 {{
-    font-size: {BASE_FONT_PX + 6}px !important;
-    margin-top: 0.6rem !important;
+    color: #666;
   }}
 </style>
 """,
     unsafe_allow_html=True,
 )
 
+
 # -----------------------------
 # Helpers
 # -----------------------------
+def kaleido_ok() -> bool:
+    """Return True if Plotly image export is available."""
+    try:
+        import kaleido  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def style_fig(fig: go.Figure, *, height: Optional[int] = None, showlegend: Optional[bool] = None) -> go.Figure:
+    """Apply a consistent Tableau-like theme."""
+    fig.update_layout(
+        template=PLOT_TEMPLATE,
+        colorway=TABLEAU_COLORS,
+        font=dict(size=BASE_FONT_PX + 1),
+        margin=dict(l=20, r=20, t=45, b=30),
+    )
+    if height is not None:
+        fig.update_layout(height=height)
+    if showlegend is not None:
+        fig.update_layout(legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="left", x=0))
+        fig.update_layout(showlegend=showlegend)
+    fig.update_xaxes(title_font=dict(size=BASE_FONT_PX + 1), tickfont=dict(size=BASE_FONT_PX))
+    fig.update_yaxes(title_font=dict(size=BASE_FONT_PX + 1), tickfont=dict(size=BASE_FONT_PX))
+    return fig
+
+
 def human_money(x: float) -> str:
     if x is None or (isinstance(x, float) and np.isnan(x)):
         return "-"
     x = float(x)
-    s = "-" if x < 0 else ""
-    x = abs(x)
-    if x >= 1_000_000_000:
-        return f"{s}${x/1_000_000_000:.2f}B"
-    if x >= 1_000_000:
-        return f"{s}${x/1_000_000:.2f}M"
-    if x >= 1_000:
-        return f"{s}${x/1_000:.1f}K"
-    return f"{s}${x:,.0f}"
+    absx = abs(x)
+    if absx >= 1_000_000:
+        return f"${x/1_000_000:.1f}M"
+    if absx >= 1_000:
+        return f"${x/1_000:.1f}K"
+    return f"${x:,.0f}"
 
-def human_pct(x: float) -> str:
-    if x is None or (isinstance(x, float) and np.isnan(x)):
-        return "-"
-    return f"{x*100:.1f}%"
 
-def try_parse_dates(s: pd.Series) -> Optional[pd.Series]:
-    try:
-        dt = pd.to_datetime(s, errors="coerce", utc=False)
-        if dt.notna().mean() >= 0.60:
-            return dt
-    except Exception:
-        pass
+def discount_band(s: pd.Series) -> pd.Series:
+    s = pd.to_numeric(s, errors="coerce")
+    # assume user may provide 0-1 or 0-100
+    if s.max(skipna=True) is not None and s.max(skipna=True) > 1.5:
+        s = s / 100.0
+    bins = [-np.inf, 0.02, 0.05, 0.10, 0.15, 0.20, np.inf]
+    labels = ["0–2%", "2–5%", "5–10%", "10–15%", "15–20%", "20%+"]
+    return pd.cut(s, bins=bins, labels=labels)
+
+
+def detect_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    cols = {c.lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand.lower() in cols:
+            return cols[cand.lower()]
+    # fuzzy contains
+    lower_cols = [c.lower() for c in df.columns]
+    for cand in candidates:
+        for i, c in enumerate(lower_cols):
+            if cand.lower() in c:
+                return df.columns[i]
     return None
 
-def pick_col(cols: List[str], candidates: List[str]) -> Optional[str]:
-    cols_l = {c.lower(): c for c in cols}
-    for k in candidates:
-        for c in cols:
-            if c.lower() == k.lower():
-                return c
-        # contains match
-        for c in cols:
-            if k.lower() in c.lower():
-                return c
-    return None
 
 def fig_to_png_bytes(fig: go.Figure) -> Optional[bytes]:
     try:
@@ -141,492 +160,535 @@ def fig_to_png_bytes(fig: go.Figure) -> Optional[bytes]:
     except Exception:
         return None
 
-def safe_numeric(df: pd.DataFrame, col: str) -> pd.Series:
-    return pd.to_numeric(df[col], errors="coerce")
 
-def discount_band(discount: pd.Series) -> pd.Series:
-    # Expect discount as 0-1 or 0-100. Normalize to 0-1.
-    d = pd.to_numeric(discount, errors="coerce")
-    if d.dropna().empty:
-        return pd.Series([np.nan] * len(discount))
-    if d.dropna().quantile(0.95) > 1.0:  # likely 0-100
-        d = d / 100.0
-    bins = [-1, 0.0000001, 0.02, 0.05, 0.10, 0.15, 0.20, 1.0]
-    labels = ["0%", "0–2%", "2–5%", "5–10%", "10–15%", "15–20%", "20%+"]
-    return pd.cut(d, bins=bins, labels=labels)
-
-# -----------------------------
-# Export builders
-# -----------------------------
-def build_pdf(business_summary: List[str], business_implications: List[str],
-              charts: List[Tuple[str, Optional[bytes]]]) -> bytes:
-    buff = io.BytesIO()
-    c = canvas.Canvas(buff, pagesize=letter)
-    W, H = letter
-
-    def title(text: str, y: float) -> float:
-        c.setFont("Helvetica-Bold", 18)
-        c.drawString(0.8 * inch, y, text)
-        return y - 0.35 * inch
-
-    def bullets(lines: List[str], y: float, width_chars: int = 95) -> float:
-        c.setFont("Helvetica", 12)
-        for line in lines:
-            # simple wrap
-            words = line.split()
-            cur = ""
-            wrapped = []
-            for w in words:
-                if len(cur) + len(w) + 1 <= width_chars:
-                    cur = (cur + " " + w).strip()
-                else:
-                    wrapped.append(cur)
-                    cur = w
-            if cur:
-                wrapped.append(cur)
-
-            for i, seg in enumerate(wrapped):
-                prefix = "• " if i == 0 else "  "
-                c.drawString(0.9 * inch, y, prefix + seg)
-                y -= 0.22 * inch
-                if y < 1.2 * inch:
-                    c.showPage()
-                    y = H - 0.9 * inch
-                    c.setFont("Helvetica", 12)
-        return y
-
-    # Cover page
-    c.setFont("Helvetica-Bold", 22)
-    c.drawString(0.8 * inch, H - 0.9 * inch, "EC-AI Executive Brief")
-    c.setFont("Helvetica", 12)
-    c.drawString(0.8 * inch, H - 1.25 * inch, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    y = H - 1.75 * inch
-
-    y = title("Business Summary", y)
-    y = bullets(business_summary, y)
-
-    y -= 0.15 * inch
-    y = title("Business Implications", y)
-    y = bullets(business_implications, y)
-
-    # Charts pages
-    for chart_title, img in charts:
-        c.showPage()
-        y = H - 0.9 * inch
-        y = title(chart_title, y)
-        if img is None:
-            c.setFont("Helvetica", 12)
-            c.drawString(0.9 * inch, y, "Chart image could not be rendered. (Install kaleido to enable exports.)")
-            continue
-        ir = ImageReader(io.BytesIO(img))
-        img_w = W - 1.6 * inch
-        img_h = 5.0 * inch
-        c.drawImage(ir, 0.8 * inch, 1.4 * inch, width=img_w, height=img_h, preserveAspectRatio=True, anchor="n")
-
-    c.save()
-    buff.seek(0)
-    return buff.getvalue()
-
-def _add_title(slide, title: str, subtitle: Optional[str] = None):
-    tx = slide.shapes.add_textbox(Inches(0.7), Inches(0.4), Inches(12.0), Inches(0.8))
-    tf = tx.text_frame
-    tf.clear()
-    p = tf.paragraphs[0]
-    p.text = title
-    p.font.bold = True
-    p.font.size = Pt(34)
-    p.font.color.rgb = RGBColor(20, 20, 20)
-    if subtitle:
-        tx2 = slide.shapes.add_textbox(Inches(0.7), Inches(1.1), Inches(12.0), Inches(0.6))
-        tf2 = tx2.text_frame
-        tf2.clear()
-        p2 = tf2.paragraphs[0]
-        p2.text = subtitle
-        p2.font.size = Pt(18)
-        p2.font.color.rgb = RGBColor(90, 90, 90)
-
-def _add_bullets(slide, heading: str, lines: List[str]):
-    box = slide.shapes.add_textbox(Inches(0.7), Inches(1.6), Inches(12.0), Inches(5.5))
-    tf = box.text_frame
-    tf.word_wrap = True
-    tf.clear()
-    p0 = tf.paragraphs[0]
-    p0.text = heading
-    p0.font.bold = True
-    p0.font.size = Pt(24)
-    p0.font.color.rgb = RGBColor(20, 20, 20)
-    for line in lines:
-        p = tf.add_paragraph()
-        p.text = line
-        p.level = 0
-        p.font.size = Pt(18)
-        p.font.color.rgb = RGBColor(40, 40, 40)
-
-def _add_image_slide(prs: Presentation, title: str, img_bytes: bytes):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_title(slide, title)
-    img_stream = io.BytesIO(img_bytes)
-    slide.shapes.add_picture(img_stream, Inches(0.8), Inches(1.4), width=Inches(11.8))
-
-def build_pptx(business_summary: List[str], business_implications: List[str],
-               charts: List[Tuple[str, Optional[bytes]]]) -> bytes:
-    prs = Presentation()
-    prs.slide_width = Inches(13.33)
-    prs.slide_height = Inches(7.5)
-
-    # Title slide
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_title(slide, "EC-AI Executive Brief", "Sales performance, explained clearly.")
-
-    # Summary slide
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_title(slide, "Business Summary")
-    _add_bullets(slide, "Key points", business_summary)
-
-    # Implications slide
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_title(slide, "Business Implications")
-    _add_bullets(slide, "What to do next", business_implications)
-
-    # Chart slides
-    for chart_title, img in charts:
-        if img is None:
-            continue
-        _add_image_slide(prs, chart_title, img)
-
-    out = io.BytesIO()
-    prs.save(out)
-    out.seek(0)
-    return out.getvalue()
+def read_file(uploaded) -> pd.DataFrame:
+    name = uploaded.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(uploaded)
+    if name.endswith(".xlsx") or name.endswith(".xls"):
+        return pd.read_excel(uploaded)
+    raise ValueError("Unsupported file type. Please upload CSV or Excel.")
 
 
 # -----------------------------
-# Main UI
+# Header
 # -----------------------------
-st.title("EC-AI Insight")
-st.markdown("<div class='ec-muted'>Sales performance, explained clearly.</div>", unsafe_allow_html=True)
+st.markdown(f"<div style='font-size:{TITLE_FONT_PX}px; font-weight:800;'>EC-AI Insight</div>", unsafe_allow_html=True)
+st.markdown("<div class='ec-subtitle'>Sales performance, explained clearly.</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='ec-caption'>Upload your sales data and get a short business briefing — "
-    "what’s working, what’s risky, and where to focus next.</div>",
+    "<div class='ec-hint'>Upload your sales data and get a short business briefing — what’s working, what’s risky, and where to focus next.</div>",
     unsafe_allow_html=True,
 )
 
 st.divider()
 
-uploaded = st.file_uploader("Upload retail sales / transaction data (CSV or Excel)", type=["csv", "xlsx", "xls"])
+uploaded = st.file_uploader("Upload a dataset (CSV / Excel)", type=["csv", "xlsx", "xls"])
 
 if not uploaded:
-    st.info("Tip: start with retail sales / transaction data. Columns like Date, Store, Revenue, Discount will give the best demo.")
+    st.info("Upload a retail sales / transaction dataset to begin (Date, Store, Revenue).")
     st.stop()
 
-# Load
-def load_data(file) -> pd.DataFrame:
-    name = file.name.lower()
-    if name.endswith(".csv"):
-        return pd.read_csv(file)
-    return pd.read_excel(file)
-
 try:
-    df_raw = load_data(uploaded)
+    df = read_file(uploaded)
 except Exception as e:
     st.error(f"Could not read file: {e}")
     st.stop()
 
-if df_raw.empty:
-    st.error("File loaded but contains no rows.")
-    st.stop()
+# Basic cleanup
+df = df.copy()
+df.columns = [str(c).strip() for c in df.columns]
 
-df = df_raw.copy()
+# Detect key columns (retail-first)
+date_col = detect_col(df, ["date", "transaction_date", "order_date", "day"])
+store_col = detect_col(df, ["store", "branch", "location", "shop"])
+revenue_col = detect_col(df, ["revenue", "sales", "amount", "net_sales", "total"])
+cogs_col = detect_col(df, ["cogs", "cost", "cost_of_goods", "costs"])
+discount_col = detect_col(df, ["discount", "discount_rate", "disc", "markdown"])
+category_col = detect_col(df, ["category", "product_category", "dept", "department"])
+product_col = detect_col(df, ["product", "sku", "item", "product_name"])
+channel_col = detect_col(df, ["channel", "sales_channel"])
+payment_col = detect_col(df, ["payment", "payment_method", "tender"])
 
-# Detect key columns
-date_col = pick_col(df.columns.tolist(), ["date", "transaction_date", "order_date", "invoice_date"])
-store_col = pick_col(df.columns.tolist(), ["store", "branch", "location", "outlet"])
-revenue_col = pick_col(df.columns.tolist(), ["revenue", "sales", "amount", "net_sales", "total"])
-discount_col = pick_col(df.columns.tolist(), ["discount", "discount_rate", "discount_pct", "disc"])
-cogs_col = pick_col(df.columns.tolist(), ["cogs", "cost", "cost_of_goods"])
-units_col = pick_col(df.columns.tolist(), ["units", "qty", "quantity", "volume"])
-
+# Hard gate: retail-sales MVP needs Revenue + Date
 if revenue_col is None:
-    st.error("I couldn't find a Revenue/Sales column. For this MVP, please include a column like 'Revenue' or 'Sales'.")
+    st.error("Could not find a Revenue/Sales column. Please include a column named like 'Revenue' or 'Sales'.")
     st.stop()
 
-df[revenue_col] = safe_numeric(df, revenue_col)
+df[revenue_col] = pd.to_numeric(df[revenue_col], errors="coerce")
 
 if date_col:
-    dt = try_parse_dates(df[date_col])
-    if dt is not None:
-        df[date_col] = dt
-    else:
-        date_col = None
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+else:
+    st.warning("No Date column detected. Trend charts will be limited.")
+
+# Basic derived metrics
+if cogs_col:
+    df[cogs_col] = pd.to_numeric(df[cogs_col], errors="coerce")
+    df["_gross_profit"] = df[revenue_col] - df[cogs_col]
+    df["_gross_margin"] = np.where(df[revenue_col].fillna(0) != 0, df["_gross_profit"] / df[revenue_col], np.nan)
 
 # -----------------------------
-# BUSINESS SUMMARY + IMPLICATIONS (data-driven, founder tone)
+# Business Summary (data-backed, founder language)
 # -----------------------------
 total_rev = float(df[revenue_col].sum(skipna=True))
-avg_rev = float(df[revenue_col].mean(skipna=True)) if df[revenue_col].notna().any() else np.nan
+n_rows = int(len(df))
+period_txt = ""
+if date_col and df[date_col].notna().any():
+    dmin = df[date_col].min()
+    dmax = df[date_col].max()
+    if pd.notna(dmin) and pd.notna(dmax):
+        period_txt = f"{dmin.date()} to {dmax.date()}"
 
 top_store_name = None
-second_store_name = None
-top_store_rev = None
-second_store_rev = None
-share_top2 = None
-
+top2_share = None
+store_rank = None
 if store_col:
-    by_store = df.groupby(store_col)[revenue_col].sum(min_count=1).sort_values(ascending=False)
-    if len(by_store) >= 1:
-        top_store_name = str(by_store.index[0])
-        top_store_rev = float(by_store.iloc[0])
-    if len(by_store) >= 2:
-        second_store_name = str(by_store.index[1])
-        second_store_rev = float(by_store.iloc[1])
-    if len(by_store) >= 2 and float(by_store.sum()) != 0:
-        share_top2 = float((by_store.iloc[0] + by_store.iloc[1]) / by_store.sum())
+    store_rank = df.groupby(store_col)[revenue_col].sum().sort_values(ascending=False)
+    if len(store_rank) >= 1:
+        top_store_name = str(store_rank.index[0])
+    if len(store_rank) >= 2 and store_rank.sum() != 0:
+        top2_share = float((store_rank.iloc[0] + store_rank.iloc[1]) / store_rank.sum())
 
-# Growth estimate
+# Growth trend (first vs last day)
 growth_txt = None
-if date_col:
-    daily = df.dropna(subset=[date_col]).groupby(pd.Grouper(key=date_col, freq="D"))[revenue_col].sum(min_count=1).dropna()
+if date_col and df[date_col].notna().any():
+    daily = df.dropna(subset=[date_col]).groupby(pd.Grouper(key=date_col, freq="D"))[revenue_col].sum().dropna()
     if len(daily) >= 2:
         start_v = float(daily.iloc[0])
         end_v = float(daily.iloc[-1])
         if start_v != 0:
-            growth = (end_v - start_v) / abs(start_v)
-            growth_txt = f"Overall sales increased from {human_money(start_v)} to {human_money(end_v)} (approx. {human_pct(growth)})."
+            pct = (end_v - start_v) / abs(start_v) * 100
+            growth_txt = f"Overall sales increased from {human_money(start_v)} to {human_money(end_v)} (approx. {pct:.1f}%)."
 
-# Volatility cue (store-level CV)
-volatility_txt = None
-if store_col:
-    store_stats = df.groupby(store_col)[revenue_col].agg(["mean", "std", "count"])
-    store_stats["cv"] = store_stats["std"] / store_stats["mean"].replace(0, np.nan)
-    store_stats = store_stats.replace([np.inf, -np.inf], np.nan).dropna(subset=["cv"])
-    if not store_stats.empty:
-        worst = store_stats.sort_values("cv", ascending=False).head(1)
-        w_name = str(worst.index[0])
-        w_cv = float(worst["cv"].iloc[0])
-        volatility_txt = f"Some stores are highly volatile (e.g., **{w_name}** shows high day‑to‑day swings; CV≈{w_cv:.2f})."
+# Volatility by store
+vol_txt = None
+most_volatile_store = None
+if date_col and store_col and df[date_col].notna().any():
+    daily_store = df.dropna(subset=[date_col]).groupby([pd.Grouper(key=date_col, freq="D"), store_col])[revenue_col].sum().reset_index()
+    tmp = daily_store.groupby(store_col)[revenue_col].agg(["mean", "std"]).reset_index()
+    tmp["cv"] = tmp["std"] / tmp["mean"].replace(0, np.nan)
+    tmp = tmp.replace([np.inf, -np.inf], np.nan).dropna(subset=["cv"])
+    if not tmp.empty:
+        row = tmp.sort_values("cv", ascending=False).iloc[0]
+        most_volatile_store = str(row[store_col])
+        vol_txt = f"Some stores are highly volatile (e.g., **{most_volatile_store}** shows large day‑to‑day swings; volatility score ≈ {row['cv']:.2f})."
 
 # Discount effectiveness cue
 disc_txt = None
+best_band = None
+worst_band = None
 if discount_col:
     bands = discount_band(df[discount_col])
     tmp = df.copy()
     tmp["_disc_band"] = bands
     agg = tmp.groupby("_disc_band")[revenue_col].mean().dropna()
     if len(agg) >= 2:
-        best_band = agg.sort_values(ascending=False).index[0]
-        worst_band = agg.sort_values(ascending=True).index[0]
-        disc_txt = f"Moderate discounts (around **{best_band}**) are associated with higher average revenue per sale, while deeper discounts (e.g., **{worst_band}**) appear less efficient."
+        best_band = str(agg.sort_values(ascending=False).index[0])
+        worst_band = str(agg.sort_values(ascending=True).index[0])
+        disc_txt = f"Discounts around **{best_band}** align with higher average revenue per sale, while deeper discounts (e.g., **{worst_band}**) appear less efficient."
 
-business_summary = []
-if top_store_name and second_store_name and share_top2 is not None:
-    business_summary.append(
-        f"Revenue is concentrated in a small number of stores, led by **{top_store_name}** and **{second_store_name}** (top two contribute ~{share_top2*100:.0f}% of total)."
+# Summary bullets
+summary_lines: List[str] = []
+if top_store_name and top2_share is not None:
+    summary_lines.append(
+        f"Revenue is concentrated in a small number of stores, led by **{store_rank.index[0]}** and **{store_rank.index[1]}** (top two contribute ~{top2_share*100:.0f}% of total)."
     )
-elif store_col and top_store_name:
-    business_summary.append(f"Top store by revenue is **{top_store_name}** ({human_money(top_store_rev)}).")
+elif top_store_name:
+    summary_lines.append(f"Your top store by revenue is **{top_store_name}**.")
 
 if growth_txt:
-    business_summary.append(growth_txt)
-else:
-    business_summary.append(f"Total revenue is **{human_money(total_rev)}** (average per record {human_money(avg_rev)}).")
-
-if volatility_txt:
-    business_summary.append(volatility_txt)
-else:
-    business_summary.append("Performance varies by store/day; focus on consistency in your top performers.")
-
+    summary_lines.append(growth_txt)
+if vol_txt:
+    summary_lines.append(vol_txt)
 if disc_txt:
-    business_summary.append(disc_txt)
-else:
-    business_summary.append("Pricing/discount patterns can materially affect revenue efficiency — review discount strategy by store and product mix.")
+    summary_lines.append(disc_txt)
 
-business_summary.append("The biggest opportunity is to **stabilise and scale what already works** in top-performing stores before expanding promotions.")
+summary_lines.append("The biggest opportunity is to **stabilise and scale what already works** in top-performing stores before expanding promotions.")
 
-business_implications = [
-    "Double down on execution in top stores (staffing, inventory availability, consistent promotion rules).",
-    "Reduce volatility first — inconsistent performance is often operational (mix, stockouts, local promotion discipline).",
-    "Be cautious with deep discounts; test promotions with clear targets and measure revenue per sale (not just volume).",
-]
-
-# Render Business Summary card (safe HTML string)
-summary_html = "<div class='ec-card'><h3>Business Summary</h3>" + "".join(
-    [f"<p>• {line}</p>" for line in business_summary]
-) + "<p class='ec-hint'>Start here. This section explains the story before you look at any charts.</p></div>"
-
+summary_html = "<div class='ec-card'><h3>Business Summary</h3>" + "".join([f"<p>• {x}</p>" for x in summary_lines]) + \
+    "<p class='ec-hint'>Start here. This section explains the story before you look at any charts.</p></div>"
 st.markdown(summary_html, unsafe_allow_html=True)
 
+# -----------------------------
+# Business Insights (actionable)
+# -----------------------------
 st.divider()
 
-implications_html = "<div class='ec-card'><h3>What This Means for the Business</h3><p><b>What to focus on next</b></p>" + "".join(
-    [f"<p>• {line}</p>" for line in business_implications]
-) + "</div>"
+# Build a few data-backed insight lines
+ins_money: List[str] = []
+ins_risk: List[str] = []
+ins_improve: List[str] = []
+ins_focus: List[str] = []
 
-st.markdown(implications_html, unsafe_allow_html=True)
+if store_rank is not None and len(store_rank) >= 1:
+    ins_money.append(f"**{store_rank.index[0]}** is the largest contributor ({human_money(store_rank.iloc[0])}).")
+    if len(store_rank) >= 5:
+        ins_money.append("A small group of stores accounts for a disproportionate share of revenue (winner‑takes‑more pattern).")
 
-st.divider()
+if category_col:
+    cat_rank = df.groupby(category_col)[revenue_col].sum().sort_values(ascending=False)
+    if len(cat_rank) >= 1:
+        ins_money.append(f"Top category by revenue is **{cat_rank.index[0]}** ({human_money(cat_rank.iloc[0])}).")
+
+if most_volatile_store:
+    ins_risk.append(f"Performance is uneven — **{most_volatile_store}** shows the largest variability, which makes forecasting harder.")
+
+if top2_share is not None and top2_share >= 0.45:
+    ins_risk.append("Revenue concentration is high — losing performance in the top stores materially impacts total results.")
+
+if best_band and worst_band:
+    ins_improve.append(f"Discounting beyond **{worst_band}** may reduce revenue efficiency; treat deep discounts as experiments with clear targets.")
+    ins_improve.append(f"Use **revenue per sale** as a guardrail metric when testing promotions (not only volume).")
+
+if cogs_col and df["_gross_margin"].notna().any():
+    gm = float(df["_gross_margin"].mean(skipna=True))
+    ins_improve.append(f"Average gross margin is approximately **{gm*100:.1f}%** (directional). Consider reviewing margin by store/category.")
+
+ins_focus.extend([
+    "Strengthen execution in top stores (inventory availability, staffing, promotion discipline).",
+    "Reduce volatility first — inconsistent performance is often operational.",
+    "Test promotions with clear targets; stop what doesn’t improve revenue per sale."
+])
+
+ins_html = "<div class='ec-card'><h3>Business Insights</h3>"
+ins_html += "<p class='ec-sec'><b>Where the money is made</b></p>" + "".join([f"<p>• {x}</p>" for x in (ins_money[:3] or ["Identify your top stores/categories and protect them."])])
+ins_html += "<p class='ec-sec'><b>Where risk exists</b></p>" + "".join([f"<p>• {x}</p>" for x in (ins_risk[:2] or ["Results vary materially across stores; investigate execution differences."])])
+ins_html += "<p class='ec-sec'><b>What can be improved</b></p>" + "".join([f"<p>• {x}</p>" for x in (ins_improve[:3] or ["Review discount strategy and ensure promotions improve revenue per sale."])])
+ins_html += "<p class='ec-sec'><b>What to focus on next</b></p>" + "".join([f"<p>• {x}</p>" for x in ins_focus[:3]])
+ins_html += "</div>"
+st.markdown(ins_html, unsafe_allow_html=True)
 
 # -----------------------------
 # Core visuals (DEFAULT)
 # -----------------------------
+st.divider()
 st.subheader("Revenue Overview")
 
 charts_for_export: List[Tuple[str, Optional[bytes]]] = []
 
-# 1) Revenue trend
+# Revenue trend
 trend_fig = None
-if date_col:
-    ts = df.dropna(subset=[date_col]).groupby(pd.Grouper(key=date_col, freq="D"))[revenue_col].sum(min_count=1).reset_index()
-    if not ts.empty:
-        trend_fig = px.line(ts, x=date_col, y=revenue_col, markers=False)
-        trend_fig.update_layout(
-            height=360,
-            margin=dict(l=20, r=20, t=30, b=20),
-            xaxis_title="Date",
-            yaxis_title="Revenue",
-            legend_title_text="",
-            font=dict(size=BASE_FONT_PX + 2),
-        )
-        trend_fig.update_yaxes(tickprefix="$", separatethousands=True)
-        st.plotly_chart(trend_fig, use_container_width=True)
-        charts_for_export.append(("Revenue Trend", fig_to_png_bytes(trend_fig)))
+if date_col and df[date_col].notna().any():
+    daily = df.dropna(subset=[date_col]).groupby(pd.Grouper(key=date_col, freq="D"))[revenue_col].sum(min_count=1).dropna().reset_index()
+    trend_fig = px.line(daily, x=date_col, y=revenue_col, markers=True, title="")
+    trend_fig.update_traces(line=dict(width=3))
+    trend_fig.update_yaxes(tickprefix="$", separatethousands=True)
+    trend_fig.update_layout(xaxis_title="Date", yaxis_title="Revenue")
+    style_fig(trend_fig, height=380, showlegend=False)
+    st.plotly_chart(trend_fig, use_container_width=True)
+    charts_for_export.append(("Revenue Trend", fig_to_png_bytes(trend_fig)))
 else:
-    st.info("No usable Date column detected, so the revenue trend chart is hidden.")
+    st.info("Revenue trend requires a Date column.")
 
+# Top stores by revenue
 st.subheader("Top Revenue-Generating Stores")
 top_store_fig = None
 if store_col:
-    top5 = df.groupby(store_col)[revenue_col].sum(min_count=1).sort_values(ascending=False).head(5).reset_index()
-    top5["Label"] = top5[revenue_col].apply(lambda v: human_money(v))
-    top_store_fig = px.bar(top5, x=revenue_col, y=store_col, orientation="h", text="Label")
-    top_store_fig.update_layout(
-        height=360,
-        margin=dict(l=20, r=20, t=30, b=20),
-        xaxis_title="Revenue",
-        yaxis_title="Store",
-        font=dict(size=BASE_FONT_PX + 2),
+    by_store = df.groupby(store_col)[revenue_col].sum().sort_values(ascending=True).tail(10)
+    plot_df = by_store.reset_index()
+    plot_df["Label"] = plot_df[revenue_col].apply(human_money)
+    top_store_fig = px.bar(
+        plot_df,
+        x=revenue_col,
+        y=store_col,
+        orientation="h",
+        text="Label",
+        color=store_col,
+        color_discrete_sequence=TABLEAU_COLORS,
+        title="",
     )
     top_store_fig.update_traces(textposition="outside", cliponaxis=False)
+    top_store_fig.update_layout(xaxis_title="Revenue", yaxis_title="Store")
+    style_fig(top_store_fig, height=420, showlegend=False)
     st.plotly_chart(top_store_fig, use_container_width=True)
     charts_for_export.append(("Top Stores by Revenue", fig_to_png_bytes(top_store_fig)))
 else:
-    st.info("No Store column detected — store breakdown is hidden.")
+    st.info("Top stores view requires a Store column.")
 
+# Store stability small multiples
 st.subheader("Store Stability (Top 5)")
-if store_col and date_col:
-    top_stores = df.groupby(store_col)[revenue_col].sum(min_count=1).sort_values(ascending=False).head(5).index.tolist()
-    sub = df[df[store_col].isin(top_stores)].dropna(subset=[date_col])
-    if not sub.empty:
-        # daily per store
-        daily_store = sub.groupby([pd.Grouper(key=date_col, freq="D"), store_col])[revenue_col].sum(min_count=1).reset_index()
-        cols = st.columns(2, gap="large")
-        mini_figs = []
-        for i, sname in enumerate(top_stores):
-            d = daily_store[daily_store[store_col] == sname]
-            fig = px.line(d, x=date_col, y=revenue_col)
-            fig.update_layout(
-                height=260,
-                margin=dict(l=10, r=10, t=35, b=10),
-                xaxis_title="",
-                yaxis_title="",
-                title=dict(text=str(sname), x=0.02, xanchor="left"),
-                font=dict(size=BASE_FONT_PX + 1),
-            )
-            fig.update_yaxes(tickprefix="$", separatethousands=True)
-            with cols[i % 2]:
-                st.plotly_chart(fig, use_container_width=True)
-            mini_figs.append((f"Store Trend — {sname}", fig_to_png_bytes(fig)))
-        # Export: include only 2 representative mini charts to keep brief short
-        charts_for_export.extend(mini_figs[:2])
+if date_col and store_col and df[date_col].notna().any():
+    daily_store = df.dropna(subset=[date_col]).groupby([pd.Grouper(key=date_col, freq="D"), store_col])[revenue_col].sum(min_count=1).reset_index()
+    top_stores = []
+    if store_rank is not None:
+        top_stores = [str(x) for x in store_rank.index[:5]]
+    cols = st.columns(2)
+    mini = []
+    for i, sname in enumerate(top_stores):
+        d = daily_store[daily_store[store_col] == sname]
+        fig = px.line(d, x=date_col, y=revenue_col, markers=True, title=str(sname))
+        fig.update_traces(line=dict(width=3))
+        fig.update_yaxes(tickprefix="$", separatethousands=True)
+        fig.update_layout(xaxis_title="", yaxis_title="")
+        style_fig(fig, height=260, showlegend=False)
+        with cols[i % 2]:
+            st.plotly_chart(fig, use_container_width=True)
+        mini.append((f"Store Trend — {sname}", fig_to_png_bytes(fig)))
+    # keep 2 representative store charts in PDF
+    charts_for_export.extend(mini[:2])
 else:
     st.info("Store stability view requires both Date and Store columns.")
 
+# Pricing effectiveness
 st.subheader("Pricing Effectiveness")
 disc_fig = None
 if discount_col:
     tmp = df.copy()
     tmp["_disc_band"] = discount_band(tmp[discount_col])
-    band = tmp.groupby("_disc_band")[revenue_col].mean().reset_index()
-    band = band.dropna(subset=["_disc_band", revenue_col])
+    band = tmp.groupby("_disc_band")[revenue_col].mean().reset_index().dropna(subset=["_disc_band", revenue_col])
     if not band.empty:
-        band["Label"] = band[revenue_col].apply(lambda v: human_money(v))
-        disc_fig = px.bar(band, x="_disc_band", y=revenue_col, text="Label")
-        disc_fig.update_layout(
-            height=360,
-            margin=dict(l=20, r=20, t=30, b=20),
-            xaxis_title="Discount band",
-            yaxis_title="Average revenue per sale",
-            font=dict(size=BASE_FONT_PX + 2),
+        band["Label"] = band[revenue_col].apply(human_money)
+        disc_fig = px.bar(
+            band,
+            x="_disc_band",
+            y=revenue_col,
+            text="Label",
+            color="_disc_band",
+            color_discrete_sequence=TABLEAU_COLORS,
+            title="",
         )
         disc_fig.update_traces(textposition="outside", cliponaxis=False)
-        disc_fig.update_yaxes(tickprefix="$", separatethousands=True)
+        disc_fig.update_layout(xaxis_title="Discount band", yaxis_title="Average revenue per sale")
+        style_fig(disc_fig, height=380, showlegend=False)
         st.plotly_chart(disc_fig, use_container_width=True)
-        charts_for_export.append(("Discount Effectiveness", fig_to_png_bytes(disc_fig)))
+        charts_for_export.append(("Average Revenue per Sale by Discount Band", fig_to_png_bytes(disc_fig)))
 else:
-    st.info("No Discount column detected — discount effectiveness is hidden.")
+    st.info("Discount chart requires a Discount / Discount_Rate column.")
 
+# -----------------------------
+# Further analysis (bring back 3 extra charts)
+# -----------------------------
 st.divider()
+with st.expander("Further Analysis (recommended)", expanded=True):
+    st.markdown("<div class='ec-micro'>Extra cuts that many owners find useful (optional, but easy to read).</div>", unsafe_allow_html=True)
+
+    # 1) Revenue mix by Category
+    if category_col:
+        cat = df.groupby(category_col)[revenue_col].sum().sort_values(ascending=False).head(8).reset_index()
+        cat["Label"] = cat[revenue_col].apply(human_money)
+        fig1 = px.bar(cat, x=revenue_col, y=category_col, orientation="h", text="Label", color=category_col, color_discrete_sequence=TABLEAU_COLORS)
+        fig1.update_traces(textposition="outside", cliponaxis=False)
+        fig1.update_layout(xaxis_title="Revenue", yaxis_title="Category", title="Revenue by Category (Top)")
+        style_fig(fig1, height=420, showlegend=False)
+        st.plotly_chart(fig1, use_container_width=True)
+    else:
+        st.info("Add a Category column to see revenue mix by category.")
+
+    # 2) Revenue mix by Payment Method
+    if payment_col:
+        pay = df.groupby(payment_col)[revenue_col].sum().sort_values(ascending=False).head(8).reset_index()
+        pay["Label"] = pay[revenue_col].apply(human_money)
+        fig2 = px.bar(pay, x=revenue_col, y=payment_col, orientation="h", text="Label", color=payment_col, color_discrete_sequence=TABLEAU_COLORS)
+        fig2.update_traces(textposition="outside", cliponaxis=False)
+        fig2.update_layout(xaxis_title="Revenue", yaxis_title="Payment method", title="Revenue by Payment Method (Top)")
+        style_fig(fig2, height=420, showlegend=False)
+        st.plotly_chart(fig2, use_container_width=True)
+    else:
+        st.info("Add a Payment_Method column to see revenue mix by payment method.")
+
+    # 3) Volatility by Channel
+    if date_col and channel_col and df[date_col].notna().any():
+        daily_channel = df.dropna(subset=[date_col]).groupby([pd.Grouper(key=date_col, freq="D"), channel_col])[revenue_col].sum(min_count=1).reset_index()
+        tmp = daily_channel.groupby(channel_col)[revenue_col].agg(["mean", "std"]).reset_index()
+        tmp["cv"] = tmp["std"] / tmp["mean"].replace(0, np.nan)
+        tmp = tmp.replace([np.inf, -np.inf], np.nan).dropna(subset=["cv"]).sort_values("cv", ascending=False)
+        if not tmp.empty:
+            tmp["Label"] = tmp["cv"].apply(lambda v: f"{v:.2f}")
+            fig3 = px.bar(tmp, x=channel_col, y="cv", text="Label", color=channel_col, color_discrete_sequence=TABLEAU_COLORS, title="Volatility by Channel (higher = less stable)")
+            fig3.update_traces(textposition="outside", cliponaxis=False)
+            fig3.update_layout(xaxis_title="Channel", yaxis_title="Volatility score (CV)")
+            style_fig(fig3, height=380, showlegend=False)
+            st.plotly_chart(fig3, use_container_width=True)
+        else:
+            st.info("Not enough signal to compute channel volatility.")
+    else:
+        st.info("Add Channel + Date columns to compute volatility by channel.")
 
 # -----------------------------
 # Advanced analysis (collapsed)
 # -----------------------------
-with st.expander("Advanced analysis (optional)"):
-    st.markdown("### View raw data (optional)")
+st.divider()
+with st.expander("Advanced analysis (optional)", expanded=False):
+    st.markdown("### Raw data preview")
     st.dataframe(df.head(50), use_container_width=True)
 
-    st.markdown("### Data quality & assumptions (advanced)")
+    st.markdown("### Data quality & assumptions")
     miss = df.isna().mean().sort_values(ascending=False)
-    prof = pd.DataFrame({
-        "Column": df.columns,
-        "Missing %": (df.isna().mean() * 100).round(1).values,
-        "Distinct": [df[c].nunique(dropna=True) for c in df.columns],
-        "Type": [str(df[c].dtype) for c in df.columns],
-    })
-    st.dataframe(prof, use_container_width=True, height=260)
+    prof = pd.DataFrame({"missing_%": (miss * 100).round(1)})
+    st.dataframe(prof, use_container_width=True)
 
-    st.markdown("### Correlation (advanced)")
-    num = df.select_dtypes(include=[np.number]).copy()
-    if num.shape[1] >= 2:
-        corr = num.corr(numeric_only=True)
-        heat = px.imshow(corr, text_auto=".2f", aspect="auto")
-        heat.update_layout(height=520, margin=dict(l=20, r=20, t=30, b=20), font=dict(size=BASE_FONT_PX))
-        st.plotly_chart(heat, use_container_width=True)
-    else:
-        st.caption("Not enough numeric columns to compute correlation.")
-
-st.divider()
+    if date_col and df[date_col].notna().any():
+        st.markdown("### Correlation (numeric fields)")
+        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        if len(num_cols) >= 2:
+            corr = df[num_cols].corr(numeric_only=True)
+            heat = px.imshow(corr, text_auto=".2f", aspect="auto", title="Correlation heatmap")
+            style_fig(heat, height=520, showlegend=False)
+            st.plotly_chart(heat, use_container_width=True)
+        else:
+            st.info("Not enough numeric columns for correlation.")
 
 # -----------------------------
 # Exports (Executive Brief only)
 # -----------------------------
+st.divider()
 st.subheader("Export Executive Brief")
-st.markdown(
-    "<div class='ec-caption'>Download a short executive-ready summary for sharing or review.<br>"
-    "• PDF Executive Brief — selected insights only<br>"
-    "• PPT Talking Deck — one insight per slide</div>",
-    unsafe_allow_html=True,
-)
 
-# Pre-render chart bytes and warn if missing
-missing_imgs = [t for t, b in charts_for_export if b is None]
-if missing_imgs:
-    st.warning(
-        "Some charts could not be rendered for export (likely missing `kaleido`). "
-        "Exports will work best after adding `kaleido` to requirements.txt. "
-        f"Missing images: {', '.join(missing_imgs[:4])}{'...' if len(missing_imgs) > 4 else ''}"
-    )
+if not kaleido_ok():
+    st.warning("Chart export is not enabled (kaleido is missing). Add **kaleido** to requirements.txt to include charts in PDF/PPT exports.")
 
-c1, c2 = st.columns(2)
-with c1:
-    if st.button("Build PDF Executive Brief"):
-        pdf_bytes = build_pdf(business_summary, business_implications, charts_for_export[:4])
-        st.download_button("Download PDF", data=pdf_bytes, file_name="ecai_executive_brief.pdf", mime="application/pdf")
-with c2:
-    if st.button("Build PPT Talking Deck"):
-        ppt_bytes = build_pptx(business_summary, business_implications, charts_for_export[:4])
+def build_pdf(title: str, summary: List[str], insights: Dict[str, List[str]], charts: List[Tuple[str, Optional[bytes]]]) -> bytes:
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    w, h = letter
+
+    def draw_title():
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(0.8 * inch, h - 0.8 * inch, title)
+        c.setFont("Helvetica", 10)
+        c.setFillColorRGB(0.35, 0.35, 0.35)
+        c.drawString(0.8 * inch, h - 1.05 * inch, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        c.setFillColorRGB(0, 0, 0)
+
+    draw_title()
+    y = h - 1.4 * inch
+
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(0.8 * inch, y, "Business Summary")
+    y -= 0.25 * inch
+    c.setFont("Helvetica", 11)
+    for line in summary[:6]:
+        c.drawString(0.95 * inch, y, f"• {line.replace('**','')}")
+        y -= 0.22 * inch
+        if y < 1.2 * inch:
+            c.showPage()
+            draw_title()
+            y = h - 1.4 * inch
+
+    y -= 0.15 * inch
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(0.8 * inch, y, "Business Insights")
+    y -= 0.25 * inch
+    c.setFont("Helvetica", 11)
+
+    for sec, lines in insights.items():
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(0.95 * inch, y, sec)
+        y -= 0.20 * inch
+        c.setFont("Helvetica", 11)
+        for ln in lines[:3]:
+            c.drawString(1.10 * inch, y, f"• {ln.replace('**','')}")
+            y -= 0.20 * inch
+            if y < 1.2 * inch:
+                c.showPage()
+                draw_title()
+                y = h - 1.4 * inch
+        y -= 0.08 * inch
+
+    # Charts (selected)
+    for chart_title, png in charts:
+        if png is None:
+            continue
+        c.showPage()
+        draw_title()
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(0.8 * inch, h - 1.4 * inch, chart_title)
+        img = ImageReader(io.BytesIO(png))
+        c.drawImage(img, 0.8 * inch, 1.2 * inch, width=w - 1.6 * inch, height=h - 2.8 * inch, preserveAspectRatio=True, anchor="c")
+
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+
+def build_ppt(title: str, summary: List[str], insights: Dict[str, List[str]], charts: List[Tuple[str, Optional[bytes]]]) -> bytes:
+    prs = Presentation()
+
+    # Title slide
+    slide = prs.slides.add_slide(prs.slide_layouts[0])
+    slide.shapes.title.text = title
+    slide.placeholders[1].text = "Sales performance briefing (executive-ready)"
+
+    # Summary slide
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Business Summary"
+    tf = slide.shapes.placeholders[1].text_frame
+    tf.clear()
+    for i, line in enumerate(summary[:6]):
+        p = tf.add_paragraph() if i else tf.paragraphs[0]
+        p.text = line.replace("**", "")
+        p.level = 0
+
+    # Insights slide
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    slide.shapes.title.text = "Business Insights"
+    tf = slide.shapes.placeholders[1].text_frame
+    tf.clear()
+    for sec, lines in insights.items():
+        p = tf.add_paragraph() if len(tf.paragraphs) else tf.paragraphs[0]
+        p.text = sec
+        p.level = 0
+        for ln in lines[:2]:
+            p2 = tf.add_paragraph()
+            p2.text = ln.replace("**", "")
+            p2.level = 1
+
+    # Chart slides
+    for chart_title, png in charts:
+        if png is None:
+            continue
+        slide = prs.slides.add_slide(prs.slide_layouts[5])  # blank
+        tx = slide.shapes.add_textbox(Inches(0.6), Inches(0.3), Inches(12.2), Inches(0.6))
+        run = tx.text_frame.paragraphs[0].add_run()
+        run.text = chart_title
+        run.font.size = Pt(24)
+        run.font.bold = True
+        run.font.color.rgb = RGBColor(20, 20, 20)
+
+        img_stream = io.BytesIO(png)
+        slide.shapes.add_picture(img_stream, Inches(0.6), Inches(1.1), width=Inches(12.2))
+
+    out = io.BytesIO()
+    prs.save(out)
+    out.seek(0)
+    return out.read()
+
+
+insights_dict = {
+    "Where the money is made": ins_money[:3] or ["Protect and replicate what works in your top stores/categories."],
+    "Where risk exists": ins_risk[:2] or ["Investigate inconsistent performance drivers across stores/channels."],
+    "What can be improved": ins_improve[:3] or ["Review discount strategy and margin guardrails."],
+    "What to focus on next": ins_focus[:3],
+}
+
+colA, colB = st.columns(2)
+
+with colA:
+    if st.button("Generate PDF Executive Brief"):
+        pdf_bytes = build_pdf(
+            "EC-AI Executive Brief",
+            summary_lines,
+            insights_dict,
+            charts_for_export,
+        )
+        st.download_button(
+            "Download PDF",
+            data=pdf_bytes,
+            file_name="ecai_executive_brief.pdf",
+            mime="application/pdf",
+        )
+
+with colB:
+    if st.button("Generate PPT Talking Deck"):
+        ppt_bytes = build_ppt(
+            "EC-AI Executive Brief",
+            summary_lines,
+            insights_dict,
+            charts_for_export,
+        )
         st.download_button(
             "Download PPTX",
             data=ppt_bytes,
             file_name="ecai_talking_deck.pptx",
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
-
