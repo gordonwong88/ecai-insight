@@ -448,26 +448,20 @@ business_implications = [
     "Be cautious with deep discounts; test promotions with clear targets and measure revenue per sale (not just volume).",
 ]
 
-# Render Business Summary card
-st.markdown(
-    "<div class='ec-card'>"
-    "<h3>Business Summary</h3>"
-    + "".join([f"<p>• {line}</p>" for line in business_summary])
-    + "<p class='ec-hint'>Start here. This section explains the story before you look at any charts.</p>"
-    "</div>",
-    unsafe_allow_html=True,
-)
+# Render Business Summary card (safe HTML string)
+summary_html = "<div class='ec-card'><h3>Business Summary</h3>" + "".join(
+    [f"<p>• {line}</p>" for line in business_summary]
+) + "<p class='ec-hint'>Start here. This section explains the story before you look at any charts.</p></div>"
+
+st.markdown(summary_html, unsafe_allow_html=True)
 
 st.divider()
 
-st.markdown(
-    "<div class='ec-card'>"
-    "<h3>What This Means for the Business</h3>"
-    "<p><b>What to focus on next</b></p>"
-    + "".join([f"<p>• {line}</p>" for line in business_implications])
-    "</div>",
-    unsafe_allow_html=True,
-)
+implications_html = "<div class='ec-card'><h3>What This Means for the Business</h3><p><b>What to focus on next</b></p>" + "".join(
+    [f"<p>• {line}</p>" for line in business_implications]
+) + "</div>"
+
+st.markdown(implications_html, unsafe_allow_html=True)
 
 st.divider()
 
