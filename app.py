@@ -8,6 +8,7 @@
 # - kaleido (Plotly image export for PDF/PPT charts)
 
 import io
+import textwrap
 from datetime import datetime
 from typing import Optional, List, Tuple, Dict
 
@@ -194,114 +195,146 @@ def build_insights(df: pd.DataFrame, date_col: Optional[str], revenue_col: str,
                    store_col: Optional[str], category_col: Optional[str],
                    channel_col: Optional[str], discount_col: Optional[str],
                    cogs_col: Optional[str]) -> Dict[str, List[str]]:
+    """
+    Founder-language insights for a sales / retail dataset.
+    Output is plain text (no markdown **), so it works cleanly in UI + PDF/PPT.
+    """
     bullets_summary: List[str] = []
     bullets_money: List[str] = []
     bullets_risk: List[str] = []
     bullets_improve: List[str] = []
     bullets_next: List[str] = []
 
-    # totals
     rev = safe_to_numeric(df[revenue_col]).dropna()
     total_rev = float(rev.sum()) if len(rev) else np.nan
+    n_rows = int(len(df))
 
-    # store concentration
+    # ---- Store performance & concentration
+    store_agg = None
     top_store_name = None
     top_store_rev = None
-    conc2 = np.nan
+    top2_share = np.nan
     if store_col and store_col in df.columns:
         store_agg = df.groupby(store_col)[revenue_col].apply(lambda s: safe_to_numeric(s).sum(min_count=1)).sort_values(ascending=False)
         if len(store_agg):
             top_store_name = str(store_agg.index[0])
             top_store_rev = float(store_agg.iloc[0])
-            conc2 = compute_concentration(store_agg, top_n=2)
+            top2_share = compute_concentration(store_agg, top_n=2)
 
-            if not np.isnan(conc2):
-                bullets_summary.append(
-                    f"Revenue is concentrated in a small number of stores, led by **{top_store_name}** (top two contribute ~**{conc2*100:.0f}%** of total)."
-                )
-            else:
-                bullets_summary.append(
-                    f"Top store is **{top_store_name}** with total revenue **{human_money(top_store_rev)}**."
-                )
+    if top_store_name and top_store_rev is not None:
+        bullets_summary.append(f"Your best-performing store is {top_store_name} (about {human_money(top_store_rev)} in revenue).")
+        if not np.isnan(top2_share):
+            bullets_summary.append(f"Revenue is concentrated: the top two stores contribute roughly {top2_share*100:.0f}% of sales (keep them strong).")
+        else:
+            bullets_summary.append("Revenue is concentrated in a small number of stores (focus attention on the top locations).")
+    elif not np.isnan(total_rev):
+        bullets_summary.append(f"Total revenue in this dataset is {human_money(total_rev)} across {n_rows:,} transactions.")
 
-            bullets_money.append(f"**{top_store_name}** is the largest contributor (**{human_money(top_store_rev)}**).")
-            if not np.isnan(conc2):
-                bullets_money.append("A small group of stores accounts for a disproportionate share of revenue (winner‑takes‑more pattern).")
-
-    # trend
-    if date_col:
+    # ---- Trend (sales per day)
+    if date_col and date_col in df.columns:
         tmp = df[[date_col, revenue_col]].copy()
         tmp[date_col] = pd.to_datetime(tmp[date_col], errors="coerce", infer_datetime_format=True)
         tmp[revenue_col] = safe_to_numeric(tmp[revenue_col])
-        ts = tmp.dropna(subset=[date_col]).groupby(pd.Grouper(key=date_col, freq="D"))[revenue_col].sum(min_count=1).dropna().sort_index()
-        if len(ts) >= 5:
-            first = float(ts.iloc[0])
-            last = float(ts.iloc[-1])
-            if first > 0:
-                pct = (last / first - 1.0) * 100.0
-                bullets_summary.append(f"Overall sales moved from **{human_money(first)}** to **{human_money(last)}** (approx. **{pct:.1f}%**).")
+        tmp = tmp.dropna(subset=[date_col, revenue_col])
+        if len(tmp) >= 10:
+            daily = tmp.groupby(pd.Grouper(key=date_col, freq="D"))[revenue_col].sum(min_count=1).dropna()
+            if len(daily) >= 7:
+                first = float(daily.iloc[:3].mean())
+                last = float(daily.iloc[-3:].mean())
+                if first > 0:
+                    pct = (last / first - 1.0) * 100.0
+                    bullets_summary.append(f"Sales are trending up: daily revenue moved from about {human_money(first)} to {human_money(last)} (around {pct:.0f}% change).")
+                else:
+                    bullets_summary.append("Sales show clear day-to-day movement — use the trend chart to spot spikes and dips.")
+            # peak day
+            if len(daily):
+                peak_day = daily.idxmax()
+                peak_val = float(daily.max())
+                bullets_money.append(f"Best day in the period was {peak_day.strftime('%Y-%m-%d')} with about {human_money(peak_val)} revenue.")
 
-    # volatility: store-level CV on daily totals
-    top_cv_store = None
-    top_cv_val = None
-    if store_col and date_col:
+    # ---- Category / Channel mix
+    if category_col and category_col in df.columns:
+        cat_agg = df.groupby(category_col)[revenue_col].apply(lambda s: safe_to_numeric(s).sum(min_count=1)).sort_values(ascending=False)
+        if len(cat_agg):
+            bullets_money.append(f"Top category by revenue is {str(cat_agg.index[0])} (about {human_money(float(cat_agg.iloc[0]))}).")
+
+    if channel_col and channel_col in df.columns:
+        ch_agg = df.groupby(channel_col)[revenue_col].apply(lambda s: safe_to_numeric(s).sum(min_count=1)).sort_values(ascending=False)
+        if len(ch_agg):
+            bullets_money.append(f"Strongest channel is {str(ch_agg.index[0])} (about {human_money(float(ch_agg.iloc[0]))} revenue).")
+
+    # ---- Volatility (risk) by store / channel
+    if store_col and date_col and store_col in df.columns and date_col in df.columns:
         tmp = df[[date_col, store_col, revenue_col]].copy()
         tmp[date_col] = pd.to_datetime(tmp[date_col], errors="coerce", infer_datetime_format=True)
         tmp[revenue_col] = safe_to_numeric(tmp[revenue_col])
-        g = tmp.dropna(subset=[date_col]).groupby([store_col, pd.Grouper(key=date_col, freq="D")])[revenue_col].sum(min_count=1).reset_index()
-        if len(g):
-            cvs = g.groupby(store_col)[revenue_col].apply(coeff_var).sort_values(ascending=False)
-            if len(cvs) and not np.isnan(float(cvs.iloc[0])):
-                top_cv_store = str(cvs.index[0])
-                top_cv_val = float(cvs.iloc[0])
-                bullets_summary.append(f"Some stores are volatile (e.g., **{top_cv_store}** shows large day‑to‑day swings; volatility score ≈ **{top_cv_val:.2f}**).")
-                bullets_risk.append(f"Performance is uneven — **{top_cv_store}** shows the largest variability, which makes forecasting harder.")
-                bullets_risk.append("Revenue concentration is high — losing performance in the top stores materially impacts total results.")
+        tmp = tmp.dropna(subset=[date_col, store_col])
+        if len(tmp) >= 30:
+            daily_store = tmp.groupby([store_col, pd.Grouper(key=date_col, freq="D")])[revenue_col].sum(min_count=1).reset_index()
+            cvs = daily_store.groupby(store_col)[revenue_col].apply(coeff_var).dropna().sort_values(ascending=False)
+            if len(cvs):
+                most_volatile = str(cvs.index[0])
+                cv_val = float(cvs.iloc[0])
+                bullets_risk.append(f"Some locations are inconsistent: {most_volatile} swings the most day-to-day (stability score {cv_val:.2f}).")
+                bullets_risk.append("If results feel ‘random’, it’s usually operational (stock, staffing, promotion discipline).")
 
-    # discount effectiveness: revenue per sale by band
+    if channel_col and date_col and channel_col in df.columns and date_col in df.columns:
+        tmp = df[[date_col, channel_col, revenue_col]].copy()
+        tmp[date_col] = pd.to_datetime(tmp[date_col], errors="coerce", infer_datetime_format=True)
+        tmp[revenue_col] = safe_to_numeric(tmp[revenue_col])
+        tmp = tmp.dropna(subset=[date_col, channel_col])
+        if len(tmp) >= 30:
+            daily_ch = tmp.groupby([channel_col, pd.Grouper(key=date_col, freq="D")])[revenue_col].sum(min_count=1).reset_index()
+            cvs = daily_ch.groupby(channel_col)[revenue_col].apply(coeff_var).dropna().sort_values(ascending=False)
+            if len(cvs):
+                bullets_risk.append(f"Channel stability differs — the most volatile channel is {str(cvs.index[0])} (score {float(cvs.iloc[0]):.2f}).")
+
+    # ---- Discount effectiveness (improve)
     if discount_col and discount_col in df.columns:
         tmp = df[[discount_col, revenue_col]].copy()
         tmp[discount_col] = safe_to_numeric(tmp[discount_col])
         tmp[revenue_col] = safe_to_numeric(tmp[revenue_col])
         tmp = tmp.dropna(subset=[discount_col, revenue_col])
         if len(tmp) >= 30:
-            tmp["_band"] = discount_band_from_rate(tmp[discount_col])
-            band_avg = tmp.groupby("_band")[revenue_col].mean().reindex(DISCOUNT_ORDER)
-            if band_avg.notna().sum() >= 3:
-                best_band = band_avg.idxmax()
-                worst_band = band_avg.idxmin()
-                bullets_summary.append(
-                    f"Discounts around **{best_band}** align with higher average revenue per sale, while deeper discounts (e.g., **{worst_band}**) appear less efficient."
-                )
-                bullets_improve.append("Discounting beyond **15–20%** may reduce revenue efficiency; treat deep discounts as experiments with clear targets.")
-                bullets_improve.append("Use **revenue per sale** as a guardrail metric when testing promotions (not only volume).")
+            tmp["_band"] = discount_band_from_rate(tmp[discount_col]).astype(str)
+            tmp = tmp[tmp["_band"].isin(DISCOUNT_ORDER)]
+            band_avg = tmp.groupby("_band")[revenue_col].mean().reindex(DISCOUNT_ORDER).dropna()
+            if len(band_avg) >= 2:
+                best_band = str(band_avg.idxmax())
+                bullets_improve.append(f"Discounts work best around {best_band} in this dataset — treat deeper discounts as controlled experiments.")
+                bullets_improve.append("Track ‘revenue per sale’ (not just volume) when running promotions.")
 
-    # category top
-    if category_col and category_col in df.columns:
-        cat_agg = df.groupby(category_col)[revenue_col].apply(lambda s: safe_to_numeric(s).sum(min_count=1)).sort_values(ascending=False)
-        if len(cat_agg):
-            top_cat = str(cat_agg.index[0])
-            top_cat_rev = float(cat_agg.iloc[0])
-            bullets_money.append(f"Top category by revenue is **{top_cat}** (**{human_money(top_cat_rev)}**).")
-
-    # gross margin (directional)
+    # ---- Profit proxy (if COGS exists)
     if cogs_col and cogs_col in df.columns:
-        rev_s = safe_to_numeric(df[revenue_col])
-        cogs_s = safe_to_numeric(df[cogs_col])
-        valid = rev_s.notna() & cogs_s.notna() & (rev_s != 0)
-        if valid.sum() >= 30:
-            gm = (rev_s[valid] - cogs_s[valid]) / rev_s[valid]
-            gm_avg = float(gm.mean())
-            bullets_improve.append(f"Average gross margin is approximately **{gm_avg*100:.1f}%** (directional). Consider reviewing margin by store/category.")
+        cogs = safe_to_numeric(df[cogs_col]).dropna()
+        if len(cogs) and len(rev):
+            margin = (rev - cogs).dropna()
+            if len(margin):
+                gm = float(margin.mean())
+                bullets_improve.append(f"Average gross profit per sale (Revenue − COGS) is about {human_money(gm)} (directional). Consider reviewing margin by store/category.")
 
-    # next focus (always)
-    bullets_next.append("Strengthen execution in top stores (inventory availability, staffing, promotion discipline).")
-    bullets_next.append("Reduce volatility first — inconsistent performance is often operational.")
-    bullets_next.append("Test promotions with clear targets; stop what doesn’t improve revenue per sale.")
+    # ---- Fill to ~10 summary bullets (human, actionable)
+    # Ensure we have enough bullets for the top section
+    if not np.isnan(total_rev):
+        bullets_summary.insert(0, f"Quick view: {human_money(total_rev)} revenue from {n_rows:,} transactions.")
 
-    # If summary too short, add general fallback
-    if len(bullets_summary) < 3 and not np.isnan(total_rev):
-        bullets_summary.append(f"Total revenue in the dataset is **{human_money(total_rev)}** across **{len(df):,}** transactions/rows.")
+    # Owner-language “focus next”
+    bullets_next.extend([
+        "Double down on top stores: ensure stock availability, staffing, and promotion discipline are strong where revenue is concentrated.",
+        "Stabilise volatile locations before pushing aggressive growth targets.",
+        "Treat discounts as experiments with a clear goal (e.g., improve revenue per sale) and stop what doesn’t work."
+    ])
+
+    # Keep Business Summary ~10 bullets (no wall of text)
+    bullets_summary = bullets_summary[:10]
+
+    # Safety: if a section is empty, provide a gentle default
+    if not bullets_money:
+        bullets_money = ["Revenue mix charts show where sales are coming from (stores, categories, channels)."]
+    if not bullets_risk:
+        bullets_risk = ["Stability looks reasonable overall — keep an eye on sudden spikes/dips in the trend charts."]
+    if not bullets_improve:
+        bullets_improve = ["Use the pricing chart to decide where discounting helps (and where it hurts)."]
 
     return {
         "summary": bullets_summary,
@@ -310,6 +343,7 @@ def build_insights(df: pd.DataFrame, date_col: Optional[str], revenue_col: str,
         "improve": bullets_improve,
         "next": bullets_next,
     }
+
 
 # -----------------------------
 # Exports
@@ -678,13 +712,21 @@ if store_col and date_col:
     daily_store = tmp.groupby([store_col, pd.Grouper(key=date_col, freq="D")])[revenue_col].sum(min_count=1).reset_index()
     top_stores = daily_store.groupby(store_col)[revenue_col].sum().sort_values(ascending=False).head(5).index.tolist()
 
+    # consistent colours across the 5 mini charts
+    store_color_map = {str(s): TABLEAU10[i % len(TABLEAU10)] for i, s in enumerate(top_stores)}
+
     # layout 2 columns, last row single
     colsA, colsB = st.columns(2)
     for idx, sname in enumerate(top_stores):
         sub = daily_store[daily_store[store_col] == sname].sort_values(date_col)
         fig = px.line(sub, x=date_col, y=revenue_col, markers=False)
-        fig.update_traces(line=dict(width=3))
-        fig.update_layout(title=str(sname), xaxis_title="Date", yaxis_title="Revenue", showlegend=False)
+        # one store = one colour (Tableau-like)
+        line_color = store_color_map.get(str(sname), TABLEAU10[idx % len(TABLEAU10)])
+        fig.update_traces(line=dict(width=3, color=line_color))
+        # remove axis titles to reduce clutter; small multiples should be clean
+        fig.update_layout(title=str(sname), xaxis_title=None, yaxis_title=None, showlegend=False, margin=dict(l=10,r=10,t=35,b=10))
+        fig.update_xaxes(automargin=True)
+        fig.update_yaxes(automargin=True)
         fig.update_yaxes(tickprefix="$", separatethousands=True)
         fig_style(fig)
         fig.update_layout(height=260)
@@ -720,7 +762,8 @@ if discount_col:
             category_orders={"Discount band": DISCOUNT_ORDER},
         )
         disc_fig.update_traces(texttemplate="%{text:$,.0f}", textposition="outside", cliponaxis=False)
-        disc_fig.update_layout(showlegend=False, xaxis_title="Discount band", yaxis_title="Average revenue per sale")
+        disc_fig.update_xaxes(type="category", tickangle=0)
+        disc_fig.update_layout(showlegend=False, xaxis_title="Discount band", yaxis_title="Average revenue per sale", bargap=0.25)
         disc_fig.update_yaxes(tickprefix="$", separatethousands=True)
         fig_style(disc_fig)
         disc_fig.update_layout(height=340)
@@ -780,6 +823,7 @@ if channel_col and date_col:
         category_orders={"Channel": cvs["Channel"].tolist()},
     )
     fig.update_traces(texttemplate="%{text:.2f}", textposition="outside", cliponaxis=False)
+    fig.update_xaxes(type="category", tickangle=0)
     fig.update_layout(showlegend=False, title="Volatility by Channel (higher = less stable)")
     fig_style(fig)
     fig.update_layout(height=320)
