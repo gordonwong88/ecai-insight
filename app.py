@@ -173,8 +173,8 @@ def make_line_trend(
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
         height=height,
-        title=None,
-        margin=dict(l=45, r=20, t=20, b=45),
+        title=dict(text=title, x=0, xanchor="left"),
+        margin=dict(l=45, r=20, t=60, b=55),
     )
     fig.update_xaxes(title=None)
     fig.update_yaxes(title=None, rangemode="tozero")
