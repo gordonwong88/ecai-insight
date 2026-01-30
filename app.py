@@ -459,7 +459,17 @@ if len(band_mean) >= 2:
     fig_pricing.update_traces(texttemplate="%{text:$,.0f}", textposition="outside", cliponaxis=False)
     fig_pricing = fig_standard_layout(fig_pricing, title="Pricing Effectiveness", height=420)
     fig_pricing.update_layout(bargap=0.55, showlegend=False)
-    fig_pricing.update_xaxes(type="category", categoryorder="array", categoryarray=DISCOUNT_BANDS_ORDER, title="Discount band")
+    # Use only bands present to avoid gaps/misalignment on categorical axis
+    present_bands = [str(x) for x in pricing_df["Discount band"].astype(str).tolist()]
+    fig_pricing.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=present_bands,
+        tickmode="array",
+        tickvals=present_bands,
+        ticktext=present_bands,
+        title="Discount band"
+    )
     fig_pricing.update_yaxes(title="Average revenue per sale")
     charts_for_export.append(("Average Revenue per Sale by Discount Band", fig_pricing))
 
@@ -473,7 +483,16 @@ if cat_col:
     fig_cat.update_traces(texttemplate="%{text:$,.0f}", textposition="outside", cliponaxis=False)
     fig_cat = fig_standard_layout(fig_cat, title="Revenue by Category (Top)", height=360)
     fig_cat.update_layout(showlegend=False, bargap=0.55)
-    fig_cat.update_xaxes(type="category")
+    present_cats = [str(x) for x in cat_df["Category"].astype(str).tolist()]
+    fig_cat.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=present_cats,
+        tickmode="array",
+        tickvals=present_cats,
+        ticktext=present_cats,
+        title="Category"
+    )
     charts_for_export.append(("Revenue by Category (Top)", fig_cat))
 
 fig_ch = None
@@ -485,7 +504,16 @@ if channel_col:
     fig_ch.update_traces(texttemplate="%{text:$,.0f}", textposition="outside", cliponaxis=False)
     fig_ch = fig_standard_layout(fig_ch, title="Revenue by Channel (Top)", height=340)
     fig_ch.update_layout(showlegend=False, bargap=0.55)
-    fig_ch.update_xaxes(type="category")
+    present_channels = [str(x) for x in ch_df["Channel"].astype(str).tolist()]
+    fig_ch.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=present_channels,
+        tickmode="array",
+        tickvals=present_channels,
+        ticktext=present_channels,
+        title="Channel"
+    )
     charts_for_export.append(("Revenue by Channel (Top)", fig_ch))
 
 fig_cv_ch = None
@@ -504,7 +532,16 @@ if channel_col and df["_Date"].notna().sum() >= 10:
         fig_cv_ch.update_traces(texttemplate="%{text:.2f}", textposition="outside", cliponaxis=False)
         fig_cv_ch = fig_standard_layout(fig_cv_ch, title="Volatility by Channel (higher = less stable)", height=320)
         fig_cv_ch.update_layout(showlegend=False, bargap=0.55)
-        fig_cv_ch.update_xaxes(type="category")
+        present_channels = [str(x) for x in cv_df["Channel"].astype(str).tolist()]
+        fig_cv_ch.update_xaxes(
+            type="category",
+            categoryorder="array",
+            categoryarray=present_channels,
+            tickmode="array",
+            tickvals=present_channels,
+            ticktext=present_channels,
+            title="Channel"
+        )
         charts_for_export.append(("Volatility by Channel", fig_cv_ch))
 
 
@@ -716,8 +753,6 @@ def make_talking_deck_pptx(title: str, summary_bullets: List[str], figs: List[Tu
     p = tf.paragraphs[0]
     p.text = "Sales performance briefing (executive-ready)"
     p.font.size = Pt(18)
-    p.font.color.rgb = None
-
     add_notes(slide, summary_bullets[:6])
 
     # One insight per slide
