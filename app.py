@@ -18,6 +18,7 @@ import io
 import re
 import textwrap
 from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -171,39 +172,17 @@ def fmt_pct(x: float, digits: int = 0) -> str:
     except Exception:
         return "—"
 
+@dataclass
 class RetailModel:
-    """Lightweight container for the cleaned dataset + detected column mapping.
-
-    We intentionally avoid @dataclass here to keep compatibility stable across
-    environments (Streamlit Cloud may run newer Python versions).
-    """
-
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        col_date: str,
-        col_store: str,
-        col_category: str,
-        col_revenue: str,
-        col_cogs: Optional[str] = None,
-        col_units: Optional[str] = None,
-        col_discount: Optional[str] = None,
-        col_channel: Optional[str] = None,
-        col_payment: Optional[str] = None,
-        col_returned: Optional[str] = None,
-    ):
-        self.df = df
-        self.col_date = col_date
-        self.col_store = col_store
-        self.col_category = col_category
-        self.col_revenue = col_revenue
-        self.col_cogs = col_cogs
-        self.col_units = col_units
-        self.col_discount = col_discount
-        self.col_channel = col_channel
-        self.col_payment = col_payment
-        self.col_returned = col_returned
-
+    df: pd.DataFrame
+    col_date: str
+    col_store: str
+    col_revenue: str
+    col_category: Optional[str] = None
+    col_channel: Optional[str] = None
+    col_payment: Optional[str] = None
+    col_discount: Optional[str] = None
+    col_qty: Optional[str] = None
 
 def prep_retail(df_raw: pd.DataFrame) -> RetailModel:
     df = df_raw.copy()
