@@ -17,7 +17,6 @@ from __future__ import annotations
 import io
 import re
 import textwrap
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -141,7 +140,6 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
 # -----------------------------
 # Data prep
 # -----------------------------
-@dataclass
 
 
 # -----------------------------
