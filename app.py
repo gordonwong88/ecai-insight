@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 import textwrap
 from typing import Dict, List, Optional, Tuple
@@ -26,6 +27,12 @@ import streamlit as st
 
 import plotly.graph_objects as go
 import plotly.express as px
+
+# Optional: Ask AI chat
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
 # Export deps (optional at runtime)
 from pptx import Presentation
@@ -171,6 +178,31 @@ def fmt_pct(x: float, digits: int = 0) -> str:
         return f"{x*100:.{digits}f}%"
     except Exception:
         return "—"
+
+
+def md_to_plain(s: str) -> str:
+    """Remove simple Markdown markers for clean exports (PDF/PPT)."""
+    if s is None:
+        return ""
+    s = str(s)
+    s = re.sub(r"\*\*(.*?)\*\*", r"\1", s)
+    s = re.sub(r"`([^`]*)`", r"\1", s)
+    # Leave single * alone unless it's paired (avoid nuking multiplication signs in data)
+    s = s.replace("**", "")
+    return s
+
+def md_to_plain_lines(s: str) -> List[str]:
+    """Split into lines and clean markdown per-line, keeping newlines."""
+    if s is None:
+        return []
+    lines = str(s).split("\n")
+    out = []
+    for line in lines:
+        line = md_to_plain(line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            out.append(line)
+    return out
 
 @dataclass
 class RetailModel:
@@ -697,7 +729,7 @@ def build_pdf_exec_brief(
 
     story.append(Paragraph("<b>Business Summary</b>", styles["ECBody"]))
     for p in summary_points[:12]:
-        story.append(Paragraph(f"• {p}", styles["ECBody"]))
+        story.append(Paragraph(f"• {md_to_plain(p)}", styles["ECBody"]))
     story.append(Spacer(1, 0.20*inch))
 
     story.append(Paragraph("<b>Key Charts & Commentary</b>", styles["ECBody"]))
@@ -708,10 +740,8 @@ def build_pdf_exec_brief(
         story.append(Paragraph(f"<b>{ctitle}</b>", styles["ECBody"]))
         # Commentary
         if commentary:
-            for line in commentary.split("\n"):
-                line = line.strip()
-                if line:
-                    story.append(Paragraph(f"• {line}", styles["ECBody"]))
+            for line in md_to_plain_lines(commentary):
+                story.append(Paragraph(f"• {line}", styles["ECBody"]))
         story.append(Spacer(1, 0.10*inch))
         # Image
         png = fig_to_png_bytes(fig, scale=2)
@@ -766,7 +796,7 @@ def build_ppt_talking_deck(
         btf.word_wrap = True
         btf.clear()
         if bullets:
-            lines = [l.strip("-• ").strip() for l in bullets.split("\n") if l.strip()]
+            lines = [md_to_plain(l).strip("-• ").strip() for l in str(bullets).split("\n") if str(l).strip()]
             # Title for bullets
             p0 = btf.paragraphs[0]
             p0.text = "Commentary"
@@ -977,7 +1007,107 @@ with st.expander("Advanced analysis (optional)"):
         fig_vol, _ = vol_ch
         st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
 
+
+# -----------------------------
+# Ask AI (CEO-level Q&A)
+# -----------------------------
+st.subheader("Ask AI (CEO Q&A)")
+st.markdown(
+    "<div class='ec-subtle'>Ask questions about your data (e.g., “Why did revenue drop?” “Which store should I fix first?”). "
+    "Answers are generated from your uploaded dataset summary. </div>",
+    unsafe_allow_html=True,
+)
+
+def build_ai_context(m: RetailModel) -> str:
+    df = m.df
+    dmin, dmax = df[m.col_date].min(), df[m.col_date].max()
+    total_rev = float(df[m.col_revenue].sum())
+    store_rev = df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(10)
+    ctx = []
+    ctx.append(f"Data period: {dmin.date()} to {dmax.date()} ({len(df):,} rows)")
+    ctx.append(f"Total revenue: {fmt_currency(total_rev)}")
+    ctx.append("Top stores by revenue (top 10):")
+    for k, v in store_rev.items():
+        ctx.append(f"- {k}: {fmt_currency(float(v))}")
+    if m.col_category:
+        cat_rev = df.groupby(m.col_category)[m.col_revenue].sum().sort_values(ascending=False).head(10)
+        ctx.append("Top categories by revenue (top 10):")
+        for k, v in cat_rev.items():
+            ctx.append(f"- {k}: {fmt_currency(float(v))}")
+    if m.col_channel:
+        ch_rev = df.groupby(m.col_channel)[m.col_revenue].sum().sort_values(ascending=False).head(10)
+        ctx.append("Top channels by revenue (top 10):")
+        for k, v in ch_rev.items():
+            ctx.append(f"- {k}: {fmt_currency(float(v))}")
+    ctx.append("Business summary bullets:")
+    for p in summary_points[:10]:
+        ctx.append(f"- {md_to_plain(p)}")
+    return "\n".join(ctx)
+
+# Init chat state
+if "ai_messages" not in st.session_state:
+    st.session_state.ai_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are EC-AI, an executive analytics consultant. "
+                "Respond in a CEO-ready style: Insight → Evidence → Action. "
+                "Be concise, practical, and avoid jargon. "
+                "If the question cannot be answered from the provided context, say what is missing."
+            ),
+        }
+    ]
+
+# Render chat
+for msg in st.session_state.ai_messages:
+    if msg["role"] == "system":
+        continue
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+user_q = st.chat_input("Ask EC-AI… (e.g., 'What should I focus on next week?')")
+
+if user_q:
+    st.session_state.ai_messages.append({"role": "user", "content": user_q})
+    with st.chat_message("user"):
+        st.markdown(user_q)
+
+    # Try to answer (requires OPENAI_API_KEY in Streamlit secrets or env)
+    api_key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
+    if api_key is None:
+        api_key = os.environ.get("OPENAI_API_KEY")
+
+    if OpenAI is None or not api_key:
+        with st.chat_message("assistant"):
+            st.info(
+                "Ask AI is not configured yet. Add `OPENAI_API_KEY` in Streamlit Secrets (or as an environment variable) to enable it."
+            )
+    else:
+        try:
+            client = OpenAI(api_key=api_key)
+            context = build_ai_context(m)
+            prompt = (
+                "Use the following dataset context to answer the user's question.\n\n"
+                f"{context}\n\n"
+                "Now answer the question with: Insight → Evidence → Action (3 bullets max each)."
+            )
+            messages = st.session_state.ai_messages + [{"role": "user", "content": prompt}]
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.3,
+            )
+            ans = resp.choices[0].message.content.strip()
+            st.session_state.ai_messages.append({"role": "assistant", "content": ans})
+            with st.chat_message("assistant"):
+                st.markdown(ans)
+        except Exception as e:
+            with st.chat_message("assistant"):
+                st.error("Ask AI failed.")
+                st.code(str(e))
+
 st.divider()
+
 
 # -----------------------------
 # Exports
