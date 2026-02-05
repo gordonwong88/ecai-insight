@@ -1,16 +1,43 @@
 # EC-AI Insight — Retail Sales MVP (Founder-first)
-# -------------------------------------------------
-# This Streamlit app is intentionally opinionated:
-# Meaning first, charts second. Advanced analytics are optional.
-#
-# Requirements (recommended pins for Streamlit Cloud):
-#   streamlit
-#   pandas
-#   numpy
-#   plotly==5.22.0
-#   kaleido==0.2.1
-#   python-pptx
-#   reportlab
+
+def clean_display_text(s: str) -> str:
+    """Clean model/AI text for on-screen executive readability.
+
+    Goal: remove markdown/math artifacts and drop any corrupted fragments.
+    """
+    if not s:
+        return s
+
+    raw = s.strip()
+    low = raw.lower()
+
+    # Drop known corrupted fragments (example: '(1.7K **persale).Deepdiscount **10-201.1K).')
+    if "persale" in low or "deepdiscount" in low:
+        return ""
+
+    # Remove common markdown / code artifacts
+    s = raw
+    s = s.replace("**", "").replace("*", "")
+    s = s.replace("`", "").replace("```", "")
+    s = s.replace("_", "")
+
+    # Remove LaTeX-ish inline math: \( ... \) or $...$
+    s = re.sub(r"\\\((.*?)\\\)", "", s)
+    s = re.sub(r"\$[^\$]*\$", "", s)
+
+    # Remove unmatched parentheses/brackets leftovers and repeated punctuation
+    s = s.replace("(", "").replace(")", "")
+    s = re.sub(r"[\[\]{}<>]", "", s)
+    s = re.sub(r"[\.]{2,}", ".", s)
+
+    # If the line is mostly symbols/numbers after cleaning, drop it
+    letters = sum(ch.isalpha() for ch in s)
+    if letters < 4:
+        return ""
+
+    # Normalize whitespace
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    return s
 
 from __future__ import annotations
 
@@ -693,13 +720,13 @@ def insight_block(title: str, what: List[str], why: List[str], action: List[str]
     st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
     st.markdown("**What this shows**")
     for w in what:
-        st.markdown(f"- {w}")
+        st.markdown(f"- {clean_display_text(w)}")
     st.markdown("**Why it matters**")
     for w in why:
-        st.markdown(f"- {w}")
+        st.markdown(f"- {clean_display_text(w)}")
     st.markdown("**What to do**")
     for a in action:
-        st.markdown(f"- {a}")
+        st.markdown(f"- {clean_display_text(a)}")
     st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 
 # -----------------------------
@@ -727,9 +754,12 @@ def build_pdf_exec_brief(
     story.append(Paragraph(subtitle, styles["ECSub"]))
     story.append(Spacer(1, 0.18*inch))
 
-    story.append(Paragraph("<b>Business Summary</b>", styles["ECBody"]))
+    story.append(Paragraph("<b>Executive Summary</b>", styles["ECBody"]))
     for p in summary_points[:12]:
-        story.append(Paragraph(f"• {md_to_plain(p)}", styles["ECBody"]))
+        _t = md_to_plain(p)
+        _t = clean_display_text(_t)
+        if _t:
+            story.append(Paragraph(f"• {_t}", styles["ECBody"]))
     story.append(Spacer(1, 0.20*inch))
 
     story.append(Paragraph("<b>Key Charts & Commentary</b>", styles["ECBody"]))
@@ -870,13 +900,15 @@ except Exception as e:
 df = m.df
 
 # -----------------------------
-# Business Summary (DEFAULT)
+# Executive Summary (DEFAULT)
 # -----------------------------
 summary_points = build_business_summary_points(m)
 
-st.subheader("Business Summary")
+st.subheader("Executive Summary")
 for p in summary_points[:12]:
-    st.markdown(f"• {p}")
+    _t = clean_display_text(p)
+    if _t:
+        st.markdown(f"• {_t}")
 
 st.divider()
 
@@ -890,7 +922,7 @@ ins_sections = build_business_insights_sections(m)
 for i, (sec_title, bullets) in enumerate(ins_sections.items()):
     st.markdown(f"#### {sec_title}")
     for b in bullets:
-        st.markdown(f"- {b}")
+        st.markdown(f"- {clean_display_text(b)}")
     if i < len(ins_sections) - 1:
         st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 
