@@ -1042,12 +1042,44 @@ with st.expander("Advanced analysis (optional)"):
 # -----------------------------
 # Ask AI (CEO-level Q&A)
 # -----------------------------
-st.subheader("Ask AI (CEO Q&A)")
-st.markdown(
-    "<div class='ec-subtle'>Ask questions about your data (e.g., “Why did revenue drop?” “Which store should I fix first?”). "
-    "Answers are generated from your uploaded dataset summary. </div>",
-    unsafe_allow_html=True,
+st.subheader("
+st.markdown("### Ask AI (CEO Q&A)")
+st.caption(
+    "Ask questions about your data (e.g., 'Why did revenue drop?' "
+    "'Which store should I fix first?'). "
+    "Answers are generated from your uploaded dataset summary."
 )
+
+# Chat history
+if "ai_messages" not in st.session_state:
+    st.session_state.ai_messages = []
+
+for msg in st.session_state.ai_messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# Input box (always visible)
+user_q = st.chat_input("Ask a CEO-level question about your business")
+
+if user_q:
+    st.session_state.ai_messages.append({"role": "user", "content": user_q})
+    with st.chat_message("user"):
+        st.markdown(user_q)
+
+    with st.chat_message("assistant"):
+        if not OPENAI_API_KEY:
+            answer = (
+                "AI is not configured yet. "
+                "Please add your OPENAI_API_KEY in Streamlit Secrets."
+            )
+        else:
+            answer = ask_ai_ceo_answer(user_q, executive_context)
+
+        st.markdown(answer)
+        st.session_state.ai_messages.append(
+            {"role": "assistant", "content": answer}
+        )
+
 
 def build_ai_context(m: RetailModel) -> str:
     df = m.df
