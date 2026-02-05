@@ -1,34 +1,47 @@
 from __future__ import annotations
+# EC-AI Insight — Retail Sales MVP (Founder-first)
+
 def clean_display_text(s: str) -> str:
-    """Clean AI / model text for executive display."""
+    """Clean model/AI text for on-screen executive readability.
+
+    Goal: remove markdown/math artifacts and drop any corrupted fragments.
+    """
     if not s:
         return s
+
     raw = s.strip()
     low = raw.lower()
+
+    # Drop known corrupted fragments (example: '(1.7K **persale).Deepdiscount **10-201.1K).')
     if "persale" in low or "deepdiscount" in low:
         return ""
-    s = raw.replace("**", "").replace("*", "").replace("`", "")
-    s = s.replace("(", "").replace(")", "")
-    import re
+
+    # Remove common markdown / code artifacts
+    s = raw
+    s = s.replace("**", "").replace("*", "")
+    s = s.replace("`", "").replace("```", "")
+    s = s.replace("_", "")
+
+    # Remove LaTeX-ish inline math: \( ... \) or $...$
+    s = re.sub(r"\\\((.*?)\\\)", "", s)
     s = re.sub(r"\$[^\$]*\$", "", s)
-    s = re.sub(r"\s{2,}", " ", s).strip()
+
+    # Remove unmatched parentheses/brackets leftovers and repeated punctuation
+    s = s.replace("(", "").replace(")", "")
+    s = re.sub(r"[\[\]{}<>]", "", s)
+    s = re.sub(r"[\.]{2,}", ".", s)
+
+    # If the line is mostly symbols/numbers after cleaning, drop it
     letters = sum(ch.isalpha() for ch in s)
-    return s if letters >= 4 else ""
-# EC-AI Insight — Retail Sales MVP (Founder-first)
-# -------------------------------------------------
-# This Streamlit app is intentionally opinionated:
-# Meaning first, charts second. Advanced analytics are optional.
-#
-# Requirements (recommended pins for Streamlit Cloud):
-#   streamlit
-#   pandas
-#   numpy
-#   plotly==5.22.0
-#   kaleido==0.2.1
-#   python-pptx
-#   reportlab
+    if letters < 4:
+        return ""
+
+    # Normalize whitespace
+    s = re.sub(r"\s{2,}", " ", s).strip()
+    return s
 
 import io
+import os
 import re
 import textwrap
 from typing import Dict, List, Optional, Tuple
@@ -40,6 +53,12 @@ import streamlit as st
 
 import plotly.graph_objects as go
 import plotly.express as px
+
+# Optional: Ask AI chat
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None
 
 # Export deps (optional at runtime)
 from pptx import Presentation
@@ -185,6 +204,31 @@ def fmt_pct(x: float, digits: int = 0) -> str:
         return f"{x*100:.{digits}f}%"
     except Exception:
         return "—"
+
+
+def md_to_plain(s: str) -> str:
+    """Remove simple Markdown markers for clean exports (PDF/PPT)."""
+    if s is None:
+        return ""
+    s = str(s)
+    s = re.sub(r"\*\*(.*?)\*\*", r"\1", s)
+    s = re.sub(r"`([^`]*)`", r"\1", s)
+    # Leave single * alone unless it's paired (avoid nuking multiplication signs in data)
+    s = s.replace("**", "")
+    return s
+
+def md_to_plain_lines(s: str) -> List[str]:
+    """Split into lines and clean markdown per-line, keeping newlines."""
+    if s is None:
+        return []
+    lines = str(s).split("\n")
+    out = []
+    for line in lines:
+        line = md_to_plain(line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            out.append(line)
+    return out
 
 @dataclass
 class RetailModel:
@@ -675,13 +719,13 @@ def insight_block(title: str, what: List[str], why: List[str], action: List[str]
     st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
     st.markdown("**What this shows**")
     for w in what:
-        st.markdown(f"- {w}")
+        st.markdown(f"- {clean_display_text(w)}")
     st.markdown("**Why it matters**")
     for w in why:
-        st.markdown(f"- {w}")
+        st.markdown(f"- {clean_display_text(w)}")
     st.markdown("**What to do**")
     for a in action:
-        st.markdown(f"- {a}")
+        st.markdown(f"- {clean_display_text(a)}")
     st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 
 # -----------------------------
@@ -711,7 +755,10 @@ def build_pdf_exec_brief(
 
     story.append(Paragraph("<b>Executive Summary</b>", styles["ECBody"]))
     for p in summary_points[:12]:
-        story.append(Paragraph(f"• {p}", styles["ECBody"]))
+        _t = md_to_plain(p)
+        _t = clean_display_text(_t)
+        if _t:
+            story.append(Paragraph(f"• {_t}", styles["ECBody"]))
     story.append(Spacer(1, 0.20*inch))
 
     story.append(Paragraph("<b>Key Charts & Commentary</b>", styles["ECBody"]))
@@ -722,10 +769,8 @@ def build_pdf_exec_brief(
         story.append(Paragraph(f"<b>{ctitle}</b>", styles["ECBody"]))
         # Commentary
         if commentary:
-            for line in commentary.split("\n"):
-                line = line.strip()
-                if line:
-                    story.append(Paragraph(f"• {line}", styles["ECBody"]))
+            for line in md_to_plain_lines(commentary):
+                story.append(Paragraph(f"• {line}", styles["ECBody"]))
         story.append(Spacer(1, 0.10*inch))
         # Image
         png = fig_to_png_bytes(fig, scale=2)
@@ -780,7 +825,7 @@ def build_ppt_talking_deck(
         btf.word_wrap = True
         btf.clear()
         if bullets:
-            lines = [l.strip("-• ").strip() for l in bullets.split("\n") if l.strip()]
+            lines = [md_to_plain(l).strip("-• ").strip() for l in str(bullets).split("\n") if str(l).strip()]
             # Title for bullets
             p0 = btf.paragraphs[0]
             p0.text = "Commentary"
@@ -860,7 +905,9 @@ summary_points = build_business_summary_points(m)
 
 st.subheader("Executive Summary")
 for p in summary_points[:12]:
-    st.markdown(f"• {p}")
+    _t = clean_display_text(p)
+    if _t:
+        st.markdown(f"• {_t}")
 
 st.divider()
 
@@ -874,7 +921,7 @@ ins_sections = build_business_insights_sections(m)
 for i, (sec_title, bullets) in enumerate(ins_sections.items()):
     st.markdown(f"#### {sec_title}")
     for b in bullets:
-        st.markdown(f"- {b}")
+        st.markdown(f"- {clean_display_text(b)}")
     if i < len(ins_sections) - 1:
         st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 
@@ -961,45 +1008,7 @@ if chn is not None:
 st.divider()
 
 # -----------------------------
-# 
-# ---------------- Ask AI (CEO Q&A) ----------------
-st.markdown("### Ask AI (CEO Q&A)")
-st.caption(
-    "Ask questions about your data (e.g., 'Why did revenue drop?' "
-    "'Which store should I fix first?'). "
-    "Answers are generated from your uploaded dataset summary."
-)
-
-if "ai_messages" not in st.session_state:
-    st.session_state.ai_messages = []
-
-for msg in st.session_state.ai_messages:
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-user_q = st.chat_input("Ask a CEO-level question about your business")
-
-if user_q:
-    st.session_state.ai_messages.append({"role": "user", "content": user_q})
-    with st.chat_message("user"):
-        st.markdown(user_q)
-
-    with st.chat_message("assistant"):
-        if not OPENAI_API_KEY:
-            answer = (
-                "AI is not configured yet. "
-                "Please add your OPENAI_API_KEY in Streamlit Secrets."
-            )
-        else:
-            answer = ask_ai_ceo_answer(user_q, executive_context)
-
-        st.markdown(answer)
-        st.session_state.ai_messages.append(
-            {"role": "assistant", "content": answer}
-        )
-
-
-Advanced analysis (COLLAPSED)
+# Advanced analysis (COLLAPSED)
 # -----------------------------
 with st.expander("Advanced analysis (optional)"):
     st.markdown("### Raw Data Preview")
@@ -1029,7 +1038,105 @@ with st.expander("Advanced analysis (optional)"):
         fig_vol, _ = vol_ch
         st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
 
+
+
+st.subheader("Ask AI (CEO Q&A)")
+st.markdown(
+    "<div class='ec-subtle'>Ask questions about your data (e.g., “Why did revenue drop?” “Which store should I fix first?”). "
+    "Answers are generated from your uploaded dataset summary. </div>",
+    unsafe_allow_html=True,
+)
+
+def build_ai_context(m: RetailModel) -> str:
+    df = m.df
+    dmin, dmax = df[m.col_date].min(), df[m.col_date].max()
+    total_rev = float(df[m.col_revenue].sum())
+    store_rev = df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(10)
+    ctx = []
+    ctx.append(f"Data period: {dmin.date()} to {dmax.date()} ({len(df):,} rows)")
+    ctx.append(f"Total revenue: {fmt_currency(total_rev)}")
+    ctx.append("Top stores by revenue (top 10):")
+    for k, v in store_rev.items():
+        ctx.append(f"- {k}: {fmt_currency(float(v))}")
+    if m.col_category:
+        cat_rev = df.groupby(m.col_category)[m.col_revenue].sum().sort_values(ascending=False).head(10)
+        ctx.append("Top categories by revenue (top 10):")
+        for k, v in cat_rev.items():
+            ctx.append(f"- {k}: {fmt_currency(float(v))}")
+    if m.col_channel:
+        ch_rev = df.groupby(m.col_channel)[m.col_revenue].sum().sort_values(ascending=False).head(10)
+        ctx.append("Top channels by revenue (top 10):")
+        for k, v in ch_rev.items():
+            ctx.append(f"- {k}: {fmt_currency(float(v))}")
+    ctx.append("Business summary bullets:")
+    for p in summary_points[:10]:
+        ctx.append(f"- {md_to_plain(p)}")
+    return "\n".join(ctx)
+
+# Init chat state
+if "ai_messages" not in st.session_state:
+    st.session_state.ai_messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are EC-AI, an executive analytics consultant. "
+                "Respond in a CEO-ready style: Insight → Evidence → Action. "
+                "Be concise, practical, and avoid jargon. "
+                "If the question cannot be answered from the provided context, say what is missing."
+            ),
+        }
+    ]
+
+# Render chat
+for msg in st.session_state.ai_messages:
+    if msg["role"] == "system":
+        continue
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+user_q = st.chat_input("Ask EC-AI… (e.g., 'What should I focus on next week?')")
+
+if user_q:
+    st.session_state.ai_messages.append({"role": "user", "content": user_q})
+    with st.chat_message("user"):
+        st.markdown(user_q)
+
+    # Try to answer (requires OPENAI_API_KEY in Streamlit secrets or env)
+    api_key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
+    if api_key is None:
+        api_key = os.environ.get("OPENAI_API_KEY")
+
+    if OpenAI is None or not api_key:
+        with st.chat_message("assistant"):
+            st.info(
+                "Ask AI is not configured yet. Add `OPENAI_API_KEY` in Streamlit Secrets (or as an environment variable) to enable it."
+            )
+    else:
+        try:
+            client = OpenAI(api_key=api_key)
+            context = build_ai_context(m)
+            prompt = (
+                "Use the following dataset context to answer the user's question.\n\n"
+                f"{context}\n\n"
+                "Now answer the question with: Insight → Evidence → Action (3 bullets max each)."
+            )
+            messages = st.session_state.ai_messages + [{"role": "user", "content": prompt}]
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.3,
+            )
+            ans = resp.choices[0].message.content.strip()
+            st.session_state.ai_messages.append({"role": "assistant", "content": ans})
+            with st.chat_message("assistant"):
+                st.markdown(ans)
+        except Exception as e:
+            with st.chat_message("assistant"):
+                st.error("Ask AI failed.")
+                st.code(str(e))
+
 st.divider()
+
 
 # -----------------------------
 # Exports
@@ -1090,3 +1197,275 @@ with colB:
         except Exception as e:
             st.error("PPT export failed.")
             st.code(str(e))
+
+# -----------------------------
+# Ask EC-AI (AI Q&A)
+# -----------------------------
+def openai_client_ready() -> bool:
+    return bool(os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", ""))
+
+def answer_question_with_openai(question: str, context: str) -> str:
+    """
+    Uses OpenAI if key exists. Keeps it simple and robust.
+    Note: This will consume API tokens (paid usage).
+    """
+    api_key = os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", "")
+    if not api_key:
+        return "OpenAI key not found. Add OPENAI_API_KEY in Streamlit Secrets or environment variables."
+
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        msg = (
+            "You are EC-AI Insight, an executive analytics assistant for business owners. "
+            "Be CEO-grade, concrete, and actionable. Use numbers from the context when available. "
+            "Do not mention that you are an AI model. Keep answers within 8 bullets max.\n\n"
+            f"DATA CONTEXT:\n{context}\n\n"
+            f"QUESTION:\n{question}\n"
+        )
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": msg}],
+            temperature=0.2,
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"AI request failed: {e}"
+
+def build_context_string(summary: Dict) -> str:
+    lines = []
+    lines.append(f"Transactions: {summary.get('n_rows', 0)}")
+    lines.append(f"Total revenue: {summary.get('total_revenue', 0)}")
+    if summary.get("has_date"):
+        lines.append(f"Date range: {summary.get('start_date')} to {summary.get('end_date')} ({summary.get('days')} days)")
+    if summary.get("top_stores"):
+        lines.append("Top stores: " + "; ".join([f"{k}={v}" for k, v in summary["top_stores"][:5]]))
+    if summary.get("top_categories"):
+        lines.append("Top categories: " + "; ".join([f"{k}={v}" for k, v in summary["top_categories"][:5]]))
+    if summary.get("top_channels"):
+        lines.append("Top channels: " + "; ".join([f"{k}={v}" for k, v in summary["top_channels"][:5]]))
+    if summary.get("pricing_table"):
+        lines.append("Pricing (avg revenue per sale by band): " + "; ".join([f"{k}={v}" for k, v in summary["pricing_table"]]))
+    if summary.get("most_volatile_store"):
+        k, v = summary["most_volatile_store"]
+        lines.append(f"Most volatile store: {k} (cv={v})")
+    if summary.get("most_volatile_channel"):
+        k, v = summary["most_volatile_channel"]
+        lines.append(f"Most volatile channel: {k} (cv={v})")
+    if summary.get("peak_day"):
+        lines.append(f"Peak day: {summary.get('peak_day')} (rev={summary.get('peak_revenue')})")
+    return "\n".join(lines)
+
+# -----------------------------
+# Sidebar: load / view config
+# -----------------------------
+with st.sidebar:
+    st.markdown("<div class='ec-pill'>Executive Mode</div>", unsafe_allow_html=True)
+    st.markdown("<div class='ec-divider'></div>", unsafe_allow_html=True)
+
+    st.caption("Upload a CSV of sales transactions. Then export an Executive Brief (PDF) or an Insights Pack (PPT).")
+
+    uploaded = st.file_uploader("Upload CSV", type=["csv"])
+
+# -----------------------------
+# Main UI
+# -----------------------------
+st.markdown(
+    """
+    <div class="ec-hero">
+      <h1 style="margin:0;">EC-AI Insight</h1>
+      <div class="ec-sub">Sales performance, explained clearly.</div>
+      <div class="ec-sub">Upload your sales data and get an executive brief — what’s working, what’s risky, and where to focus next.</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown("<div class='ec-divider'></div>", unsafe_allow_html=True)
+
+if not uploaded:
+    st.info("Upload a CSV in the left sidebar to begin.")
+    st.stop()
+
+# Load data
+try:
+    df = pd.read_csv(uploaded)
+    schema = infer_schema(df)
+    d = clean_df(df, schema)
+    summary = compute_summary(d, schema)
+except Exception as e:
+    st.error(f"Data load error: {e}")
+    st.stop()
+
+summary_bullets = build_business_summary(summary)
+insights = build_business_insights(summary)
+
+# Customize (optional) — addresses "I may only want to see what I'm interested in" + "save my fields"
+if "view_cfg" not in st.session_state:
+    st.session_state.view_cfg = DEFAULT_VIEW.copy()
+cfg = st.session_state.view_cfg
+
+with st.expander("Customize your Executive Brief (optional)", expanded=False):
+    st.caption("Hide sections you don't need. You can also save your selection and reuse it next time.")
+    cA, cB, cC = st.columns(3)
+    with cA:
+        cfg["show_summary"] = st.checkbox("Business Summary", value=cfg["show_summary"])
+        cfg["show_top_stores"] = st.checkbox("Top Stores", value=cfg["show_top_stores"])
+        cfg["show_revenue_trend"] = st.checkbox("Revenue Trend", value=cfg["show_revenue_trend"])
+    with cB:
+        cfg["show_store_trends"] = st.checkbox("Store Trends (Top 5)", value=cfg["show_store_trends"])
+        cfg["show_pricing"] = st.checkbox("Pricing Effectiveness", value=cfg["show_pricing"])
+        cfg["show_volatility"] = st.checkbox("Volatility (Channel)", value=cfg["show_volatility"])
+    with cC:
+        cfg["show_top_categories"] = st.checkbox("Top Categories", value=cfg["show_top_categories"])
+        cfg["show_top_channels"] = st.checkbox("Top Channels", value=cfg["show_top_channels"])
+        cfg["show_data_preview"] = st.checkbox("Data preview (optional)", value=cfg["show_data_preview"])
+
+    st.markdown("**Save / load my selection**")
+    s1, s2 = st.columns(2)
+    with s1:
+        st.download_button(
+            "Download view.json",
+            data=json.dumps(cfg, indent=2),
+            file_name="ecai_view.json",
+            mime="application/json",
+        )
+    with s2:
+        view_file = st.file_uploader("Load view.json", type=["json"], label_visibility="collapsed")
+        if view_file is not None:
+            try:
+                loaded_cfg = json.loads(view_file.read().decode("utf-8"))
+                st.session_state.view_cfg.update({k: bool(v) for k, v in loaded_cfg.items() if k in DEFAULT_VIEW})
+                st.success("View loaded. Scroll up to see changes.")
+            except Exception:
+                st.warning("Could not load view.json")
+
+# Business summary
+if cfg["show_summary"]:
+    st.markdown("## Business Summary")
+    st.markdown("<ul class='ec-list'>" + "".join([f"<li>{strip_md(b)}</li>" for b in summary_bullets]) + "</ul>", unsafe_allow_html=True)
+    st.caption("These are directional insights from your uploaded data. Use them to guide what to investigate next.")
+
+# Business insights (CEO-grade)
+st.markdown("## Business Insights")
+for sec, items in insights.items():
+    st.markdown(f"### {sec}")
+    st.markdown("<ul class='ec-list'>" + "".join([f"<li>{strip_md(x)}</li>" for x in items]) + "</ul>", unsafe_allow_html=True)
+
+st.markdown("<div class='ec-divider'></div>", unsafe_allow_html=True)
+
+# Charts + per-chart commentary
+charts_for_export: List[Tuple[str, go.Figure, str]] = []
+
+def add_chart(title: str, fig: Optional[go.Figure], note: str):
+    if fig is None:
+        return
+    st.markdown(f"## {title}")
+    st.plotly_chart(fig, use_container_width=True, config=plot_cfg())
+    st.markdown(f"<div class='ec-small'>{strip_md(note)}</div>", unsafe_allow_html=True)
+    charts_for_export.append((title, fig, note))
+
+# Top stores
+if cfg["show_top_stores"]:
+    fig = fig_top_stores(d, schema)
+    note = "This shows where revenue is concentrated. Protect inventory and staffing in the #1–#2 stores first — it is your biggest lever."
+    add_chart("Top Stores by Revenue", fig, note)
+
+# Revenue trend
+if cfg["show_revenue_trend"]:
+    fig = fig_revenue_trend(d, schema)
+    note = "Use this to spot promotion spikes and slowdowns. The labelled peaks help you investigate what changed on those days."
+    add_chart("Revenue Trend", fig, note)
+
+# Store trends (top 5) — 2x2 + 1 layout
+if cfg["show_store_trends"]:
+    st.markdown("## Store Stability (Top 5)")
+    st.caption("One chart per store. You want growth with predictability — large swings usually come from execution (stock-outs, staffing, promo timing).")
+    trends = fig_store_trends_top5(d, schema) or []
+    if trends:
+        cols = st.columns(2)
+        for i, (store, fig) in enumerate(trends):
+            with cols[i % 2]:
+                st.plotly_chart(fig, use_container_width=True, config=plot_cfg())
+    else:
+        st.info("Store trends require both Date and Store columns.")
+    # not exporting each mini chart to keep the brief tight (optional later)
+
+# Pricing effectiveness
+if cfg["show_pricing"]:
+    fig = fig_pricing_effectiveness(d, schema)
+    note = "Compare average revenue per sale across discount bands. If deep discounts underperform, treat them as experiments with clear targets."
+    add_chart("Pricing Effectiveness", fig, note)
+
+# Volatility by channel
+if cfg["show_volatility"]:
+    fig = fig_volatility_by_channel(d, schema)
+    note = "Higher volatility means less predictable revenue. Use this to focus operational fixes in the least stable channel."
+    add_chart("Volatility by Channel", fig, note)
+
+# Top categories / channels (recommended)
+if cfg["show_top_categories"]:
+    fig = fig_top_categories(d, schema)
+    note = "Your top categories define where to focus assortment and availability. Double down where you already win."
+    add_chart("Top Categories", fig, note)
+
+if cfg["show_top_channels"]:
+    fig = fig_top_channels(d, schema)
+    note = "Channels can behave differently. Use this to set channel-specific tactics instead of one promotion strategy for all."
+    add_chart("Top Channels", fig, note)
+
+# Data preview optional
+if cfg["show_data_preview"]:
+    with st.expander("Preview data (optional)"):
+        st.dataframe(d.head(50), use_container_width=True)
+
+st.markdown("<div class='ec-divider'></div>", unsafe_allow_html=True)
+
+# Ask EC-AI
+st.markdown("## Ask EC-AI")
+st.caption("Ask a question about your business, and get a CEO-style answer grounded in your uploaded data.")
+st.caption("Note: using OpenAI will consume API tokens (paid usage based on your OpenAI plan).")
+
+question = st.text_input("Your question", placeholder="e.g., Which store should I prioritize next week and why?")
+ask = st.button("Ask")
+
+if ask and question.strip():
+    ctx = build_context_string(summary)
+    answer = answer_question_with_openai(question.strip(), ctx)
+    st.markdown("### Answer")
+    st.write(answer)
+
+# Exports
+st.markdown("<div class='ec-divider'></div>", unsafe_allow_html=True)
+st.markdown("## Export")
+
+c_pdf, c_ppt = st.columns(2)
+
+with c_pdf:
+    if st.button("Generate Executive Brief (PDF)"):
+        pdf_bytes = make_executive_brief_pdf(
+            "EC-AI Executive Brief",
+            summary_bullets,
+            insights,
+            charts_for_export[:6],  # keep brief tight
+        )
+        st.download_button("Download EC-AI Executive Brief.pdf", data=pdf_bytes, file_name="ecai_executive_brief.pdf", mime="application/pdf")
+
+with c_ppt:
+    if st.button("Generate EC-AI Insights Pack (PPT)"):
+        ppt_bytes = make_ppt_pack(
+            "EC-AI Insights Pack",
+            summary_bullets,
+            insights,
+            charts_for_export[:8],
+        )
+        st.download_button("Download EC-AI Insights Pack.pptx", data=ppt_bytes, file_name="ecai_insights_pack.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+
+# -----------------------------
+# Notes
+# - Zoom is disabled via Plotly config (scrollZoom False + no modebar).
+# - Axis label alignment issues are addressed by using categorical x axes
+#   (no tickvals/ticktext) and automargins.
+# - If images fail to export, confirm 'kaleido' is installed and Streamlit
+#   Cloud rebuilds dependencies.
+# -----------------------------
