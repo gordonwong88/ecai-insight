@@ -1,105 +1,87 @@
-# EC-AI Insight — Executive Brief v1 (Streamlit)
-# Author: Gordon Wong (EC-AI)
-# Notes:
-# - Executive-first UI (no advanced toggles)
-# - Consultancy-grade charts (clean, readable, no zoom/modebar)
-# - Business Summary + Business Insights include concrete examples (stores/categories/channels)
-# - Optional "Ask EC-AI" Q&A (OpenAI if key provided; otherwise falls back to rules-based answers)
-# - PDF/PPT exports include charts via Plotly->Kaleido (when available)
-
-import io
 import os
-import json
-import math
+import io
+import re
 import textwrap
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import streamlit as st
+import plotly.express as px
 import plotly.graph_objects as go
 import plotly.io as pio
+import streamlit as st
 
-# Optional deps (exports / AI)
-try:
-    from reportlab.lib.pagesizes import letter
-    from reportlab.pdfgen import canvas
-except Exception:
-    canvas = None
+# Optional deps for exports
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
 
-try:
-    from pptx import Presentation
-    from pptx.util import Inches, Pt
-    from pptx.dml.color import RGBColor
-except Exception:
-    Presentation = None
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.dml.color import RGBColor
 
-# OpenAI (optional)
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
-
-
-# -----------------------------
-# App config
-# -----------------------------
+# -------------------------
+# App config + styling
+# -------------------------
 st.set_page_config(
     page_title="EC-AI Insight",
-    layout="wide",
     page_icon="📈",
+    layout="wide",
 )
 
-# Plotly theme: clean & business-like
-pio.templates.default = "plotly_white"
+BASE_FONT = 18  # bump overall readability
 
-# Streamlit-wide CSS (executive feel)
-st.markdown(
-    """
+CUSTOM_CSS = f"""
 <style>
-:root{
-  --ec-primary:#0f2a45;
-  --ec-muted:#5b6b7a;
-  --ec-border:#e6eaf0;
-  --ec-bg:#f6f8fb;
-  --ec-card:#ffffff;
-}
-.block-container { padding-top: 2.0rem; padding-bottom: 2.5rem; }
-h1,h2,h3 { color: var(--ec-primary); }
-p,li,span,div { color: #1f2d3d; }
-.ec-hero {
-  padding: 18px 20px; border:1px solid var(--ec-border); border-radius:16px;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
-  box-shadow: 0 1px 0 rgba(12, 27, 54, 0.03);
-}
-.ec-subtle { color: var(--ec-muted); font-size: 0.95rem; }
-.ec-pill {
-  display:inline-block; padding:4px 10px; border-radius:999px;
-  border:1px solid var(--ec-border); background: #fff;
-  color: var(--ec-muted); font-size: 0.85rem; margin-right:6px;
-}
-.ec-card {
-  border:1px solid var(--ec-border); border-radius:16px;
-  background: var(--ec-card);
-  padding: 14px 16px;
-  box-shadow: 0 1px 0 rgba(12, 27, 54, 0.03);
-}
-.ec-section { margin-top: 8px; }
-.ec-h3 { margin: 0 0 6px 0; font-size: 1.05rem; color: var(--ec-primary); }
-.ec-bullets li { margin: 0.25rem 0; }
-small { color: var(--ec-muted); }
+html, body, [class*="css"]  {{
+  font-size: {BASE_FONT}px !important;
+}}
+h1 {{ font-size: 42px !important; margin-bottom: 0.2rem; }}
+h2 {{ font-size: 28px !important; margin-top: 1.2rem; }}
+h3 {{ font-size: 22px !important; margin-top: 1.0rem; }}
+.small-muted {{ color: #6b7280; font-size: 14px; }}
+.ec-card {{
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin: 10px 0 16px 0;
+}}
+.ec-kpi {{
+  display:flex; gap: 14px; flex-wrap: wrap;
+}}
+.ec-kpi .k {{
+  background:#f8fafc;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 12px 14px;
+  min-width: 180px;
+}}
+.ec-kpi .k .t {{
+  font-size: 13px;
+  color:#6b7280;
+  margin-bottom: 4px;
+}}
+.ec-kpi .k .v {{
+  font-size: 22px;
+  font-weight: 700;
+  color:#0f172a;
+}}
+hr {{
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 18px 0;
+}}
 </style>
-""",
-    unsafe_allow_html=True,
-)
+"""
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# -----------------------------
-# Helpers
-# -----------------------------
-PALETTE = ["#5B7FFF", "#FF8A3D", "#E85D5D", "#39BFA6", "#A06AFB", "#F2C14E", "#2EA3F2"]
+# Plotly defaults: "consultancy grade" = clean, no zoom UI
+PLOTLY_TEMPLATE = "plotly_white"
+COLOR_SEQ = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#EDC948", "#B07AA1", "#FF9DA7"]
 
-PLOTLY_CONFIG = {
+PLOT_CONFIG = {
     "displayModeBar": False,
     "scrollZoom": False,
     "doubleClick": "reset",
@@ -107,889 +89,918 @@ PLOTLY_CONFIG = {
     "responsive": True,
 }
 
+# -------------------------
+# Helpers
+# -------------------------
+def money(x: float) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "-"
+    ax = abs(float(x))
+    if ax >= 1_000_000:
+        return f"${x/1_000_000:.1f}M"
+    if ax >= 1_000:
+        return f"${x/1_000:.1f}K"
+    return f"${x:,.0f}"
 
-def _safe_float(x) -> Optional[float]:
-    try:
-        if pd.isna(x):
-            return None
-        return float(x)
-    except Exception:
-        return None
-
-
-def fmt_money(x: float, currency: str = "$") -> str:
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
-        return "—"
-    x = float(x)
-    absx = abs(x)
-    if absx >= 1_000_000:
-        return f"{currency}{x/1_000_000:,.2f}M"
-    if absx >= 1_000:
-        return f"{currency}{x/1_000:,.1f}K"
-    return f"{currency}{x:,.0f}"
-
-
-def fmt_pct(x: float, digits: int = 0) -> str:
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
-        return "—"
+def pct(x: float, digits: int = 0) -> str:
+    if x is None or (isinstance(x, float) and np.isnan(x)):
+        return "-"
     return f"{x*100:.{digits}f}%"
 
+def safe_text(s: str) -> str:
+    # Remove accidental markdown artifacts like ** or stray asterisks
+    if s is None:
+        return ""
+    s = re.sub(r"\*\*", "", str(s))
+    s = s.replace("*", "")
+    return s
 
-def guess_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    cols = {c.lower(): c for c in df.columns}
-    for cand in candidates:
-        if cand.lower() in cols:
-            return cols[cand.lower()]
-    # fuzzy contains
-    for cand in candidates:
-        for c in df.columns:
-            if cand.lower() in str(c).lower():
+def wrap_lines(lines: List[str], width: int = 92) -> List[str]:
+    out = []
+    for l in lines:
+        l = safe_text(l).strip()
+        if not l:
+            continue
+        out.extend(textwrap.wrap(l, width=width))
+    return out
+
+def fig_style(fig: go.Figure, title: Optional[str] = None) -> go.Figure:
+    fig.update_layout(
+        template=PLOTLY_TEMPLATE,
+        font=dict(size=16),
+        title=dict(text=title or "", x=0.0, xanchor="left"),
+        margin=dict(l=40, r=20, t=60 if title else 30, b=40),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        dragmode=False,
+    )
+    fig.update_xaxes(
+        title_font=dict(size=14),
+        tickfont=dict(size=13),
+        showgrid=False,
+        zeroline=False,
+        type="category",  # fixes category tick positioning issues
+    )
+    fig.update_yaxes(
+        title_font=dict(size=14),
+        tickfont=dict(size=13),
+        showgrid=True,
+        gridcolor="rgba(0,0,0,0.06)",
+        zeroline=False,
+    )
+    return fig
+
+def fig_to_png_bytes(fig: go.Figure, scale: int = 2) -> Optional[bytes]:
+    # Prefer kaleido
+    try:
+        return pio.to_image(fig, format="png", scale=scale, engine="kaleido")
+    except Exception:
+        try:
+            return fig.to_image(format="png", scale=scale)
+        except Exception:
+            return None
+
+# -------------------------
+# Column detection + model
+# -------------------------
+def _find_col(cols: List[str], keywords: List[str]) -> Optional[str]:
+    for k in keywords:
+        for c in cols:
+            if k in c.lower():
                 return c
     return None
 
+def guess_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+    cols = list(df.columns)
+    cols_l = [c.lower() for c in cols]
 
-def to_datetime_series(s: pd.Series) -> Optional[pd.Series]:
-    try:
-        out = pd.to_datetime(s, errors="coerce", utc=False)
-        if out.notna().sum() >= max(3, int(0.6 * len(s))):
-            return out
-        return None
-    except Exception:
-        return None
-
-
-def ensure_numeric(df: pd.DataFrame, col: str) -> pd.Series:
-    return pd.to_numeric(df[col], errors="coerce")
-
-
-def top_n_table(df: pd.DataFrame, group_col: str, value_col: str, n: int = 5) -> pd.DataFrame:
-    t = df.groupby(group_col, dropna=False)[value_col].sum().sort_values(ascending=False).head(n).reset_index()
-    t.columns = [group_col, value_col]
-    return t
-
-
-def compute_volatility(df: pd.DataFrame, date_col: str, group_col: str, value_col: str) -> pd.DataFrame:
-    # volatility = std / mean of daily totals per group (CV)
-    tmp = df[[date_col, group_col, value_col]].dropna()
-    if tmp.empty:
-        return pd.DataFrame(columns=[group_col, "cv", "mean_daily", "std_daily"])
-    tmp = tmp.copy()
-    tmp[date_col] = pd.to_datetime(tmp[date_col]).dt.date
-    daily = tmp.groupby([date_col, group_col])[value_col].sum().reset_index()
-    agg = daily.groupby(group_col)[value_col].agg(["mean", "std"]).reset_index()
-    agg["cv"] = agg["std"] / agg["mean"].replace({0: np.nan})
-    agg.rename(columns={"mean": "mean_daily", "std": "std_daily"}, inplace=True)
-    return agg.sort_values("cv", ascending=False)
-
-
-def local_business_qa(question: str, context: Dict) -> str:
-    q = (question or "").lower().strip()
-    if not q:
-        return "Ask a specific question (e.g., “Which store should I prioritize?”)."
-
-    # simple heuristics using context
-    top_store = context.get("top_store_name")
-    top_store_rev = context.get("top_store_rev")
-    top_cat = context.get("top_cat_name")
-    top_cat_rev = context.get("top_cat_rev")
-
-    if "which store" in q or "prioritize" in q:
-        if top_store:
-            return f"Prioritize {top_store} first — it is your #1 revenue driver ({fmt_money(top_store_rev)}). Protect staffing and inventory here before trying new growth experiments."
-        return "I can’t identify a top store from this file — please ensure you have a Store column and a Revenue column."
-    if "discount" in q or "promotion" in q:
-        best_band = context.get("best_discount_band")
-        best_band_val = context.get("best_discount_val")
-        if best_band:
-            return f"Your data suggests {best_band} discounts perform best on average (≈ {fmt_money(best_band_val)} revenue per sale). Treat deeper discounts as controlled tests with clear targets."
-        return "I didn’t detect a discount column — if you have Discount_Rate, include it and I’ll assess pricing effectiveness."
-    if "category" in q:
-        if top_cat:
-            return f"Your top category is {top_cat} ({fmt_money(top_cat_rev)}). Start by improving availability and merchandising for this category in your top stores."
-        return "I can’t identify categories from this file — please include a Category column."
-    if "risk" in q or "volatile" in q or "stability" in q:
-        most_volatile = context.get("most_volatile_name")
-        most_volatile_cv = context.get("most_volatile_cv")
-        if most_volatile:
-            return f"Watch {most_volatile}: it shows the biggest day-to-day swings (volatility score ≈ {most_volatile_cv:.2f}). Volatility usually points to operational inconsistency (stock, staffing, execution)."
-        return "I can’t compute volatility without Date + Store/Channel + Revenue."
-    return "I can answer questions about stores, categories, channels, discounts, trends, and where to focus next. Try: “What should I focus on next week?”"
-
-
-def openai_answer(question: str, context: Dict, api_key: str) -> str:
-    if OpenAI is None:
-        return local_business_qa(question, context)
-    try:
-        client = OpenAI(api_key=api_key)
-        # Keep prompt short & CEO-grade
-        prompt = {
-            "role": "system",
-            "content": (
-                "You are EC-AI, a concise business analyst. "
-                "Answer in a CEO-grade style: short, direct, concrete numbers, actionable next steps. "
-                "No technical jargon, no equations, no markdown."
-            ),
-        }
-        user = {
-            "role": "user",
-            "content": f"Question: {question}\n\nContext (facts): {json.dumps(context, ensure_ascii=False)}\n\nAnswer:",
-        }
-        resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[prompt, user],
-            temperature=0.2,
-            max_tokens=220,
-        )
-        return (resp.choices[0].message.content or "").strip() or local_business_qa(question, context)
-    except Exception:
-        return local_business_qa(question, context)
-
-
-def fig_bar_single_trace(
-    x: List[str],
-    y: List[float],
-    title: str,
-    y_title: str,
-    x_title: str = "",
-    colors: Optional[List[str]] = None,
-    height: int = 360,
-    text_fmt: str = "money",
-) -> go.Figure:
-    colors = colors or PALETTE
-    bar_colors = [colors[i % len(colors)] for i in range(len(x))]
-
-    if text_fmt == "money":
-        text = [fmt_money(v) for v in y]
-    elif text_fmt == "pct":
-        text = [fmt_pct(v, 0) for v in y]
-    else:
-        text = [f"{v:,.2f}" for v in y]
-
-    fig = go.Figure(
-        data=[
-            go.Bar(
-                x=x,
-                y=y,
-                marker=dict(color=bar_colors),
-                text=text,
-                textposition="outside",
-                cliponaxis=False,
-                hovertemplate=f"{x_title or 'Item'}=%{{x}}<br>{y_title}=%{{y:,.2f}}<extra></extra>",
-            )
-        ]
-    )
-    fig.update_layout(
-        title=dict(text=title, x=0, xanchor="left", font=dict(size=18)),
-        height=height,
-        margin=dict(l=50, r=30, t=60, b=55),
-        bargap=0.45,
-        yaxis=dict(title=y_title, gridcolor="rgba(16,24,40,0.08)", zeroline=False),
-        xaxis=dict(
-            title=x_title,
-            type="category",
-            tickmode="array",
-            tickvals=x,
-            ticktext=x,
-            tickfont=dict(size=12),
-            automargin=True,
-        ),
-        font=dict(size=13, color="#1f2d3d"),
-    )
-    # ensure labels not cut off
-    fig.update_yaxes(range=[0, max(y) * 1.18 if len(y) else 1])
-    return fig
-
-
-def fig_line_trend(df: pd.DataFrame, date_col: str, value_col: str, title: str, height: int = 330) -> go.Figure:
-    tmp = df[[date_col, value_col]].dropna().copy()
-    tmp[date_col] = pd.to_datetime(tmp[date_col])
-    daily = tmp.groupby(pd.Grouper(key=date_col, freq="D"))[value_col].sum().reset_index()
-    daily = daily.sort_values(date_col)
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=daily[date_col],
-            y=daily[value_col],
-            mode="lines+markers",
-            line=dict(width=3, color="#39BFA6"),
-            marker=dict(size=6, color="#39BFA6"),
-            hovertemplate="%{x|%Y-%m-%d}<br>Revenue=%{y:,.0f}<extra></extra>",
-        )
-    )
-
-    # label top 2 peaks (CEO-friendly)
-    if len(daily) >= 5:
-        peaks = daily.nlargest(2, value_col)
-        for _, row in peaks.iterrows():
-            fig.add_annotation(
-                x=row[date_col],
-                y=row[value_col],
-                text=fmt_money(row[value_col]),
-                showarrow=True,
-                arrowhead=2,
-                ax=0,
-                ay=-28,
-                font=dict(size=12, color="#0f2a45"),
-            )
-
-    fig.update_layout(
-        title=dict(text=title, x=0, xanchor="left", font=dict(size=18)),
-        height=height,
-        margin=dict(l=50, r=30, t=60, b=55),
-        yaxis=dict(title="Revenue", gridcolor="rgba(16,24,40,0.08)", zeroline=False),
-        xaxis=dict(title="", gridcolor="rgba(16,24,40,0.04)", automargin=True),
-        font=dict(size=13, color="#1f2d3d"),
-    )
-    return fig
-
-
-# -----------------------------
-# Data schema (robust, no dataclasses)
-# -----------------------------
-class Schema:
-    def __init__(self, **kwargs):
-        # core
-        self.col_date = kwargs.get("col_date")
-        self.col_store = kwargs.get("col_store")
-        self.col_category = kwargs.get("col_category")
-        self.col_channel = kwargs.get("col_channel")
-        self.col_revenue = kwargs.get("col_revenue")
-        # optional
-        self.col_discount = kwargs.get("col_discount")  # 0-1 or 0-100
-        self.col_qty = kwargs.get("col_qty")
-        self.currency = kwargs.get("currency", "$")
-
-
-def infer_schema(df: pd.DataFrame) -> Schema:
-    col_date = guess_column(df, ["date", "order_date", "transaction_date", "day"])
-    col_store = guess_column(df, ["store", "branch", "location", "shop"])
-    col_category = guess_column(df, ["category", "product_category", "segment"])
-    col_channel = guess_column(df, ["channel", "payment", "payment_method", "source"])
-    col_revenue = guess_column(df, ["revenue", "sales", "amount", "total", "net_sales"])
-    col_discount = guess_column(df, ["discount_rate", "discount", "promo", "promotion"])
-    col_qty = guess_column(df, ["qty", "quantity", "units", "unit"])
-
-    # Try to auto-detect date column if not found
-    if col_date is None:
-        for c in df.columns:
-            ds = to_datetime_series(df[c])
-            if ds is not None:
-                col_date = c
-                break
-
-    return Schema(
-        col_date=col_date,
-        col_store=col_store,
-        col_category=col_category,
-        col_channel=col_channel,
-        col_revenue=col_revenue,
-        col_discount=col_discount,
-        col_qty=col_qty,
-        currency="$",
-    )
-
-
-def validate_minimum(schema: Schema) -> Tuple[bool, str]:
-    missing = []
-    if not schema.col_revenue:
-        missing.append("Revenue")
-    if not schema.col_date:
-        missing.append("Date")
-    if not schema.col_store:
-        missing.append("Store")
-    if missing:
-        return False, "Missing required fields: " + ", ".join(missing) + ". Please include these columns (any naming is OK)."
-    return True, ""
-
-
-# -----------------------------
-# Executive brief computation
-# -----------------------------
-def compute_context(df: pd.DataFrame, schema: Schema) -> Dict:
-    df = df.copy()
-
-    # parse & coerce
-    df[schema.col_revenue] = ensure_numeric(df, schema.col_revenue).fillna(0)
-    df[schema.col_date] = pd.to_datetime(df[schema.col_date], errors="coerce")
-    df = df.dropna(subset=[schema.col_date])
-
-    total_rev = float(df[schema.col_revenue].sum())
-    n_rows = int(len(df))
-    n_days = int(df[schema.col_date].dt.date.nunique())
-
-    # top stores
-    top_store_tbl = top_n_table(df, schema.col_store, schema.col_revenue, n=5) if schema.col_store else pd.DataFrame()
-    top_store_name = top_store_tbl.iloc[0][schema.col_store] if len(top_store_tbl) else None
-    top_store_rev = float(top_store_tbl.iloc[0][schema.col_revenue]) if len(top_store_tbl) else None
-    top2_rev = float(top_store_tbl.head(2)[schema.col_revenue].sum()) if len(top_store_tbl) >= 2 else None
-    top2_share = (top2_rev / total_rev) if (top2_rev is not None and total_rev > 0) else None
-    top_store_share = (top_store_rev / total_rev) if (top_store_rev is not None and total_rev > 0) else None
-
-    # categories
-    top_cat_tbl = top_n_table(df, schema.col_category, schema.col_revenue, n=5) if schema.col_category else pd.DataFrame()
-    top_cat_name = top_cat_tbl.iloc[0][schema.col_category] if len(top_cat_tbl) else None
-    top_cat_rev = float(top_cat_tbl.iloc[0][schema.col_revenue]) if len(top_cat_tbl) else None
-    top_cat_share = (top_cat_rev / total_rev) if (top_cat_rev is not None and total_rev > 0) else None
-
-    # channels
-    top_ch_tbl = top_n_table(df, schema.col_channel, schema.col_revenue, n=5) if schema.col_channel else pd.DataFrame()
-    top_ch_name = top_ch_tbl.iloc[0][schema.col_channel] if len(top_ch_tbl) else None
-    top_ch_rev = float(top_ch_tbl.iloc[0][schema.col_revenue]) if len(top_ch_tbl) else None
-    top_ch_share = (top_ch_rev / total_rev) if (top_ch_rev is not None and total_rev > 0) else None
-
-    # trend momentum
-    daily = df.groupby(pd.Grouper(key=schema.col_date, freq="D"))[schema.col_revenue].sum().reset_index()
-    daily = daily.sort_values(schema.col_date)
-    half = max(1, len(daily) // 2)
-    first_half = float(daily.head(half)[schema.col_revenue].sum())
-    second_half = float(daily.tail(len(daily) - half)[schema.col_revenue].sum())
-    momentum = (second_half / first_half - 1.0) if first_half > 0 else None
-
-    # volatility
-    vol_tbl = compute_volatility(df, schema.col_date, schema.col_store, schema.col_revenue) if schema.col_store else pd.DataFrame()
-    most_volatile_name = vol_tbl.iloc[0][schema.col_store] if len(vol_tbl) else None
-    most_volatile_cv = float(vol_tbl.iloc[0]["cv"]) if len(vol_tbl) and pd.notna(vol_tbl.iloc[0]["cv"]) else None
-
-    # discount effectiveness: avg revenue per transaction by discount band
-    best_discount_band = None
-    best_discount_val = None
-    discount_band_tbl = None
-    if schema.col_discount:
-        disc = pd.to_numeric(df[schema.col_discount], errors="coerce")
-        disc = disc.fillna(0.0)
-        # normalize 0-1 vs 0-100
-        if disc.max() > 1.5:
-            disc = disc / 100.0
-        disc = disc.clip(lower=0, upper=1)
-        df["_disc_norm"] = disc
-        bins = [0, 0.02, 0.05, 0.10, 0.15, 0.20, 1.0]
-        labels = ["0–2%", "2–5%", "5–10%", "10–15%", "15–20%", "20%+"]
-        df["_disc_band"] = pd.cut(df["_disc_norm"], bins=bins, labels=labels, include_lowest=True, right=True)
-        band = df.groupby("_disc_band")[schema.col_revenue].mean().reset_index()
-        band.columns = ["band", "avg_rev"]
-        band = band.dropna(subset=["band"])
-        discount_band_tbl = band
-        if len(band):
-            best = band.sort_values("avg_rev", ascending=False).iloc[0]
-            best_discount_band = str(best["band"])
-            best_discount_val = float(best["avg_rev"])
-
-    # Build context dict for AI and for insights (no markdown, clean)
-    ctx = {
-        "days_of_data": n_days,
-        "transactions": n_rows,
-        "total_revenue": round(total_rev, 2),
-        "top_store_name": top_store_name,
-        "top_store_rev": round(top_store_rev, 2) if top_store_rev is not None else None,
-        "top_store_share": round(top_store_share, 4) if top_store_share is not None else None,
-        "top2_rev": round(top2_rev, 2) if top2_rev is not None else None,
-        "top2_share": round(top2_share, 4) if top2_share is not None else None,
-        "top_cat_name": top_cat_name,
-        "top_cat_rev": round(top_cat_rev, 2) if top_cat_rev is not None else None,
-        "top_cat_share": round(top_cat_share, 4) if top_cat_share is not None else None,
-        "top_channel_name": top_ch_name,
-        "top_channel_rev": round(top_ch_rev, 2) if top_ch_rev is not None else None,
-        "top_channel_share": round(top_ch_share, 4) if top_ch_share is not None else None,
-        "momentum_second_half_vs_first": round(momentum, 4) if momentum is not None else None,
-        "most_volatile_name": most_volatile_name,
-        "most_volatile_cv": round(most_volatile_cv, 3) if most_volatile_cv is not None else None,
-        "best_discount_band": best_discount_band,
-        "best_discount_val": round(best_discount_val, 2) if best_discount_val is not None else None,
-    }
-    return ctx, top_store_tbl, top_cat_tbl, top_ch_tbl, vol_tbl, discount_band_tbl, daily
-
-
-def build_business_summary(ctx: Dict) -> List[str]:
-    # 10 CEO-grade bullets with concrete examples
-    bullets = []
-
-    bullets.append(f"You have {ctx.get('days_of_data', '—')} days of sales data across {ctx.get('transactions', '—')} transactions (total revenue {fmt_money(ctx.get('total_revenue'))}).")
-
-    if ctx.get("top_store_name"):
-        bullets.append(
-            f"Revenue is concentrated: {ctx['top_store_name']} is your #1 store at {fmt_money(ctx.get('top_store_rev'))} ({fmt_pct(ctx.get('top_store_share'), 0)} of total)."
-        )
-    if ctx.get("top2_rev") is not None:
-        bullets.append(
-            f"The top 2 stores generate {fmt_money(ctx.get('top2_rev'))} (about {fmt_pct(ctx.get('top2_share'), 0)}). Small improvements here move the whole business."
-        )
-
-    if ctx.get("top_cat_name"):
-        bullets.append(
-            f"By category, {ctx['top_cat_name']} is your largest driver at {fmt_money(ctx.get('top_cat_rev'))} ({fmt_pct(ctx.get('top_cat_share'), 0)} of total)."
-        )
-
-    if ctx.get("top_channel_name"):
-        bullets.append(
-            f"By channel/payment, {ctx['top_channel_name']} contributes {fmt_money(ctx.get('top_channel_rev'))} ({fmt_pct(ctx.get('top_channel_share'), 0)})."
-        )
-
-    mom = ctx.get("momentum_second_half_vs_first")
-    if mom is not None:
-        direction = "more" if mom >= 0 else "less"
-        bullets.append(f"Momentum: the second half of the period delivered about {fmt_pct(abs(mom), 0)} {direction} revenue than the first half.")
-
-    if ctx.get("most_volatile_name") and ctx.get("most_volatile_cv") is not None:
-        bullets.append(
-            f"Stability: {ctx['most_volatile_name']} shows the biggest day-to-day swings (volatility score ≈ {ctx['most_volatile_cv']}). This usually signals operational inconsistency (stock, staffing, execution)."
-        )
-
-    if ctx.get("best_discount_band"):
-        bullets.append(
-            f"Discounting: {ctx['best_discount_band']} performs best on average (≈ {fmt_money(ctx.get('best_discount_val'))} revenue per sale). Bigger discounts do not automatically lead to better results."
-        )
-
-    bullets.append("Action focus: protect and improve the top stores first (availability, staffing, promotion discipline), then scale what works.")
-    bullets.append("Next step: pick 1–2 levers to test for 2 weeks (pricing/discount guardrails, inventory availability, staffing coverage) and measure the uplift in revenue per sale.")
-
-    # Ensure max 10–11 bullets (keep it executive)
-    return bullets[:10]
-
-
-def build_business_insights(ctx: Dict) -> Dict[str, List[str]]:
-    # Concrete examples per bullet; no markdown
-    s = []
-
-    # Where money is made
-    money = []
-    if ctx.get("top_store_name"):
-        money.append(f"Top store: {ctx['top_store_name']} contributes {fmt_money(ctx.get('top_store_rev'))} ({fmt_pct(ctx.get('top_store_share'), 0)}). This is your biggest lever — protect staffing and inventory here first.")
-    if ctx.get("top2_rev") is not None:
-        money.append(f"Concentration: your top 2 stores contribute about {fmt_pct(ctx.get('top2_share'), 0)} of total revenue. Prioritize execution in these locations before expanding campaigns elsewhere.")
-    if ctx.get("top_cat_name"):
-        money.append(f"Top category: {ctx['top_cat_name']} drives {fmt_money(ctx.get('top_cat_rev'))}. If you improve availability and merchandising here in top stores, it will move total revenue fastest.")
-    if ctx.get("top_channel_name"):
-        money.append(f"Top channel: {ctx['top_channel_name']} contributes {fmt_money(ctx.get('top_channel_rev'))}. Use this to decide where to invest your marketing and operational attention.")
-
-    # Risk
-    risk = []
-    if ctx.get("most_volatile_name") and ctx.get("most_volatile_cv") is not None:
-        risk.append(f"Volatility risk: {ctx['most_volatile_name']} has the highest variability (≈ {ctx['most_volatile_cv']}). This makes forecasting harder and can hide operational problems.")
-    risk.append("Concentration risk: when revenue is dominated by a few stores, any execution slip (stock-outs, staffing gaps) materially impacts total results.")
-
-    # Improve
-    improve = []
-    if ctx.get("best_discount_band"):
-        improve.append(f"Pricing discipline: {ctx['best_discount_band']} performs best on average. Treat deep discounts as experiments — set a target and stop if revenue per sale does not improve.")
-    improve.append("Execution beats campaigns: consistency (availability, staffing, service) usually delivers higher ROI than adding more promotions.")
-
-    # Focus next
-    next_ = []
-    next_.append("Week 1: lock down top stores — confirm staffing coverage, shelf availability, and promotion quality.")
-    next_.append("Week 2: test one pricing guardrail — cap discounts, compare revenue per sale between discount bands, and keep only what works.")
+    col_date = _find_col(cols, ["date", "day", "order date", "txn date", "transaction date"])
+    col_rev = _find_col(cols, ["revenue", "sales", "amount", "gmv", "net sales", "total"])
+    col_cost = _find_col(cols, ["cogs", "cost"])
+    col_store = _find_col(cols, ["store", "branch", "location", "shop"])
+    col_cat = _find_col(cols, ["category", "product category", "dept", "department"])
+    col_channel = _find_col(cols, ["channel", "platform", "source"])
+    col_discount = _find_col(cols, ["discount", "discount_rate", "disc"])
+    col_qty = _find_col(cols, ["qty", "quantity", "units"])
+    col_unit_price = _find_col(cols, ["unit_price", "unit price", "price"])
+    col_returned = _find_col(cols, ["returned", "return_flag", "is_return", "refund"])
 
     return {
-        "Where the money is made": money[:4],
-        "Where risk exists": risk[:3],
-        "What can be improved": improve[:3],
-        "What to focus on next": next_[:3],
+        "date": col_date,
+        "revenue": col_rev,
+        "cost": col_cost,
+        "store": col_store,
+        "category": col_cat,
+        "channel": col_channel,
+        "discount": col_discount,
+        "qty": col_qty,
+        "unit_price": col_unit_price,
+        "returned": col_returned,
     }
 
+def coerce_numeric(s: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(s):
+        return s.astype(float)
+    # strip %, $ and commas
+    ss = s.astype(str).str.replace(",", "", regex=False)
+    ss = ss.str.replace("$", "", regex=False)
+    ss = ss.str.replace("%", "", regex=False)
+    return pd.to_numeric(ss, errors="coerce")
 
-# -----------------------------
-# Exports (PDF / PPT)
-# -----------------------------
-def fig_to_png_bytes(fig: go.Figure, scale: int = 2) -> Optional[bytes]:
-    try:
-        # Needs kaleido
-        return fig.to_image(format="png", scale=scale)
-    except Exception:
-        return None
+def coerce_date(s: pd.Series) -> pd.Series:
+    return pd.to_datetime(s, errors="coerce")
 
+@dataclass
+class RetailModel:
+    col_date: str
+    col_revenue: str
+    col_store: Optional[str] = None
+    col_category: Optional[str] = None
+    col_channel: Optional[str] = None
+    col_discount: Optional[str] = None
+    col_cost: Optional[str] = None
+    col_qty: Optional[str] = None
+    col_unit_price: Optional[str] = None
+    col_returned: Optional[str] = None
 
-def make_executive_pdf(title: str, summary_bullets: List[str], insights: Dict[str, List[str]], chart_blocks: List[Tuple[str, Optional[bytes]]]) -> Optional[bytes]:
-    if canvas is None:
-        return None
+def validate_and_prepare(df: pd.DataFrame, model: RetailModel) -> pd.DataFrame:
+    d = df.copy()
 
+    # rename canonical for ease
+    rename = {}
+    rename[model.col_revenue] = "Revenue"
+    rename[model.col_date] = "Date"
+    if model.col_store: rename[model.col_store] = "Store"
+    if model.col_category: rename[model.col_category] = "Category"
+    if model.col_channel: rename[model.col_channel] = "Channel"
+    if model.col_discount: rename[model.col_discount] = "Discount"
+    if model.col_cost: rename[model.col_cost] = "COGS"
+    if model.col_qty: rename[model.col_qty] = "Qty"
+    if model.col_unit_price: rename[model.col_unit_price] = "UnitPrice"
+    if model.col_returned: rename[model.col_returned] = "Returned"
+
+    d = d.rename(columns=rename)
+
+    d["Revenue"] = coerce_numeric(d["Revenue"]).fillna(0.0)
+    d["Date"] = coerce_date(d["Date"])
+    d = d.dropna(subset=["Date"])
+
+    # optional numeric fields
+    if "Discount" in d.columns:
+        disc = coerce_numeric(d["Discount"])
+        # if looks like 0-100, scale down to 0-1
+        if disc.dropna().max() > 1.5:
+            disc = disc / 100.0
+        d["Discount"] = disc.clip(lower=0, upper=1)
+    if "COGS" in d.columns:
+        d["COGS"] = coerce_numeric(d["COGS"])
+    if "Qty" in d.columns:
+        d["Qty"] = coerce_numeric(d["Qty"])
+    if "UnitPrice" in d.columns:
+        d["UnitPrice"] = coerce_numeric(d["UnitPrice"])
+    if "Returned" in d.columns:
+        rr = d["Returned"]
+        if rr.dtype == bool:
+            d["Returned"] = rr.astype(int)
+        else:
+            d["Returned"] = coerce_numeric(rr).fillna(0).clip(0, 1)
+
+    # fill cats
+    for c in ["Store", "Category", "Channel"]:
+        if c in d.columns:
+            d[c] = d[c].astype(str).fillna("Unknown")
+    return d
+
+# -------------------------
+# Insight engine (CEO-grade with examples)
+# -------------------------
+def compute_core(df: pd.DataFrame) -> Dict:
+    out = {}
+    out["n_rows"] = len(df)
+    out["days"] = int(df["Date"].dt.date.nunique())
+    out["revenue_total"] = float(df["Revenue"].sum())
+    out["date_min"] = df["Date"].min()
+    out["date_max"] = df["Date"].max()
+
+    # Store contributions
+    if "Store" in df.columns:
+        s = df.groupby("Store", as_index=False)["Revenue"].sum().sort_values("Revenue", ascending=False)
+        out["store_rank"] = s
+    else:
+        out["store_rank"] = None
+
+    # Category contributions
+    if "Category" in df.columns:
+        c = df.groupby("Category", as_index=False)["Revenue"].sum().sort_values("Revenue", ascending=False)
+        out["cat_rank"] = c
+    else:
+        out["cat_rank"] = None
+
+    # Channel contributions
+    if "Channel" in df.columns:
+        ch = df.groupby("Channel", as_index=False)["Revenue"].sum().sort_values("Revenue", ascending=False)
+        out["channel_rank"] = ch
+    else:
+        out["channel_rank"] = None
+
+    # Trend
+    daily = df.groupby(df["Date"].dt.date, as_index=False)["Revenue"].sum()
+    daily = daily.rename(columns={"Date": "Date"})
+    out["daily"] = daily
+
+    # Discount bands
+    if "Discount" in df.columns:
+        bins = [0, 0.02, 0.05, 0.10, 0.15, 0.20, 1.0]
+        labels = ["0–2%", "2–5%", "5–10%", "10–15%", "15–20%", "20%+"]
+        dd = df.copy()
+        dd["DiscBand"] = pd.cut(dd["Discount"].fillna(0), bins=bins, labels=labels, include_lowest=True, right=True)
+        # revenue per sale
+        band = dd.groupby("DiscBand", as_index=False)["Revenue"].mean().rename(columns={"Revenue": "AvgRevenue"})
+        out["discount_band"] = band
+        # also total count per band
+        cnt = dd.groupby("DiscBand", as_index=False).size().rename(columns={"size": "Transactions"})
+        out["discount_cnt"] = cnt
+    else:
+        out["discount_band"] = None
+        out["discount_cnt"] = None
+
+    # Stability / volatility per store (CV of daily revenue)
+    if "Store" in df.columns:
+        tmp = df.copy()
+        tmp["Day"] = tmp["Date"].dt.date
+        sday = tmp.groupby(["Store", "Day"], as_index=False)["Revenue"].sum()
+        g = sday.groupby("Store")["Revenue"]
+        vol = (g.std() / g.mean()).replace([np.inf, -np.inf], np.nan)
+        vol = vol.fillna(0).sort_values(ascending=False)
+        out["store_vol"] = vol.reset_index().rename(columns={"Revenue": "CV"})
+    else:
+        out["store_vol"] = None
+
+    # Channel volatility (CV of daily revenue)
+    if "Channel" in df.columns:
+        tmp = df.copy()
+        tmp["Day"] = tmp["Date"].dt.date
+        cday = tmp.groupby(["Channel", "Day"], as_index=False)["Revenue"].sum()
+        g = cday.groupby("Channel")["Revenue"]
+        vol = (g.std() / g.mean()).replace([np.inf, -np.inf], np.nan)
+        vol = vol.fillna(0).sort_values(ascending=False)
+        out["channel_vol"] = vol.reset_index().rename(columns={"Revenue": "CV"})
+    else:
+        out["channel_vol"] = None
+
+    # margin estimate if COGS present
+    if "COGS" in df.columns:
+        margin = (df["Revenue"] - df["COGS"])
+        out["gross_margin_total"] = float(margin.sum())
+        out["gross_margin_pct"] = float((margin.sum() / df["Revenue"].sum()) if df["Revenue"].sum() else np.nan)
+    else:
+        out["gross_margin_total"] = None
+        out["gross_margin_pct"] = None
+
+    return out
+
+def build_business_summary(core: Dict) -> List[str]:
+    total = core["revenue_total"]
+    days = core["days"]
+    n = core["n_rows"]
+
+    bullets = []
+    bullets.append(f"You have {days} days of data across {n:,} transactions (total revenue {money(total)}).")
+
+    # concentration
+    if core.get("store_rank") is not None and len(core["store_rank"]) >= 1:
+        s = core["store_rank"]
+        top1 = s.iloc[0]
+        top1_share = (top1["Revenue"]/total) if total else 0
+        bullets.append(f"Revenue is concentrated: {top1['Store']} contributes {money(top1['Revenue'])} (about {pct(top1_share)} of total).")
+
+        if len(s) >= 2:
+            top2 = s.iloc[:2]["Revenue"].sum()
+            bullets.append(f"The top 2 stores together generate {money(top2)} (about {pct(top2/total) if total else '-'}). Small wins in these locations move the whole business.")
+
+    if core.get("cat_rank") is not None and len(core["cat_rank"]) >= 1:
+        c = core["cat_rank"].iloc[0]
+        bullets.append(f"By category, {c['Category']} is your largest driver at {money(c['Revenue'])} (about {pct(c['Revenue']/total) if total else '-'}).")
+
+    # momentum (first half vs second half)
+    daily = core["daily"]
+    if len(daily) >= 10:
+        mid = len(daily) // 2
+        first = daily.iloc[:mid]["Revenue"].sum()
+        second = daily.iloc[mid:]["Revenue"].sum()
+        if first > 0:
+            delta = (second/first) - 1
+            direction = "more" if delta >= 0 else "less"
+            bullets.append(f"Momentum is {'positive' if delta>=0 else 'soft'}: the second half delivered about {abs(delta)*100:.0f}% {direction} revenue than the first half.")
+
+    # volatility
+    if core.get("store_vol") is not None and len(core["store_vol"]) >= 1:
+        sv = core["store_vol"].sort_values("CV", ascending=False).iloc[0]
+        bullets.append(f"Sales are not equally predictable: {sv['Store']} shows the biggest day-to-day swings (variability score ≈ {sv['CV']:.2f}).")
+
+    # discounting
+    if core.get("discount_band") is not None:
+        band = core["discount_band"].dropna()
+        if len(band) >= 2:
+            best = band.sort_values("AvgRevenue", ascending=False).iloc[0]
+            worst = band.sort_values("AvgRevenue", ascending=True).iloc[0]
+            bullets.append(f"Discounting: {best['DiscBand']} performs best on average ({money(best['AvgRevenue'])} per sale). {worst['DiscBand']} underperforms ({money(worst['AvgRevenue'])} per sale).")
+            bullets.append("Takeaway: moderate discounts tend to work better than aggressive ones — bigger discounts do not automatically lead to better results.")
+
+    # next focus
+    bullets.append("Next focus: protect and improve the top stores first (inventory, staffing, execution), then scale what works.")
+    return bullets
+
+def build_business_insights(core: Dict) -> Dict[str, List[str]]:
+    total = core["revenue_total"]
+    s = core.get("store_rank")
+    c = core.get("cat_rank")
+    ch = core.get("channel_rank")
+    sv = core.get("store_vol")
+    dv = core.get("channel_vol")
+    band = core.get("discount_band")
+
+    insights = {
+        "Where the money is made": [],
+        "Where risk exists": [],
+        "What can be improved": [],
+        "What to focus on next": [],
+    }
+
+    if s is not None and len(s) >= 2:
+        t1, t2 = s.iloc[0], s.iloc[1]
+        insights["Where the money is made"].append(
+            f"Your revenue is led by a small number of stores — {t1['Store']} ({money(t1['Revenue'])}, {pct(t1['Revenue']/total)}) and {t2['Store']} ({money(t2['Revenue'])}, {pct(t2['Revenue']/total)})."
+        )
+        top5 = s.iloc[:5]["Revenue"].sum()
+        insights["Where the money is made"].append(
+            f"The top 5 stores contribute {pct(top5/total) if total else '-'} of total revenue. These locations are your biggest levers."
+        )
+    elif s is not None and len(s) == 1:
+        t1 = s.iloc[0]
+        insights["Where the money is made"].append(
+            f"Most revenue comes from {t1['Store']} ({money(t1['Revenue'])}, {pct(t1['Revenue']/total) if total else '-'})."
+        )
+
+    if c is not None and len(c) >= 3:
+        c1, c2 = c.iloc[0], c.iloc[1]
+        insights["Where the money is made"].append(
+            f"Category leaders are clear: {c1['Category']} ({money(c1['Revenue'])}) and {c2['Category']} ({money(c2['Revenue'])})."
+        )
+    if ch is not None and len(ch) >= 1:
+        ch1 = ch.iloc[0]
+        insights["Where the money is made"].append(
+            f"Channel mix matters: {ch1['Channel']} is currently your top channel ({money(ch1['Revenue'])})."
+        )
+
+    if sv is not None and len(sv) >= 1:
+        s_v = sv.sort_values("CV", ascending=False).iloc[0]
+        insights["Where risk exists"].append(
+            f"Volatility is concentrated: {s_v['Store']} is the most unstable (variability score ≈ {s_v['CV']:.2f}), which makes forecasting and staffing harder."
+        )
+    if dv is not None and len(dv) >= 1:
+        c_v = dv.sort_values("CV", ascending=False).iloc[0]
+        insights["Where risk exists"].append(
+            f"Channel volatility is highest in {c_v['Channel']} (variability score ≈ {c_v['CV']:.2f}). Consider tightening promo planning and supply on this channel."
+        )
+    if s is not None and len(s) >= 2:
+        top2_share = s.iloc[:2]["Revenue"].sum()/total if total else 0
+        insights["Where risk exists"].append(
+            f"Concentration risk is real: if the top 2 stores soften, ~{pct(top2_share)} of revenue is exposed."
+        )
+
+    if band is not None:
+        b = band.dropna()
+        if len(b) >= 2:
+            best = b.sort_values("AvgRevenue", ascending=False).iloc[0]
+            # pick a high-discount band (10%+)
+            high = b[b["DiscBand"].isin(["10–15%", "15–20%", "20%+"])]
+            if len(high) > 0:
+                high_worst = high.sort_values("AvgRevenue").iloc[0]
+                insights["What can be improved"].append(
+                    f"Discount discipline beats aggressive discounting: {best['DiscBand']} has the best revenue per sale ({money(best['AvgRevenue'])}), while {high_worst['DiscBand']} is weaker ({money(high_worst['AvgRevenue'])})."
+                )
+            else:
+                worst = b.sort_values("AvgRevenue").iloc[0]
+                insights["What can be improved"].append(
+                    f"Discount discipline beats aggressive discounting: {best['DiscBand']} performs best ({money(best['AvgRevenue'])} per sale) vs {worst['DiscBand']} ({money(worst['AvgRevenue'])})."
+                )
+            insights["What can be improved"].append(
+                "Treat deep discounts as experiments: set a goal (volume, new customers, clearance) and measure whether it actually improves revenue per sale."
+            )
+
+    if core.get("gross_margin_pct") is not None and not np.isnan(core["gross_margin_pct"]):
+        insights["What can be improved"].append(
+            f"Gross margin is about {pct(core['gross_margin_pct'], 1)} overall. Check margin by store/category to avoid growing low-quality revenue."
+        )
+
+    insights["What to focus on next"].append(
+        "Protect the top stores first: ensure stock availability, staffing, and execution discipline in your #1–#2 locations."
+    )
+    insights["What to focus on next"].append(
+        "Stabilize volatility before scaling: inconsistent performance is often operational (stock-outs, staffing gaps, promo inconsistency)."
+    )
+    insights["What to focus on next"].append(
+        "Scale what works: keep the discount band that performs best, and stop what doesn’t improve revenue per sale."
+    )
+
+    return insights
+
+# -------------------------
+# Charts (each with commentary)
+# -------------------------
+def chart_top_stores(df: pd.DataFrame, top_n: int = 5) -> Tuple[go.Figure, str]:
+    s = df.groupby("Store", as_index=False)["Revenue"].sum().sort_values("Revenue", ascending=False).head(top_n)
+    fig = px.bar(
+        s,
+        x="Store",
+        y="Revenue",
+        text="Revenue",
+        color="Store",
+        color_discrete_sequence=COLOR_SEQ,
+    )
+    fig.update_traces(texttemplate="$%{text:,.0f}", textposition="outside", cliponaxis=False)
+    fig.update_layout(showlegend=False, bargap=0.45)
+    fig = fig_style(fig, "Top Stores by Revenue")
+    fig.update_yaxes(title="Revenue")
+    fig.update_xaxes(title="", categoryorder="total descending")
+    # commentary
+    total = df["Revenue"].sum()
+    top1 = s.iloc[0]
+    comment = f"Your #1 store is {top1['Store']} at {money(top1['Revenue'])} ({pct(top1['Revenue']/total) if total else '-'} of total). Protect inventory and staffing here first — it’s your biggest lever."
+    return fig, comment
+
+def chart_revenue_trend(df: pd.DataFrame) -> Tuple[go.Figure, str]:
+    d = df.groupby(df["Date"].dt.date, as_index=False)["Revenue"].sum()
+    d.columns = ["Date", "Revenue"]
+    fig = px.line(d, x="Date", y="Revenue")
+    fig.update_traces(mode="lines", line=dict(width=3))
+    # label top 2 peaks
+    if len(d) >= 3:
+        peaks = d.nlargest(2, "Revenue")
+        fig.add_trace(go.Scatter(
+            x=peaks["Date"], y=peaks["Revenue"],
+            mode="markers+text",
+            text=[money(v) for v in peaks["Revenue"]],
+            textposition="top center",
+            showlegend=False
+        ))
+    fig = fig_style(fig, "Revenue Trend")
+    fig.update_yaxes(title="Revenue")
+    fig.update_xaxes(title="")
+    comment = "Use this to spot promotion spikes vs. normal baseline. Peaks often correspond to specific campaigns, events, or stock timing."
+    return fig, comment
+
+def chart_discount_effect(df: pd.DataFrame) -> Tuple[Optional[go.Figure], Optional[str]]:
+    if "Discount" not in df.columns:
+        return None, None
+    bins = [0, 0.02, 0.05, 0.10, 0.15, 0.20, 1.0]
+    labels = ["0–2%", "2–5%", "5–10%", "10–15%", "15–20%", "20%+"]
+    dd = df.copy()
+    dd["DiscBand"] = pd.cut(dd["Discount"].fillna(0), bins=bins, labels=labels, include_lowest=True, right=True)
+    g = dd.groupby("DiscBand", as_index=False)["Revenue"].mean().rename(columns={"Revenue": "AvgRevenue"}).dropna()
+    if g.empty:
+        return None, None
+    fig = px.bar(
+        g,
+        x="DiscBand",
+        y="AvgRevenue",
+        color="DiscBand",
+        color_discrete_sequence=COLOR_SEQ,
+        text="AvgRevenue"
+    )
+    fig.update_traces(texttemplate="$%{text:,.0f}", textposition="outside", cliponaxis=False)
+    fig.update_layout(showlegend=False, bargap=0.45)
+    fig = fig_style(fig, "Pricing & Discount Effectiveness")
+    fig.update_xaxes(title="Discount band", type="category", categoryorder="array", categoryarray=labels)
+    fig.update_yaxes(title="Average revenue per sale")
+    best = g.sort_values("AvgRevenue", ascending=False).iloc[0]
+    worst = g.sort_values("AvgRevenue", ascending=True).iloc[0]
+    comment = f"Best-performing band is {best['DiscBand']} at {money(best['AvgRevenue'])} per sale. Weakest is {worst['DiscBand']} at {money(worst['AvgRevenue'])}. Bigger discounts do not automatically improve results."
+    return fig, comment
+
+def chart_top_categories(df: pd.DataFrame, top_n: int = 5) -> Tuple[Optional[go.Figure], Optional[str]]:
+    if "Category" not in df.columns:
+        return None, None
+    c = df.groupby("Category", as_index=False)["Revenue"].sum().sort_values("Revenue", ascending=False).head(top_n)
+    fig = px.bar(c, x="Category", y="Revenue", color="Category", text="Revenue", color_discrete_sequence=COLOR_SEQ)
+    fig.update_traces(texttemplate="$%{text:,.0f}", textposition="outside", cliponaxis=False)
+    fig.update_layout(showlegend=False, bargap=0.45)
+    fig = fig_style(fig, "Top Categories by Revenue")
+    fig.update_xaxes(title="", type="category", categoryorder="total descending")
+    fig.update_yaxes(title="Revenue")
+    top = c.iloc[0]
+    comment = f"Your top category is {top['Category']} at {money(top['Revenue'])}. Consider protecting availability and pricing here — it’s a core driver."
+    return fig, comment
+
+def chart_channel_mix(df: pd.DataFrame) -> Tuple[Optional[go.Figure], Optional[str]]:
+    if "Channel" not in df.columns:
+        return None, None
+    ch = df.groupby("Channel", as_index=False)["Revenue"].sum().sort_values("Revenue", ascending=False)
+    fig = px.bar(ch, x="Channel", y="Revenue", color="Channel", text="Revenue", color_discrete_sequence=COLOR_SEQ)
+    fig.update_traces(texttemplate="$%{text:,.0f}", textposition="outside", cliponaxis=False)
+    fig.update_layout(showlegend=False, bargap=0.45)
+    fig = fig_style(fig, "Revenue by Channel")
+    fig.update_xaxes(title="", type="category", categoryorder="total descending")
+    fig.update_yaxes(title="Revenue")
+    top = ch.iloc[0]
+    comment = f"Your strongest channel is {top['Channel']} at {money(top['Revenue'])}. Use this as the benchmark when allocating budget and stock."
+    return fig, comment
+
+def chart_store_stability(df: pd.DataFrame, top_n: int = 5) -> Tuple[Optional[go.Figure], Optional[str]]:
+    if "Store" not in df.columns:
+        return None, None
+    tmp = df.copy()
+    tmp["Day"] = tmp["Date"].dt.date
+    sday = tmp.groupby(["Store", "Day"], as_index=False)["Revenue"].sum()
+    g = sday.groupby("Store")["Revenue"]
+    cv = (g.std() / g.mean()).replace([np.inf, -np.inf], np.nan).fillna(0).sort_values(ascending=False)
+    cv = cv.reset_index().rename(columns={"Revenue": "CV"}).head(top_n)
+    fig = px.bar(cv, x="Store", y="CV", color="Store", text="CV", color_discrete_sequence=COLOR_SEQ)
+    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside", cliponaxis=False)
+    fig.update_layout(showlegend=False, bargap=0.45)
+    fig = fig_style(fig, "Store Volatility (higher = less stable)")
+    fig.update_yaxes(title="Variability score (CV)")
+    fig.update_xaxes(title="", categoryorder="total descending")
+    top = cv.iloc[0]
+    comment = f"Most volatile store is {top['Store']} (CV {top['CV']:.2f}). Stabilizing this improves forecasting, staffing, and inventory planning."
+    return fig, comment
+
+# -------------------------
+# "Ask EC-AI" rule-based Q&A (no key shown)
+# -------------------------
+SUGGESTED_QUESTIONS = [
+    "What are my top 3 business priorities?",
+    "Which store should I protect first and why?",
+    "Are discounts helping or hurting?",
+    "Where is volatility coming from?",
+    "What should I investigate next week?",
+]
+
+def answer_question_rule_based(question: str, core: Dict) -> str:
+    q = (question or "").lower().strip()
+    total = core["revenue_total"]
+    s = core.get("store_rank")
+    c = core.get("cat_rank")
+    band = core.get("discount_band")
+    sv = core.get("store_vol")
+
+    if "top 3" in q or "priorit" in q:
+        out = []
+        if s is not None and len(s) >= 1:
+            out.append(f"1) Protect your #1 store ({s.iloc[0]['Store']}) — it drives {pct(s.iloc[0]['Revenue']/total) if total else '-'} of revenue.")
+        if band is not None:
+            b = band.dropna()
+            if len(b) > 0:
+                best = b.sort_values("AvgRevenue", ascending=False).iloc[0]
+                out.append(f"2) Keep discounting disciplined — {best['DiscBand']} is currently best per sale.")
+        if sv is not None and len(sv) > 0:
+            v = sv.sort_values("CV", ascending=False).iloc[0]
+            out.append(f"3) Reduce volatility in {v['Store']} — it is the most unstable and makes planning harder.")
+        return "\n".join(out) if out else "I need store/discount fields to answer this precisely."
+    if "store" in q and ("protect" in q or "focus" in q or "first" in q):
+        if s is not None and len(s) >= 1:
+            top = s.iloc[0]
+            return f"Start with {top['Store']} ({money(top['Revenue'])}, {pct(top['Revenue']/total) if total else '-'} of total). Small improvements here move the whole business the most."
+        return "I need a Store column to answer this."
+    if "discount" in q:
+        if band is not None:
+            b = band.dropna()
+            if len(b) >= 2:
+                best = b.sort_values("AvgRevenue", ascending=False).iloc[0]
+                worst = b.sort_values("AvgRevenue", ascending=True).iloc[0]
+                return f"Discounts are not linear: {best['DiscBand']} performs best ({money(best['AvgRevenue'])} per sale), while {worst['DiscBand']} is weakest ({money(worst['AvgRevenue'])}). Use deep discounts only with clear goals and measurement."
+        return "I need a Discount column to answer this."
+    if "volatil" in q or "stable" in q:
+        if sv is not None and len(sv) > 0:
+            v = sv.sort_values("CV", ascending=False).iloc[0]
+            return f"Volatility is concentrated in {v['Store']} (CV {v['CV']:.2f}). Check for stock-outs, staffing gaps, or inconsistent promotions there."
+        return "I need a Store column to compute volatility."
+    if "next week" in q or "investigate" in q:
+        out = []
+        if c is not None and len(c) >= 1:
+            out.append(f"Check your top category ({c.iloc[0]['Category']}) — is performance driven by price, volume, or availability?")
+        if s is not None and len(s) >= 2:
+            out.append(f"Compare the #1 vs #2 stores ({s.iloc[0]['Store']} vs {s.iloc[1]['Store']}) — what operational differences explain the gap?")
+        if band is not None:
+            out.append("Review discount experiments — did higher discounts improve revenue per sale or only volume?")
+        return "\n".join(out) if out else "I can suggest next checks once I detect store/category/discount fields."
+    return "Ask about priorities, stores, discounts, volatility, or what to check next — I’ll answer using your data."
+
+# -------------------------
+# PDF + PPT exports (Executive Brief v1)
+# -------------------------
+def make_exec_brief_pdf(title: str, summary: List[str], insights: Dict[str, List[str]], chart_pngs: List[Tuple[str, bytes]]) -> bytes:
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
-    width, height = letter
+    w, h = letter
 
-    def draw_title(text, y):
+    x0 = 0.85 * inch
+    y = h - 0.9 * inch
+
+    def draw_h1(t):
+        nonlocal y
         c.setFont("Helvetica-Bold", 18)
-        c.drawString(50, y, text)
+        c.drawString(x0, y, t)
+        y -= 0.35 * inch
 
-    def draw_section_header(text, y):
-        c.setFont("Helvetica-Bold", 12.5)
-        c.drawString(50, y, text)
+    def draw_h2(t):
+        nonlocal y
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(x0, y, t)
+        y -= 0.22 * inch
 
-    def draw_bullets(bullets, y, max_lines=999):
-        c.setFont("Helvetica", 10.5)
-        line_h = 14
-        lines_used = 0
-        for b in bullets:
-            if lines_used >= max_lines:
-                break
-            wrapped = textwrap.wrap(str(b), width=95)
-            for i, w in enumerate(wrapped):
-                prefix = "• " if i == 0 else "  "
-                c.drawString(55, y, prefix + w)
-                y -= line_h
-                lines_used += 1
-                if y < 70:
-                    c.showPage()
-                    y = height - 60
-                    c.setFont("Helvetica", 10.5)
-        return y
+    def draw_bullets(items, font=11, leading=14, max_lines=26):
+        nonlocal y
+        c.setFont("Helvetica", font)
+        wrapped = []
+        for it in items:
+            it = safe_text(it)
+            wrapped.extend(["• " + s for s in textwrap.wrap(it, width=105)])
+        for line in wrapped[:max_lines]:
+            if y < 1.0 * inch:
+                c.showPage()
+                y = h - 0.9 * inch
+                c.setFont("Helvetica", font)
+            c.drawString(x0, y, line)
+            y -= (leading / 72.0) * inch
+        y -= 0.12 * inch
 
-    y = height - 55
-    draw_title(title, y)
-    y -= 28
+    draw_h1(title)
     c.setFont("Helvetica", 10)
-    c.setFillColorRGB(0.35, 0.42, 0.48)
-    c.drawString(50, y, f"Generated by EC-AI • {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    c.setFillColorRGB(0.4, 0.45, 0.5)
+    c.drawString(x0, y, "EC-AI Executive Brief v1")
     c.setFillColorRGB(0, 0, 0)
-    y -= 20
+    y -= 0.3 * inch
 
-    draw_section_header("Business Summary", y)
-    y -= 16
-    y = draw_bullets(summary_bullets, y, max_lines=80)
-    y -= 10
+    draw_h2("Business Summary")
+    draw_bullets(summary, font=11)
 
-    draw_section_header("Business Insights", y)
-    y -= 16
+    draw_h2("Business Insights")
     for sec, bullets in insights.items():
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(50, y, sec)
-        y -= 14
-        y = draw_bullets(bullets, y, max_lines=50)
-        y -= 6
-        if y < 140:
+        if not bullets:
+            continue
+        c.setFont("Helvetica-Bold", 12)
+        if y < 1.2 * inch:
             c.showPage()
-            y = height - 60
+            y = h - 0.9 * inch
+        c.drawString(x0, y, sec)
+        y -= 0.2 * inch
+        draw_bullets(bullets, font=11, max_lines=24)
 
-    # Charts
-    draw_section_header("Key Charts", y)
-    y -= 16
-    for chart_title, png in chart_blocks:
-        if y < 180:
-            c.showPage()
-            y = height - 60
-        c.setFont("Helvetica-Bold", 11)
-        c.drawString(50, y, chart_title)
-        y -= 10
-        if png:
-            # roughly fit width
-            img_w = 510
-            img_h = 250
-            c.drawInlineImage(io.BytesIO(png), 50, y - img_h, width=img_w, height=img_h)
-            y -= (img_h + 18)
-        else:
-            c.setFont("Helvetica", 10)
-            c.setFillColorRGB(0.55, 0.55, 0.55)
-            c.drawString(50, y, "(Chart image export unavailable in this environment.)")
-            c.setFillColorRGB(0, 0, 0)
-            y -= 22
+    # charts
+    if chart_pngs:
+        c.showPage()
+        y = h - 0.9 * inch
+        draw_h1("Key Charts")
+        for chart_title, png in chart_pngs:
+            if png is None:
+                continue
+            if y < 3.3 * inch:
+                c.showPage()
+                y = h - 0.9 * inch
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(x0, y, chart_title)
+            y -= 0.15 * inch
+            # place image
+            img_w = w - 2 * x0
+            img_h = 3.0 * inch
+            c.drawImage(io.BytesIO(png), x0, y - img_h, width=img_w, height=img_h, preserveAspectRatio=True, anchor='n')
+            y -= (img_h + 0.35 * inch)
 
     c.save()
     buf.seek(0)
-    return buf.getvalue()
+    return buf.read()
 
-
-def make_ppt(title: str, slides: List[Tuple[str, str, Optional[bytes]]]) -> Optional[bytes]:
-    if Presentation is None:
-        return None
-
+def make_ppt_pack(title: str, summary: List[str], charts: List[Tuple[str, bytes, str]]) -> bytes:
     prs = Presentation()
     prs.slide_width = Inches(13.333)  # 16:9
     prs.slide_height = Inches(7.5)
 
-    # Title slide
-    slide = prs.slides.add_slide(prs.slide_layouts[5])  # blank
-    tx = slide.shapes.add_textbox(Inches(0.7), Inches(0.9), Inches(12), Inches(1.2)).text_frame
-    p = tx.paragraphs[0]
-    p.text = title
-    p.font.size = Pt(32)
-    p.font.bold = True
-    p.font.color.rgb = RGBColor(15, 42, 69)
-
-    subtitle = slide.shapes.add_textbox(Inches(0.7), Inches(2.0), Inches(12), Inches(0.7)).text_frame
-    p2 = subtitle.paragraphs[0]
-    p2.text = "Executive insights pack"
-    p2.font.size = Pt(16)
-    p2.font.color.rgb = RGBColor(91, 107, 122)
-
-    # Insight slides
-    for s_title, s_body, png in slides:
-        slide = prs.slides.add_slide(prs.slide_layouts[5])  # blank
-        # Header
-        box = slide.shapes.add_textbox(Inches(0.7), Inches(0.5), Inches(12), Inches(0.8)).text_frame
-        p = box.paragraphs[0]
-        p.text = s_title
-        p.font.size = Pt(22)
+    def add_title(slide, t):
+        tx = slide.shapes.add_textbox(Inches(0.7), Inches(0.4), Inches(12.0), Inches(0.7))
+        p = tx.text_frame.paragraphs[0]
+        p.text = t
+        p.font.size = Pt(30)
         p.font.bold = True
-        p.font.color.rgb = RGBColor(15, 42, 69)
+        p.font.color.rgb = RGBColor(15, 23, 42)
 
-        # Chart
+    def add_bullets(slide, bullets, x, y, w, h, font=18):
+        box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+        tf = box.text_frame
+        tf.clear()
+        for i, b in enumerate(bullets):
+            p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+            p.text = safe_text(b)
+            p.level = 0
+            p.font.size = Pt(font)
+            p.font.color.rgb = RGBColor(51, 65, 85)
+
+    # Cover
+    s0 = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title(s0, title)
+    add_bullets(s0, ["Sales performance, explained clearly.", "Business summary + key charts (Executive Brief v1)."], 0.75, 1.35, 12.0, 1.2, font=18)
+
+    # Summary slide
+    s1 = prs.slides.add_slide(prs.slide_layouts[6])
+    add_title(s1, "Business Summary")
+    add_bullets(s1, summary[:10], 0.75, 1.3, 6.3, 5.7, font=16)
+
+    # Chart slides
+    for chart_title, png, comment in charts:
+        sl = prs.slides.add_slide(prs.slide_layouts[6])
+        add_title(sl, chart_title)
+        # commentary
+        add_bullets(sl, [comment], 0.75, 1.3, 5.9, 1.5, font=16)
         if png:
-            img_stream = io.BytesIO(png)
-            slide.shapes.add_picture(img_stream, Inches(0.8), Inches(1.3), width=Inches(7.6))
-        # Commentary
-        body = slide.shapes.add_textbox(Inches(8.6), Inches(1.25), Inches(4.4), Inches(5.7)).text_frame
-        body.word_wrap = True
-        body.margin_left = 0
-        body.margin_right = 0
-        body.clear()
-        bp = body.paragraphs[0]
-        bp.text = s_body
-        bp.font.size = Pt(14)
-        bp.font.color.rgb = RGBColor(31, 45, 61)
+            img = io.BytesIO(png)
+            sl.shapes.add_picture(img, Inches(0.75), Inches(2.2), width=Inches(12.0), height=Inches(4.9))
 
     out = io.BytesIO()
     prs.save(out)
     out.seek(0)
-    return out.getvalue()
+    return out.read()
 
-
-# -----------------------------
+# -------------------------
 # UI
-# -----------------------------
-st.markdown(
-    """
-<div class="ec-hero">
-  <div style="font-size:42px; font-weight:800; letter-spacing:-0.5px; color:#0f2a45;">EC-AI Insight</div>
-  <div class="ec-subtle" style="margin-top:6px;">Sales performance, explained clearly.</div>
-  <div class="ec-subtle" style="margin-top:2px;">Upload your sales data and get a short business briefing — what’s working, what’s risky, and where to focus next.</div>
-  <div style="margin-top:10px;">
-    <span class="ec-pill">Executive brief</span>
-    <span class="ec-pill">Charts + commentary</span>
-    <span class="ec-pill">PDF & PPT export</span>
-  </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+# -------------------------
+st.title("EC-AI Insight")
+st.write("Sales performance, explained clearly.")
+st.caption("Upload your sales data and get a short executive brief — what’s working, what’s risky, and where to focus next.")
 
-st.write("")
+st.markdown("<hr>", unsafe_allow_html=True)
 
-# Sidebar: upload + AI key
-with st.sidebar:
-    st.markdown("### Upload data")
-    uploaded = st.file_uploader("CSV or Excel", type=["csv", "xlsx", "xls"])
-    st.markdown("---")
-    st.markdown("### Ask EC-AI")
-    st.caption("Optional: add an OpenAI key for deeper Q&A. If not provided, EC-AI uses rule-based answers.")
-    api_key = st.text_input("OpenAI API key (optional)", type="password", value=os.getenv("OPENAI_API_KEY", ""))
-    st.caption("Using an API key may incur token costs from your OpenAI account.")
-    st.markdown("---")
-    st.markdown("### Report sections")
-    # simple section toggles (Alice “I may only want to see what I care about”)
-    default_sections = ["Business Summary", "Business Insights", "Key Charts", "Ask EC-AI"]
-    if "sections" not in st.session_state:
-        st.session_state["sections"] = default_sections.copy()
-    sections = st.multiselect(
-        "Choose what to show (saved for this session)",
-        ["Business Summary", "Business Insights", "Key Charts", "Further Analysis", "Ask EC-AI"],
-        default=st.session_state["sections"],
-    )
-    st.session_state["sections"] = sections
+uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"])
 
-    # Save “fields” meaning: remember user selections
-    st.download_button(
-        "Download my view settings",
-        data=json.dumps({"sections": sections}, indent=2).encode("utf-8"),
-        file_name="ecai_view_settings.json",
-        mime="application/json",
-        help="Lets users save what they like to see and load it next time.",
-    )
+with st.expander("Column mapping (only if auto-detection is wrong)", expanded=False):
+    st.write("If the app picked the wrong columns, choose them here and re-run.")
+    mapping_help = "Tip: revenue should be numeric; date should be a date column."
+    st.caption(mapping_help)
 
-# Load settings
-if uploaded is None:
-    st.info("Upload a CSV/Excel file to begin.")
+df_raw = None
+if uploaded is not None:
+    try:
+        if uploaded.name.lower().endswith(".csv"):
+            df_raw = pd.read_csv(uploaded)
+        else:
+            df_raw = pd.read_excel(uploaded)
+    except Exception as e:
+        st.error(f"Could not read file: {e}")
+
+if df_raw is None:
+    st.info("Upload a dataset to start.")
     st.stop()
 
-# Read file
+# auto-guess
+guess = guess_columns(df_raw)
+
+# mapping UI (optional)
+all_cols = list(df_raw.columns)
+col_date = st.session_state.get("map_date") or guess["date"] or (all_cols[0] if all_cols else None)
+col_revenue = st.session_state.get("map_revenue") or guess["revenue"] or (all_cols[1] if len(all_cols) > 1 else None)
+
+# Use expander controls but keep clean UI
+with st.expander("Column mapping (only if auto-detection is wrong)", expanded=False):
+    col_date = st.selectbox("Date column", options=all_cols, index=all_cols.index(col_date) if col_date in all_cols else 0, key="map_date")
+    col_revenue = st.selectbox("Revenue column", options=all_cols, index=all_cols.index(col_revenue) if col_revenue in all_cols else 0, key="map_revenue")
+    col_store = st.selectbox("Store column (optional)", options=["(none)"] + all_cols, index=(["(none)"] + all_cols).index(guess["store"]) if guess["store"] in all_cols else 0, key="map_store")
+    col_category = st.selectbox("Category column (optional)", options=["(none)"] + all_cols, index=(["(none)"] + all_cols).index(guess["category"]) if guess["category"] in all_cols else 0, key="map_category")
+    col_channel = st.selectbox("Channel column (optional)", options=["(none)"] + all_cols, index=(["(none)"] + all_cols).index(guess["channel"]) if guess["channel"] in all_cols else 0, key="map_channel")
+    col_discount = st.selectbox("Discount column (optional)", options=["(none)"] + all_cols, index=(["(none)"] + all_cols).index(guess["discount"]) if guess["discount"] in all_cols else 0, key="map_discount")
+    col_cost = st.selectbox("COGS/Cost column (optional)", options=["(none)"] + all_cols, index=(["(none)"] + all_cols).index(guess["cost"]) if guess["cost"] in all_cols else 0, key="map_cost")
+    col_qty = st.selectbox("Quantity column (optional)", options=["(none)"] + all_cols, index=(["(none)"] + all_cols).index(guess["qty"]) if guess["qty"] in all_cols else 0, key="map_qty")
+    col_unit_price = st.selectbox("Unit price column (optional)", options=["(none)"] + all_cols, index=(["(none)"] + all_cols).index(guess["unit_price"]) if guess["unit_price"] in all_cols else 0, key="map_unit_price")
+    col_returned = st.selectbox("Returned flag column (optional)", options=["(none)"] + all_cols, index=(["(none)"] + all_cols).index(guess["returned"]) if guess["returned"] in all_cols else 0, key="map_returned")
+
+def none_to_none(v: str) -> Optional[str]:
+    return None if v == "(none)" else v
+
+model = RetailModel(
+    col_date=col_date,
+    col_revenue=col_revenue,
+    col_store=none_to_none(st.session_state.get("map_store", "(none)")),
+    col_category=none_to_none(st.session_state.get("map_category", "(none)")),
+    col_channel=none_to_none(st.session_state.get("map_channel", "(none)")),
+    col_discount=none_to_none(st.session_state.get("map_discount", "(none)")),
+    col_cost=none_to_none(st.session_state.get("map_cost", "(none)")),
+    col_qty=none_to_none(st.session_state.get("map_qty", "(none)")),
+    col_unit_price=none_to_none(st.session_state.get("map_unit_price", "(none)")),
+    col_returned=none_to_none(st.session_state.get("map_returned", "(none)")),
+)
+
 try:
-    if uploaded.name.lower().endswith(".csv"):
-        df = pd.read_csv(uploaded)
-    else:
-        df = pd.read_excel(uploaded)
+    df = validate_and_prepare(df_raw, model)
 except Exception as e:
-    st.error(f"Could not read file: {e}")
+    st.error(f"Data load error: {e}")
     st.stop()
 
-if df is None or df.empty:
-    st.error("This file is empty.")
-    st.stop()
+core = compute_core(df)
+summary = build_business_summary(core)
+insights = build_business_insights(core)
 
-schema = infer_schema(df)
-ok, msg = validate_minimum(schema)
-if not ok:
-    st.error(msg)
-    st.write("Detected columns:", list(df.columns))
-    st.stop()
+# KPI strip
+st.markdown('<div class="ec-kpi">', unsafe_allow_html=True)
+kpi_html = []
+kpi_html.append(f'<div class="k"><div class="t">Total revenue</div><div class="v">{money(core["revenue_total"])}</div></div>')
+kpi_html.append(f'<div class="k"><div class="t">Transactions</div><div class="v">{core["n_rows"]:,}</div></div>')
+kpi_html.append(f'<div class="k"><div class="t">Days covered</div><div class="v">{core["days"]}</div></div>')
+if core.get("gross_margin_pct") is not None and not np.isnan(core["gross_margin_pct"]):
+    kpi_html.append(f'<div class="k"><div class="t">Gross margin (est.)</div><div class="v">{pct(core["gross_margin_pct"], 1)}</div></div>')
+st.markdown("".join(kpi_html) + "</div>", unsafe_allow_html=True)
 
-# Compute facts
-ctx, top_store_tbl, top_cat_tbl, top_ch_tbl, vol_tbl, discount_band_tbl, daily = compute_context(df, schema)
-summary_bullets = build_business_summary(ctx)
-insights = build_business_insights(ctx)
+# Business Summary
+st.markdown('<div class="ec-card">', unsafe_allow_html=True)
+st.subheader("Business Summary")
+for b in summary:
+    st.write("• " + safe_text(b))
+st.markdown("</div>", unsafe_allow_html=True)
 
-# Create charts (freeze which charts stay in v1)
-# 1) Revenue trend
-fig_trend = fig_line_trend(df, schema.col_date, schema.col_revenue, "Revenue trend (daily)")
+# Business Insights
+st.markdown('<div class="ec-card">', unsafe_allow_html=True)
+st.subheader("Business Insights")
+for sec, bullets in insights.items():
+    st.markdown(f"### {sec}")
+    for b in bullets:
+        st.write("• " + safe_text(b))
+    st.write("")  # spacing
+st.markdown("</div>", unsafe_allow_html=True)
 
-# 2) Top 5 stores
-store_x = top_store_tbl[schema.col_store].astype(str).tolist()
-store_y = top_store_tbl[schema.col_revenue].astype(float).tolist()
-fig_top_stores = fig_bar_single_trace(
-    x=store_x,
-    y=store_y,
-    title="Top stores by revenue (Top 5)",
-    y_title="Revenue",
-    x_title="Store",
-    colors=PALETTE,
-    height=380,
-    text_fmt="money",
-)
+# Key charts (fixed set, executive v1)
+st.subheader("Key Charts")
 
-# 3) Discount effectiveness
-fig_discount = None
-discount_comment = ""
-if discount_band_tbl is not None and len(discount_band_tbl):
-    band_x = discount_band_tbl["band"].astype(str).tolist()
-    band_y = discount_band_tbl["avg_rev"].astype(float).tolist()
-    fig_discount = fig_bar_single_trace(
-        x=band_x,
-        y=band_y,
-        title="Pricing effectiveness (average revenue per sale by discount band)",
-        y_title="Avg revenue per sale",
-        x_title="Discount band",
-        colors=PALETTE,
-        height=360,
-        text_fmt="money",
-    )
-    discount_comment = f"Best-performing band: {ctx.get('best_discount_band')} (≈ {fmt_money(ctx.get('best_discount_val'))} per sale)."
+charts_for_export: List[Tuple[str, go.Figure, str]] = []
 
-# 4) Volatility by channel (if present)
-fig_vol_channel = None
-if schema.col_channel:
-    # compute CV by channel using daily totals
-    vch = compute_volatility(df, schema.col_date, schema.col_channel, schema.col_revenue)
-    vch = vch.dropna(subset=["cv"])
-    if len(vch):
-        x = vch[schema.col_channel].astype(str).tolist()
-        y = vch["cv"].astype(float).tolist()
-        fig_vol_channel = fig_bar_single_trace(
-            x=x,
-            y=y,
-            title="Volatility by channel (higher = less stable)",
-            y_title="Volatility score (CV)",
-            x_title="Channel",
-            colors=PALETTE,
-            height=340,
-            text_fmt="num",
-        )
+colA, colB = st.columns(2)
 
-# -----------------------------
-# Main content
-# -----------------------------
-if "Business Summary" in sections:
-    st.markdown("## Business Summary")
-    st.markdown('<div class="ec-card"><ul class="ec-bullets">' + "".join([f"<li>{b}</li>" for b in summary_bullets]) + "</ul></div>", unsafe_allow_html=True)
-
-if "Business Insights" in sections:
-    st.markdown("## Business Insights")
-    # add spacing between subheaders (your request)
-    blocks = []
-    for sec, bullets in insights.items():
-        blocks.append(f"<div class='ec-section'><div class='ec-h3'>{sec}</div><ul class='ec-bullets'>" +
-                      "".join([f"<li>{b}</li>" for b in bullets]) + "</ul></div>")
-    st.markdown('<div class="ec-card">' + "".join(blocks) + "</div>", unsafe_allow_html=True)
-
-if "Key Charts" in sections:
-    st.markdown("## Key Charts")
-    # 1) Trend
-    st.plotly_chart(fig_trend, use_container_width=True, config=PLOTLY_CONFIG)
-    st.caption("Use this to spot promotion spikes, slowdowns, and whether momentum is improving.")
-
-    # 2) Top stores
-    st.plotly_chart(fig_top_stores, use_container_width=True, config=PLOTLY_CONFIG)
-    if ctx.get("top_store_name"):
-        st.caption(f"Your #1 store is {ctx['top_store_name']} at {fmt_money(ctx.get('top_store_rev'))}. Protect inventory and staffing here first — it is your biggest lever.")
-
-    # 3) Discount
-    if fig_discount is not None:
-        st.plotly_chart(fig_discount, use_container_width=True, config=PLOTLY_CONFIG)
-        if discount_comment:
-            st.caption(discount_comment)
-
-    # 4) Volatility
-    if fig_vol_channel is not None:
-        st.plotly_chart(fig_vol_channel, use_container_width=True, config=PLOTLY_CONFIG)
-        st.caption("High volatility often indicates inconsistent execution or supply issues. Stabilize first, then push growth.")
-
-if "Further Analysis" in sections:
-    st.markdown("## Further Analysis (optional)")
-    # Simple tables (high-signal, CEO-friendly)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.markdown("**Top stores**")
-        st.dataframe(top_store_tbl.rename(columns={schema.col_revenue: "Revenue"}), use_container_width=True)
-    with c2:
-        if schema.col_category and len(top_cat_tbl):
-            st.markdown("**Top categories**")
-            st.dataframe(top_cat_tbl.rename(columns={schema.col_revenue: "Revenue"}), use_container_width=True)
-        else:
-            st.info("No Category column detected.")
-    with c3:
-        if schema.col_channel and len(top_ch_tbl):
-            st.markdown("**Top channels**")
-            st.dataframe(top_ch_tbl.rename(columns={schema.col_revenue: "Revenue"}), use_container_width=True)
-        else:
-            st.info("No Channel/Payment column detected.")
-
-if "Ask EC-AI" in sections:
-    st.markdown("## Ask EC-AI")
-    st.caption("Ask a business question like: “Which store should I prioritize?” or “What should I do next week?”")
-    q = st.text_input("Your question", placeholder="e.g., Which store should I prioritize first?")
-    if st.button("Ask"):
-        if q.strip():
-            if api_key:
-                ans = openai_answer(q, ctx, api_key)
-            else:
-                ans = local_business_qa(q, ctx)
-            st.markdown('<div class="ec-card">' + ans + "</div>", unsafe_allow_html=True)
-        else:
-            st.warning("Type a question first.")
-
-# -----------------------------
-# Exports (PDF & PPT)
-# -----------------------------
-st.markdown("## Export EC-AI Executive Brief")
-st.caption("Includes Business Summary + Business Insights + selected charts. Charts require Kaleido for best results.")
-
-chart_pngs = [
-    ("Revenue trend (daily)", fig_to_png_bytes(fig_trend)),
-    ("Top stores by revenue (Top 5)", fig_to_png_bytes(fig_top_stores)),
-]
-if fig_discount is not None:
-    chart_pngs.append(("Pricing effectiveness (discount bands)", fig_to_png_bytes(fig_discount)))
-if fig_vol_channel is not None:
-    chart_pngs.append(("Volatility by channel", fig_to_png_bytes(fig_vol_channel)))
-
-colA, colB = st.columns([1, 1])
 with colA:
-    if st.button("Generate PDF Executive Brief"):
-        pdf_bytes = make_executive_pdf("EC-AI Executive Brief", summary_bullets, insights, chart_pngs)
-        if pdf_bytes:
-            st.download_button("Download PDF", data=pdf_bytes, file_name="ecai_executive_brief.pdf", mime="application/pdf")
-        else:
-            st.error("PDF export is unavailable (reportlab missing) or failed in this environment.")
-with colB:
-    if st.button("Generate PPT Insights Pack"):
-        # Build a few insight slides with concrete commentary
-        slides = []
-        slides.append(("Revenue trend", "Spot spikes and slowdowns; if the last 2–3 weeks are trending up, scale what worked and repeat.", fig_to_png_bytes(fig_trend, scale=2)))
-        if ctx.get("top_store_name"):
-            slides.append(("Top stores", f"Your #1 store is {ctx['top_store_name']} at {fmt_money(ctx.get('top_store_rev'))}. Protect inventory and staffing here first — it moves total performance most.", fig_to_png_bytes(fig_top_stores, scale=2)))
-        if fig_discount is not None and ctx.get("best_discount_band"):
-            slides.append(("Pricing effectiveness", f"{ctx.get('best_discount_band')} performs best on average (≈ {fmt_money(ctx.get('best_discount_val'))} per sale). Bigger discounts do not automatically improve results — treat deep discount as controlled tests.", fig_to_png_bytes(fig_discount, scale=2)))
-        if fig_vol_channel is not None:
-            slides.append(("Channel volatility", "Stabilize the most volatile channel first. Volatility often means inconsistent execution or demand — fix operations before pushing growth.", fig_to_png_bytes(fig_vol_channel, scale=2)))
+    if "Store" in df.columns:
+        fig, comment = chart_top_stores(df)
+        st.plotly_chart(fig, use_container_width=True, config=PLOT_CONFIG)
+        st.caption(comment)
+        charts_for_export.append(("Top Stores by Revenue", fig, comment))
+    fig, comment = chart_revenue_trend(df)
+    st.plotly_chart(fig, use_container_width=True, config=PLOT_CONFIG)
+    st.caption(comment)
+    charts_for_export.append(("Revenue Trend", fig, comment))
 
-        ppt_bytes = make_ppt("EC-AI Insights Pack", slides)
-        if ppt_bytes:
-            st.download_button("Download PPT", data=ppt_bytes, file_name="ecai_insights_pack.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-        else:
-            st.error("PPT export is unavailable (python-pptx missing) or failed in this environment.")
+with colB:
+    f, cmt = chart_discount_effect(df)
+    if f is not None:
+        st.plotly_chart(f, use_container_width=True, config=PLOT_CONFIG)
+        st.caption(cmt)
+        charts_for_export.append(("Pricing & Discount Effectiveness", f, cmt))
+    f, cmt = chart_top_categories(df)
+    if f is not None:
+        st.plotly_chart(f, use_container_width=True, config=PLOT_CONFIG)
+        st.caption(cmt)
+        charts_for_export.append(("Top Categories by Revenue", f, cmt))
+    f, cmt = chart_channel_mix(df)
+    if f is not None:
+        st.plotly_chart(f, use_container_width=True, config=PLOT_CONFIG)
+        st.caption(cmt)
+        charts_for_export.append(("Revenue by Channel", f, cmt))
+    f, cmt = chart_store_stability(df)
+    if f is not None:
+        st.plotly_chart(f, use_container_width=True, config=PLOT_CONFIG)
+        st.caption(cmt)
+        charts_for_export.append(("Store Volatility", f, cmt))
+
+# Ask EC-AI (no key input shown)
+st.subheader("Ask EC-AI")
+st.caption("Ask a business question — EC-AI will answer using your uploaded data.")
+q1 = st.selectbox("Suggested questions", options=["(choose one)"] + SUGGESTED_QUESTIONS)
+free_q = st.text_input("Or ask your own question", value="", placeholder="e.g., Which store is my biggest risk and why?")
+
+question = free_q.strip() if free_q.strip() else (q1 if q1 != "(choose one)" else "")
+if question:
+    st.markdown('<div class="ec-card">', unsafe_allow_html=True)
+    st.markdown(f"**Question:** {safe_text(question)}")
+    # Only rule-based for public demo; you can later wire server-side OPENAI_API_KEY
+    ans = answer_question_rule_based(question, core)
+    st.markdown(safe_text(ans).replace("\n", "<br>"), unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# Exports
+st.subheader("Export")
+st.caption("Exports are generated from the same Executive Brief content shown above (summary, insights, key charts).")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    if st.button("Generate Executive Brief (PDF)"):
+        chart_pngs = []
+        for t, fig, _ in charts_for_export[:6]:
+            png = fig_to_png_bytes(fig, scale=2)
+            if png:
+                chart_pngs.append((t, png))
+        pdf_bytes = make_exec_brief_pdf("EC-AI Executive Brief", summary, insights, chart_pngs)
+        st.download_button("Download PDF", data=pdf_bytes, file_name="ecai_executive_brief_v1.pdf", mime="application/pdf")
+
+with col2:
+    if st.button("Generate Insights Pack (PPTX)"):
+        chart_items = []
+        for t, fig, cmt in charts_for_export[:7]:
+            png = fig_to_png_bytes(fig, scale=2)
+            chart_items.append((t, png, cmt))
+        ppt_bytes = make_ppt_pack("EC-AI Insights Pack", summary, chart_items)
+        st.download_button("Download PPTX", data=ppt_bytes, file_name="ecai_insights_pack_v1.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
