@@ -1,3 +1,4 @@
+from __future__ import annotations
 # EC-AI Insight — Retail Sales MVP (Founder-first)
 
 def clean_display_text(s: str) -> str:
@@ -38,8 +39,6 @@ def clean_display_text(s: str) -> str:
     # Normalize whitespace
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
-
-from __future__ import annotations
 
 import io
 import os
