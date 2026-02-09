@@ -240,7 +240,9 @@ def apply_consulting_theme(
 
     fig.update_xaxes(
         title=None,
-        showline=False,
+        showline=True,
+        linewidth=1,
+        linecolor="#374151",
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
@@ -251,8 +253,8 @@ def apply_consulting_theme(
     fig.update_yaxes(
         title=None,
         showline=True,
-        linewidth=1.0,
-        linecolor="#1F2937",
+        linewidth=1,
+        linecolor="#374151",
         ticks="outside",
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
@@ -271,6 +273,17 @@ def apply_consulting_theme(
     fig.update_traces(hoverlabel=dict(font_size=12), hovertemplate=None)
 
     return fig
+
+
+def plot_half_width(fig: go.Figure, *, config: dict | None = None) -> None:
+    """Left-aligned half-width chart (consultant deck proportion)."""
+    col1, col2 = st.columns([0.55, 0.45])
+    with col1:
+        if config is None:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.plotly_chart(fig, use_container_width=True, config=config)
+
 
 
 # -----------------------------
@@ -1122,7 +1135,7 @@ st.subheader("Charts & Insights")
 
 # 1) Overall trend
 fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
-st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
+plot_half_width(fig_trend, config={"displayModeBar": False})
 insight_block(
     "Revenue Trend",
     what=["Overall revenue direction over time (daily total)."],
@@ -1132,7 +1145,7 @@ insight_block(
 
 # 2) Top 5 stores
 fig_topstores, df_topstores = top5_stores_bar(m)
-st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
+plot_half_width(fig_topstores, config={"displayModeBar": False})
 top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
 insight_block(
     "Top Stores",
@@ -1159,7 +1172,7 @@ insight_block(
 pe = pricing_effectiveness(m)
 if pe is not None:
     fig_price, df_price = pe
-    st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
+    plot_half_width(fig_price, config={"displayModeBar": False})
     insight_block(
         "Pricing Effectiveness",
         what=["Moderate discounts often perform better than aggressive discounting."],
@@ -1173,7 +1186,7 @@ else:
 cat = revenue_by_category(m, topn=8)
 if cat is not None:
     fig_cat, _ = cat
-    st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+    plot_half_width(fig_cat, config={"displayModeBar": False})
     insight_block(
         "Category Mix",
         what=["A few categories typically drive most revenue."],
@@ -1185,7 +1198,7 @@ if cat is not None:
 chn = revenue_by_channel(m, topn=8)
 if chn is not None:
     fig_chn, _ = chn
-    st.plotly_chart(fig_chn, use_container_width=True, config={"displayModeBar": False})
+    plot_half_width(fig_chn, config={"displayModeBar": False})
     insight_block(
         "Channel Mix",
         what=["Channels contribute very differently to revenue."],
@@ -1218,7 +1231,7 @@ with st.expander("Advanced analysis (optional)"):
         fig_corr = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale="Blues")
         fig_corr = apply_consulting_theme(fig_corr, title="Numeric Correlation (Advanced)", height=440)
         fig_corr.update_xaxes(side="bottom")
-        st.plotly_chart(fig_corr, use_container_width=True)
+        plot_half_width(fig_corr)
     else:
         st.info("Not enough numeric fields to compute correlation.")
 
