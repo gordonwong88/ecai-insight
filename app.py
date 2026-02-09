@@ -39,8 +39,6 @@ def clean_display_text(s: str) -> str:
     s = re.sub(r"\s{2,}", " ", s).strip()
     return s
 
-from __future__ import annotations
-
 import io
 import os
 import re
