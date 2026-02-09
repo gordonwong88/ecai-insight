@@ -256,6 +256,7 @@ def apply_consulting_theme(
         linewidth=1,
         linecolor="#374151",
         ticks="outside",
+        zeroline=False,
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
         zeroline=True,
@@ -785,6 +786,7 @@ def bar_categorical(
         title_text=y_title,
         rangemode="tozero",
         range=[0, ymax + ypad],
+        zeroline=False,
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
     return fig
