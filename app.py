@@ -59,6 +59,49 @@ try:
 except Exception:
     OpenAI = None
 
+# -----------------------------
+# Ask AI helpers (minimal, stable)
+# -----------------------------
+def _get_openai_api_key() -> str | None:
+    try:
+        if hasattr(st, "secrets") and "OPENAI_API_KEY" in st.secrets:
+            return st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("OPENAI_API_KEY")
+
+
+def answer_question_with_openai(question: str, context: str) -> str:
+    """CEO-level Q&A based on provided context only."""
+    api_key = _get_openai_api_key()
+    if OpenAI is None or not api_key:
+        return "Ask AI is not configured yet. Please add `OPENAI_API_KEY` in Streamlit Secrets."
+
+    client = OpenAI(api_key=api_key)
+
+    system = (
+        "You are EC-AI, an executive analytics consultant. "
+        "Respond in a CEO-ready style: Insight → Evidence → Action. "
+        "Be concise, practical, and avoid jargon. "
+        "Only use the provided context; if the answer isn't supported, say what's missing."
+    )
+
+    user = f"CONTEXT (from dashboard summary):\n{context}\n\nQUESTION:\n{question}"
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0.2,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        return f"Ask AI failed: {e}"
+
+
 # Export deps (optional at runtime)
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -1044,13 +1087,18 @@ with st.expander("Advanced analysis (optional)"):
 st.subheader("Ask AI (CEO Q&A)")
 st.caption("Ask questions about your data (e.g., 'Why did revenue drop?' 'Which store should I fix first?'). Answers are generated from your uploaded dataset summary.")
 
-# Inline Q&A (keeps the input box right here under the section)
+# Inline Q&A (input stays directly under this section)
 q = st.text_input("Ask a question", placeholder="e.g., What should I focus on next week and why?")
 ask_btn = st.button("Ask AI")
 
 if ask_btn and q.strip():
-    ctx = build_context_string(summary) if "build_context_string" in globals() else ""
-    answer = answer_question_with_openai(q.strip(), ctx)
+    # Use the existing Executive Summary bullets as the context
+    _ctx = ""
+    try:
+        _ctx = "\n".join([clean_display_text(x) for x in summary_points[:12] if clean_display_text(x)])
+    except Exception:
+        _ctx = ""
+    answer = answer_question_with_openai(q.strip(), _ctx)
     st.markdown("**Answer**")
     st.write(answer)
 
