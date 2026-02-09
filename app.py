@@ -278,15 +278,6 @@ def apply_consulting_theme(
 # -----------------------------
 # Layout helpers
 # -----------------------------
-def st.plotly_chart(fig: go.Figure, *, width_ratio: float = 0.6, use_container_width=True, config={\"displayModeBar\": False}) -> None:
-    """Render bar charts in a centered column (consultancy-like proportions)."""
-    # Map ratio to simple 3-column layout: left / center / right
-    # 0.6 -> [2,6,2], 0.5 -> [3,6,3]
-    center = max(4, min(8, int(round(width_ratio * 10))))  # 0.6->6
-    side = max(1, int(round((10 - center) / 2)))
-    cols = st.columns([side, center, side])
-    with cols[1]:
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
 
@@ -996,7 +987,7 @@ def build_ppt_talking_deck(
     slide = prs.slides.add_slide(title_slide_layout)
     slide.shapes.title.text = deck_title
     subtitle = slide.placeholders[1]
-    subtitle.text = "Talking Deck — one insight per slide"
+    subtitle.text = "Executive Pack — one insight per slide"
 
     # Content slides
     blank_layout = prs.slide_layouts[6]  # blank
@@ -1272,7 +1263,7 @@ st.markdown(
 Download a short executive-ready summary for sharing or review.
 
 - **PDF Executive Brief** — selected insights only  
-- **PPT Talking Deck** — one insight per slide (16:9)
+- **PPT Executive Pack** — one insight per slide (16:9)
     """
 )
 
@@ -1312,10 +1303,10 @@ with colA:
             st.code(str(e))
 
 with colB:
-    if st.button("Generate PPT Talking Deck"):
+    if st.button("Generate PPT Executive Pack"):
         try:
             ppt_bytes = build_ppt_talking_deck(
-                deck_title="EC-AI Insight — Talking Deck",
+                deck_title="EC-AI Insight — Executive Pack",
                 chart_items=export_items,
             )
             st.download_button("Download PPT", data=ppt_bytes, file_name="ecai_talking_deck.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
