@@ -40,35 +40,6 @@ def clean_display_text(s: str) -> str:
     return s
 
 import io
-# -----------------------------
-# Executive emphasis helper
-# -----------------------------
-def emphasize_exec_keywords(text: str) -> str:
-    """
-    Add bold emphasis to key executive signals:
-    - Store names (HK-, SG-, JP-, CN-)
-    - Money amounts ($)
-    - Percentages (%)
-    - Rankings (#1, top 2)
-    """
-    if not text:
-        return text
-
-    # Money
-    text = re.sub(r"(\$[0-9,.]+[KMB]?)", r"**\1**", text)
-
-    # Percentages
-    text = re.sub(r"(\d+\.?\d*%)", r"**\1**", text)
-
-    # Rankings
-    text = re.sub(r"(#\d+|top \d+)", r"**\1**", text, flags=re.I)
-
-    # Store / location codes
-    text = re.sub(r"((HK|SG|JP|CN)-[A-Za-z0-9]+)", r"**\1**", text)
-
-    return text
-
-
 import os
 import re
 import textwrap
@@ -141,6 +112,39 @@ from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, PageBreak
 from reportlab.lib.enums import TA_LEFT
+
+
+# -----------------------------
+# Executive emphasis helper (HTML bold for reliable rendering)
+# -----------------------------
+def emphasize_exec_keywords_html(text: str) -> str:
+    """
+    Bold key executive signals using HTML <b> so emphasis always appears:
+    - Money amounts ($)
+    - Percentages (%)
+    - Rankings (#1, Top 2)
+    - Store/location codes (HK-, SG-, JP-, CN-)
+    """
+    if not text:
+        return text or ""
+
+    # Money
+    text = re.sub(r"(\$[0-9,.]+[KMB]?)", r"<b>\1</b>", text)
+
+    # Percentages
+    text = re.sub(r"(\d+\.?\d*%)", r"<b>\1</b>", text)
+
+    # Rankings
+    text = re.sub(r"(#\d+|top \d+)", r"<b>\1</b>", text, flags=re.I)
+
+    # Store / location codes
+    text = re.sub(r"((HK|SG|JP|CN)-[A-Za-z0-9]+)", r"<b>\1</b>", text)
+
+    # Lead-ins
+    text = re.sub(r"^(Takeaway:)", r"<b>\1</b>", text)
+    text = re.sub(r"^(Next focus:)", r"<b>\1</b>", text)
+
+    return text
 
 
 # -----------------------------
@@ -242,7 +246,9 @@ def apply_consulting_theme(
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
-        zeroline=False,
+        zeroline=True,
+        zerolinewidth=1,
+        zerolinecolor="#111827",
     )
     fig.update_yaxes(
         title=None,
@@ -252,7 +258,9 @@ def apply_consulting_theme(
         ticks="outside",
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
-        zeroline=False,
+        zeroline=True,
+        zerolinewidth=1,
+        zerolinecolor="#111827",
     )
 
     if y_is_currency:
@@ -270,7 +278,7 @@ def apply_consulting_theme(
 # -----------------------------
 # Layout helpers
 # -----------------------------
-def render_bar_chart(fig: go.Figure, *, width_ratio: float = 0.6) -> None:
+def st.plotly_chart(fig: go.Figure, *, width_ratio: float = 0.6, use_container_width=True, config={\"displayModeBar\": False}) -> None:
     """Render bar charts in a centered column (consultancy-like proportions)."""
     # Map ratio to simple 3-column layout: left / center / right
     # 0.6 -> [2,6,2], 0.5 -> [3,6,3]
@@ -724,46 +732,24 @@ def bar_categorical(
     Executive-style categorical bar chart (consultancy sweet spot):
     - Bars anchored at zero (no floating gap)
     - Thin bars + generous whitespace
-    - Bold x labels and y ticks
+    - Outside value labels (clean + readable)
     - Leader emphasis (Option 1): top bar highlighted, others muted
-    - Value labels auto-contrast (white on dark colors, black on light)
+    - Left-aligned layout (full width)
     """
     base_x = [str(v) for v in x_labels]
     y = [float(v) if v is not None and not (isinstance(v, float) and np.isnan(v)) else 0.0 for v in y_values]
 
-    # Ranked labels for quick executive reading
     ranked = [f"{i+1}. {lbl}" for i, lbl in enumerate(base_x)]
-    ticktext = [f"<b>{t}</b>" for t in ranked]
 
-    # Leader emphasis color scheme (Option 1)
     if colors is None:
-        leader = CONSULTING_PALETTE[0]  # deep navy
-        muted = "#D1D5DB"               # light gray
+        leader = CONSULTING_PALETTE[0] if "CONSULTING_PALETTE" in globals() else TABLEAU10[0]
+        muted = "#D1D5DB"
         colors = [leader] + [muted] * max(0, len(ranked) - 1)
     else:
         colors = colors[: len(ranked)]
 
-    # Auto-contrast text color (white on dark, black on light)
-    def _hex_to_rgb(h: str):
-        h = h.lstrip("#")
-        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
-    def _luminance(hex_color: str) -> float:
-        r, g, b = _hex_to_rgb(hex_color)
-        # perceived luminance
-        return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-    text_colors = []
-    for c in colors:
-        try:
-            lum = _luminance(c)
-            text_colors.append("#111827" if lum > 170 else "#FFFFFF")
-        except Exception:
-            text_colors.append("#FFFFFF")
-
     ymax = max(y) if y else 0.0
     ypad = ymax * 0.12 if ymax > 0 else 1.0
-    yrange = [0, ymax + ypad]
 
     fig = go.Figure()
     fig.add_trace(
@@ -772,36 +758,33 @@ def bar_categorical(
             y=y,
             customdata=base_x,
             marker=dict(color=colors),
-            width=0.20,  # slightly thinner than before
+            width=0.22,
             text=y,
             texttemplate=f"%{{text:{text_fmt}}}",
-            textposition="inside",
-            insidetextanchor="middle",
-            textfont=dict(color=text_colors, size=12),
+            textposition="outside",
+            cliponaxis=False,
+            textfont=dict(color="#111827", size=12),
             hovertemplate="%{customdata}<br>$%{y:,.2s}<extra></extra>",
         )
     )
 
     fig = apply_consulting_theme(fig, title=title, height=380, y_is_currency=True)
-    fig.update_layout(bargap=0.82)  # more whitespace between bars
+    fig.update_layout(bargap=0.78)
 
     fig.update_xaxes(
         type="category",
         categoryorder="array",
         categoryarray=ranked,
-        tickmode="array",
-        tickvals=ranked,
-        ticktext=ticktext,
         title_text=x_title,
         showgrid=False,
+        tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
     fig.update_yaxes(
         title_text=y_title,
         rangemode="tozero",
-        range=yrange,
+        range=[0, ymax + ypad],
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
-    fig.update_xaxes(tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"))
     return fig
 
 def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
@@ -1160,7 +1143,7 @@ insight_block(
 
 # 2) Top 5 stores
 fig_topstores, df_topstores = top5_stores_bar(m)
-render_bar_chart(fig_topstores, width_ratio=0.6)
+st.plotly_chart(fig_topstores, width_ratio=0.6, use_container_width=True, config={\"displayModeBar\": False})
 top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
 insight_block(
     "Top Stores",
@@ -1187,7 +1170,7 @@ insight_block(
 pe = pricing_effectiveness(m)
 if pe is not None:
     fig_price, df_price = pe
-    render_bar_chart(fig_price, width_ratio=0.6)
+    st.plotly_chart(fig_price, width_ratio=0.6, use_container_width=True, config={\"displayModeBar\": False})
     insight_block(
         "Pricing Effectiveness",
         what=["Moderate discounts often perform better than aggressive discounting."],
@@ -1201,7 +1184,7 @@ else:
 cat = revenue_by_category(m, topn=8)
 if cat is not None:
     fig_cat, _ = cat
-    render_bar_chart(fig_cat, width_ratio=0.6)
+    st.plotly_chart(fig_cat, width_ratio=0.6, use_container_width=True, config={\"displayModeBar\": False})
     insight_block(
         "Category Mix",
         what=["A few categories typically drive most revenue."],
@@ -1213,7 +1196,7 @@ if cat is not None:
 chn = revenue_by_channel(m, topn=8)
 if chn is not None:
     fig_chn, _ = chn
-    render_bar_chart(fig_chn, width_ratio=0.6)
+    st.plotly_chart(fig_chn, width_ratio=0.6, use_container_width=True, config={\"displayModeBar\": False})
     insight_block(
         "Channel Mix",
         what=["Channels contribute very differently to revenue."],
