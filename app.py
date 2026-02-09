@@ -193,7 +193,9 @@ def apply_consulting_theme(
 
     fig.update_xaxes(
         title=None,
-        showline=False,
+        showline=True,
+        linewidth=2,
+        linecolor="#111827",
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.06)",
@@ -201,7 +203,9 @@ def apply_consulting_theme(
     )
     fig.update_yaxes(
         title=None,
-        showline=False,
+        showline=True,
+        linewidth=2,
+        linecolor="#111827",
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.08)",
@@ -637,11 +641,24 @@ def bar_categorical(
     colors: Optional[List[str]] = None,
     text_fmt: str = ",.0f",
 ) -> go.Figure:
-    # Strict categorical axis: tickvals == categoryarray == x
-    x = [str(v) for v in x_labels]
+    """
+    Executive-style categorical bar chart.
+    - Thin bars (33% width)
+    - Bold axis baselines
+    - Leader emphasis (Option 1): top bar highlighted, others muted
+    - Ranked x labels (1., 2., ...)
+    """
+    base_x = [str(v) for v in x_labels]
     y = [float(v) if v is not None and not (isinstance(v, float) and np.isnan(v)) else 0.0 for v in y_values]
+
+    # Ranked labels for quick executive reading
+    x = [f"{i+1}. {lbl}" for i, lbl in enumerate(base_x)]
+
+    # Leader emphasis color scheme (Option 1)
     if colors is None:
-        colors = [TABLEAU10[i % len(TABLEAU10)] for i in range(len(x))]
+        leader = TABLEAU10[0]
+        muted = "#CBD5E1"  # cool gray
+        colors = [leader] + [muted] * max(0, len(x) - 1)
     else:
         colors = colors[: len(x)]
 
@@ -650,17 +667,20 @@ def bar_categorical(
         go.Bar(
             x=x,
             y=y,
-            marker_color=colors,
-            text=[format(v, text_fmt) for v in y],
+            customdata=base_x,
+            marker=dict(color=colors),
+            width=0.33,  # ~33% thinner
+            text=y,
+            texttemplate=f"%{{text:{text_fmt}}}",
             textposition="auto",
             cliponaxis=True,
-            textfont=dict(size=12, color="#111827"),
-            
-            hovertemplate="%{x}<br>%{y:,.2f}<extra></extra>",
+            hovertemplate="%{customdata}<br>$%{y:,.2s}<extra></extra>",
         )
     )
-    fig = fig_style_common(fig, title)
-    fig.update_layout(bargap=0.35)
+
+    fig = apply_consulting_theme(fig, title=title, height=380, y_is_currency=True)
+    fig.update_layout(bargap=0.65)  # more whitespace between bars
+
     fig.update_xaxes(
         type="category",
         categoryorder="array",
@@ -669,24 +689,9 @@ def bar_categorical(
         tickvals=x,
         ticktext=x,
         title_text=x_title,
+        showgrid=False,
     )
     fig.update_yaxes(title_text=y_title)
-    return fig
-
-def line_trend(df: pd.DataFrame, date_col: str, value_col: str, title: str) -> go.Figure:
-    daily = df.groupby(pd.Grouper(key=date_col, freq="D"))[value_col].sum().reset_index()
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=daily[date_col],
-            y=daily[value_col],
-            mode="lines",
-            line=dict(width=3),
-            hovertemplate="%{x|%Y-%m-%d}<br>$%{y:,.2s}<extra></extra>",
-        )
-    )
-    fig = apply_consulting_theme(fig, title=title, height=360, y_is_currency=True)
-    fig.update_xaxes(showgrid=False, tickformat="%b %d")
     return fig
 
 def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
