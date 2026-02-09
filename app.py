@@ -694,6 +694,27 @@ def bar_categorical(
     fig.update_yaxes(title_text=y_title)
     return fig
 
+
+
+def line_trend(df: pd.DataFrame, date_col: str, value_col: str, title: str) -> go.Figure:
+    """Executive-grade daily trend line for a single metric (defaults to currency)."""
+    daily = df.groupby(pd.Grouper(key=date_col, freq="D"))[value_col].sum().reset_index()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=daily[date_col],
+            y=daily[value_col],
+            mode="lines",
+            line=dict(width=3),
+            hovertemplate="%{x|%Y-%m-%d}<br>$%{y:,.2s}<extra></extra>",
+        )
+    )
+    fig = apply_consulting_theme(fig, title=title, height=360, y_is_currency=True)
+    fig.update_xaxes(showgrid=False, tickformat="%b %d")
+    return fig
+
+
 def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
     s = m.df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(5)
     dfp = s.reset_index()
