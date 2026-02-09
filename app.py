@@ -156,6 +156,70 @@ TABLEAU10 = [
     "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"
 ]
 
+
+# -----------------------------
+# Consultancy-grade Plotly theme (applies to all charts)
+# -----------------------------
+def apply_consulting_theme(
+    fig: go.Figure,
+    *,
+    title: str | None = None,
+    height: int | None = None,
+    y_is_currency: bool = False,
+    y_is_pct: bool = False,
+) -> go.Figure:
+    """Make charts look like a clean executive deck (stable, consistent)."""
+    if title is not None:
+        fig.update_layout(title=dict(text=title, x=0.0, xanchor="left"))
+
+    fig.update_layout(
+        template="plotly_white",
+        height=height or fig.layout.height or 380,
+        margin=dict(l=48, r=26, t=62, b=52),
+        font=dict(family="Inter, Arial, sans-serif", size=14, color="#111827"),
+        title=dict(font=dict(size=18, color="#111827")),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        colorway=TABLEAU10,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0,
+            font=dict(size=12, color="#374151"),
+        ),
+    )
+
+    fig.update_xaxes(
+        title=None,
+        showline=False,
+        ticks="outside",
+        tickfont=dict(size=12, color="#374151"),
+        gridcolor="rgba(17,24,39,0.06)",
+        zeroline=False,
+    )
+    fig.update_yaxes(
+        title=None,
+        showline=False,
+        ticks="outside",
+        tickfont=dict(size=12, color="#374151"),
+        gridcolor="rgba(17,24,39,0.08)",
+        zeroline=False,
+    )
+
+    if y_is_currency:
+        # $1.2M style ticks
+        fig.update_yaxes(tickprefix="$", tickformat=",.2s")
+    elif y_is_pct:
+        fig.update_yaxes(tickformat=".0%")
+
+    # Cleaner hover
+    fig.update_traces(hoverlabel=dict(font_size=12), hovertemplate=None)
+
+    return fig
+
+
 def safe_money(x: float) -> str:
     """Friendly money formatting without 'machine noise'."""
     if x is None or (isinstance(x, float) and np.isnan(x)):
@@ -559,15 +623,9 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
 # Chart builders (strict categorical alignment)
 # -----------------------------
 def fig_style_common(fig: go.Figure, title: str) -> go.Figure:
-    fig.update_layout(
-        template="plotly_white",
-        title=dict(text=title, x=0.0, xanchor="left", font=dict(size=18)),
-        margin=dict(l=40, r=20, t=60, b=55),
-        height=360,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-    )
-    fig.update_xaxes(title=None, tickfont=dict(size=12))
-    fig.update_yaxes(title=None, tickfont=dict(size=12), gridcolor="rgba(0,0,0,0.08)")
+    # Executive-grade defaults for all charts
+    fig = apply_consulting_theme(fig, title=title, height=380, y_is_currency=True)
+    # Slightly tighter for small multiples will be overridden where needed
     return fig
 
 def bar_categorical(
@@ -594,8 +652,10 @@ def bar_categorical(
             y=y,
             marker_color=colors,
             text=[format(v, text_fmt) for v in y],
-            textposition="outside",
-            cliponaxis=False,
+            textposition="auto",
+            cliponaxis=True,
+            textfont=dict(size=12, color="#111827"),
+            
             hovertemplate="%{x}<br>%{y:,.2f}<extra></extra>",
         )
     )
@@ -620,15 +680,13 @@ def line_trend(df: pd.DataFrame, date_col: str, value_col: str, title: str) -> g
         go.Scatter(
             x=daily[date_col],
             y=daily[value_col],
-            mode="lines+markers",
-            line=dict(width=3, color=TABLEAU10[0]),
-            marker=dict(size=5, color=TABLEAU10[0]),
-            hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f}<extra></extra>",
+            mode="lines",
+            line=dict(width=3),
+            hovertemplate="%{x|%Y-%m-%d}<br>$%{y:,.2s}<extra></extra>",
         )
     )
-    fig = fig_style_common(fig, title)
-    fig.update_layout(height=340)
-    fig.update_xaxes(tickformat="%b %d")
+    fig = apply_consulting_theme(fig, title=title, height=360, y_is_currency=True)
+    fig.update_xaxes(showgrid=False, tickformat="%b %d")
     return fig
 
 def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
@@ -667,8 +725,9 @@ def store_small_multiples(m: RetailModel) -> Tuple[List[go.Figure], List[str]]:
                 hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f}<extra></extra>",
             )
         )
-        fig = fig_style_common(fig, f"Store Trend — {store}")
-        fig.update_layout(height=250, showlegend=False)
+        fig = apply_consulting_theme(fig, title=f"Store Trend — {store}", height=260, y_is_currency=True)
+        fig.update_layout(showlegend=False)
+        fig.update_xaxes(showgrid=False)
         fig.update_xaxes(tickformat="%b %d")
         figs.append(fig)
         names.append(store)
@@ -1070,7 +1129,8 @@ with st.expander("Advanced analysis (optional)"):
     if num.shape[1] >= 2:
         corr = num.corr()
         fig_corr = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale="Blues")
-        fig_corr.update_layout(template="plotly_white", margin=dict(l=40, r=20, t=50, b=40), height=420, title=dict(text="Numeric Correlation (Advanced)", x=0))
+        fig_corr = apply_consulting_theme(fig_corr, title="Numeric Correlation (Advanced)", height=440)
+        fig_corr.update_xaxes(side="bottom")
         st.plotly_chart(fig_corr, use_container_width=True)
     else:
         st.info("Not enough numeric fields to compute correlation.")
