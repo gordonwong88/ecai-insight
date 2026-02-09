@@ -221,7 +221,7 @@ def apply_consulting_theme(
         linewidth=1.0,
         linecolor="#1F2937",
         ticks="outside",
-        tickfont=dict(size=12, color="#374151"),
+        tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
         zeroline=False,
     )
@@ -236,6 +236,21 @@ def apply_consulting_theme(
     fig.update_traces(hoverlabel=dict(font_size=12), hovertemplate=None)
 
     return fig
+
+
+# -----------------------------
+# Layout helpers
+# -----------------------------
+def render_bar_chart(fig: go.Figure, *, width_ratio: float = 0.6) -> None:
+    """Render bar charts in a centered column (consultancy-like proportions)."""
+    # Map ratio to simple 3-column layout: left / center / right
+    # 0.6 -> [2,6,2], 0.5 -> [3,6,3]
+    center = max(4, min(8, int(round(width_ratio * 10))))  # 0.6->6
+    side = max(1, int(round((10 - center) / 2)))
+    cols = st.columns([side, center, side])
+    with cols[1]:
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
 
 
 def safe_money(x: float) -> str:
@@ -656,78 +671,88 @@ def bar_categorical(
     text_fmt: str = ",.0f",
 ) -> go.Figure:
     """
-    Executive-style categorical bar chart.
-    - Thin bars (33% width)
-    - Bold axis baselines
+    Executive-style categorical bar chart (consultancy sweet spot):
+    - Bars anchored at zero (no floating gap)
+    - Thin bars + generous whitespace
+    - Bold x labels and y ticks
     - Leader emphasis (Option 1): top bar highlighted, others muted
-    - Ranked x labels (1., 2., ...)
+    - Value labels auto-contrast (white on dark colors, black on light)
     """
     base_x = [str(v) for v in x_labels]
     y = [float(v) if v is not None and not (isinstance(v, float) and np.isnan(v)) else 0.0 for v in y_values]
 
     # Ranked labels for quick executive reading
-    x = [f"{i+1}. {lbl}" for i, lbl in enumerate(base_x)]
+    ranked = [f"{i+1}. {lbl}" for i, lbl in enumerate(base_x)]
+    ticktext = [f"<b>{t}</b>" for t in ranked]
 
     # Leader emphasis color scheme (Option 1)
     if colors is None:
-        leader = CONSULTING_PALETTE[0]
-        muted = "#D1D5DB"  # cool gray
-        colors = [leader] + [muted] * max(0, len(x) - 1)
+        leader = CONSULTING_PALETTE[0]  # deep navy
+        muted = "#D1D5DB"               # light gray
+        colors = [leader] + [muted] * max(0, len(ranked) - 1)
     else:
-        colors = colors[: len(x)]
+        colors = colors[: len(ranked)]
+
+    # Auto-contrast text color (white on dark, black on light)
+    def _hex_to_rgb(h: str):
+        h = h.lstrip("#")
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+    def _luminance(hex_color: str) -> float:
+        r, g, b = _hex_to_rgb(hex_color)
+        # perceived luminance
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    text_colors = []
+    for c in colors:
+        try:
+            lum = _luminance(c)
+            text_colors.append("#111827" if lum > 170 else "#FFFFFF")
+        except Exception:
+            text_colors.append("#FFFFFF")
+
+    ymax = max(y) if y else 0.0
+    ypad = ymax * 0.12 if ymax > 0 else 1.0
+    yrange = [0, ymax + ypad]
 
     fig = go.Figure()
     fig.add_trace(
         go.Bar(
-            x=x,
+            x=ranked,
             y=y,
             customdata=base_x,
             marker=dict(color=colors),
-            width=0.22,  # ~33% thinner
+            width=0.20,  # slightly thinner than before
             text=y,
             texttemplate=f"%{{text:{text_fmt}}}",
-            textposition="auto",
-            cliponaxis=True,
+            textposition="inside",
+            insidetextanchor="middle",
+            textfont=dict(color=text_colors, size=12),
             hovertemplate="%{customdata}<br>$%{y:,.2s}<extra></extra>",
         )
     )
 
     fig = apply_consulting_theme(fig, title=title, height=380, y_is_currency=True)
-    fig.update_layout(bargap=0.78)  # more whitespace between bars
+    fig.update_layout(bargap=0.82)  # more whitespace between bars
 
     fig.update_xaxes(
         type="category",
         categoryorder="array",
-        categoryarray=x,
+        categoryarray=ranked,
         tickmode="array",
-        tickvals=x,
-        ticktext=x,
+        tickvals=ranked,
+        ticktext=ticktext,
         title_text=x_title,
         showgrid=False,
     )
-    fig.update_yaxes(title_text=y_title)
-    return fig
-
-
-
-def line_trend(df: pd.DataFrame, date_col: str, value_col: str, title: str) -> go.Figure:
-    """Executive-grade daily trend line for a single metric (defaults to currency)."""
-    daily = df.groupby(pd.Grouper(key=date_col, freq="D"))[value_col].sum().reset_index()
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=daily[date_col],
-            y=daily[value_col],
-            mode="lines",
-            line=dict(width=3),
-            hovertemplate="%{x|%Y-%m-%d}<br>$%{y:,.2s}<extra></extra>",
-        )
+    fig.update_yaxes(
+        title_text=y_title,
+        rangemode="tozero",
+        range=yrange,
+        tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
-    fig = apply_consulting_theme(fig, title=title, height=360, y_is_currency=True)
-    fig.update_xaxes(showgrid=False, tickformat="%b %d")
+    fig.update_xaxes(tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"))
     return fig
-
 
 def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
     s = m.df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(5)
@@ -1085,7 +1110,7 @@ insight_block(
 
 # 2) Top 5 stores
 fig_topstores, df_topstores = top5_stores_bar(m)
-st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
+render_bar_chart(fig_topstores, width_ratio=0.6)
 top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
 insight_block(
     "Top Stores",
@@ -1112,7 +1137,7 @@ insight_block(
 pe = pricing_effectiveness(m)
 if pe is not None:
     fig_price, df_price = pe
-    st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
+    render_bar_chart(fig_price, width_ratio=0.6)
     insight_block(
         "Pricing Effectiveness",
         what=["Moderate discounts often perform better than aggressive discounting."],
@@ -1126,7 +1151,7 @@ else:
 cat = revenue_by_category(m, topn=8)
 if cat is not None:
     fig_cat, _ = cat
-    st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+    render_bar_chart(fig_cat, width_ratio=0.6)
     insight_block(
         "Category Mix",
         what=["A few categories typically drive most revenue."],
@@ -1138,7 +1163,7 @@ if cat is not None:
 chn = revenue_by_channel(m, topn=8)
 if chn is not None:
     fig_chn, _ = chn
-    st.plotly_chart(fig_chn, use_container_width=True, config={"displayModeBar": False})
+    render_bar_chart(fig_chn, width_ratio=0.6)
     insight_block(
         "Channel Mix",
         what=["Channels contribute very differently to revenue."],
