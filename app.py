@@ -240,9 +240,7 @@ def apply_consulting_theme(
 
     fig.update_xaxes(
         title=None,
-        showline=True,
-        linewidth=1.0,
-        linecolor="#1F2937",
+        showline=False,
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
