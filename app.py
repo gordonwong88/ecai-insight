@@ -1134,7 +1134,7 @@ insight_block(
 
 # 2) Top 5 stores
 fig_topstores, df_topstores = top5_stores_bar(m)
-st.plotly_chart(fig_topstores, width_ratio=0.6, use_container_width=True, config={\"displayModeBar\": False})
+st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
 top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
 insight_block(
     "Top Stores",
@@ -1161,7 +1161,7 @@ insight_block(
 pe = pricing_effectiveness(m)
 if pe is not None:
     fig_price, df_price = pe
-    st.plotly_chart(fig_price, width_ratio=0.6, use_container_width=True, config={\"displayModeBar\": False})
+    st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
     insight_block(
         "Pricing Effectiveness",
         what=["Moderate discounts often perform better than aggressive discounting."],
@@ -1175,7 +1175,7 @@ else:
 cat = revenue_by_category(m, topn=8)
 if cat is not None:
     fig_cat, _ = cat
-    st.plotly_chart(fig_cat, width_ratio=0.6, use_container_width=True, config={\"displayModeBar\": False})
+    st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
     insight_block(
         "Category Mix",
         what=["A few categories typically drive most revenue."],
@@ -1187,7 +1187,7 @@ if cat is not None:
 chn = revenue_by_channel(m, topn=8)
 if chn is not None:
     fig_chn, _ = chn
-    st.plotly_chart(fig_chn, width_ratio=0.6, use_container_width=True, config={\"displayModeBar\": False})
+    st.plotly_chart(fig_chn, use_container_width=True, config={"displayModeBar": False})
     insight_block(
         "Channel Mix",
         what=["Channels contribute very differently to revenue."],
