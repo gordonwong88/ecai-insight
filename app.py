@@ -1042,99 +1042,17 @@ with st.expander("Advanced analysis (optional)"):
 # Ask AI (CEO-level Q&A)
 # -----------------------------
 st.subheader("Ask AI (CEO Q&A)")
-st.markdown(
-    "<div class='ec-subtle'>Ask questions about your data (e.g., “Why did revenue drop?” “Which store should I fix first?”). "
-    "Answers are generated from your uploaded dataset summary. </div>",
-    unsafe_allow_html=True,
-)
+st.caption("Ask questions about your data (e.g., 'Why did revenue drop?' 'Which store should I fix first?'). Answers are generated from your uploaded dataset summary.")
 
-def build_ai_context(m: RetailModel) -> str:
-    df = m.df
-    dmin, dmax = df[m.col_date].min(), df[m.col_date].max()
-    total_rev = float(df[m.col_revenue].sum())
-    store_rev = df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(10)
-    ctx = []
-    ctx.append(f"Data period: {dmin.date()} to {dmax.date()} ({len(df):,} rows)")
-    ctx.append(f"Total revenue: {fmt_currency(total_rev)}")
-    ctx.append("Top stores by revenue (top 10):")
-    for k, v in store_rev.items():
-        ctx.append(f"- {k}: {fmt_currency(float(v))}")
-    if m.col_category:
-        cat_rev = df.groupby(m.col_category)[m.col_revenue].sum().sort_values(ascending=False).head(10)
-        ctx.append("Top categories by revenue (top 10):")
-        for k, v in cat_rev.items():
-            ctx.append(f"- {k}: {fmt_currency(float(v))}")
-    if m.col_channel:
-        ch_rev = df.groupby(m.col_channel)[m.col_revenue].sum().sort_values(ascending=False).head(10)
-        ctx.append("Top channels by revenue (top 10):")
-        for k, v in ch_rev.items():
-            ctx.append(f"- {k}: {fmt_currency(float(v))}")
-    ctx.append("Business summary bullets:")
-    for p in summary_points[:10]:
-        ctx.append(f"- {md_to_plain(p)}")
-    return "\n".join(ctx)
+# Inline Q&A (keeps the input box right here under the section)
+q = st.text_input("Ask a question", placeholder="e.g., What should I focus on next week and why?")
+ask_btn = st.button("Ask AI")
 
-# Init chat state
-if "ai_messages" not in st.session_state:
-    st.session_state.ai_messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are EC-AI, an executive analytics consultant. "
-                "Respond in a CEO-ready style: Insight → Evidence → Action. "
-                "Be concise, practical, and avoid jargon. "
-                "If the question cannot be answered from the provided context, say what is missing."
-            ),
-        }
-    ]
-
-# Render chat
-for msg in st.session_state.ai_messages:
-    if msg["role"] == "system":
-        continue
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-
-user_q = st.chat_input("Ask EC-AI… (e.g., 'What should I focus on next week?')")
-
-if user_q:
-    st.session_state.ai_messages.append({"role": "user", "content": user_q})
-    with st.chat_message("user"):
-        st.markdown(user_q)
-
-    # Try to answer (requires OPENAI_API_KEY in Streamlit secrets or env)
-    api_key = st.secrets.get("OPENAI_API_KEY", None) if hasattr(st, "secrets") else None
-    if api_key is None:
-        api_key = os.environ.get("OPENAI_API_KEY")
-
-    if OpenAI is None or not api_key:
-        with st.chat_message("assistant"):
-            st.info(
-                "Ask AI is not configured yet. Add `OPENAI_API_KEY` in Streamlit Secrets (or as an environment variable) to enable it."
-            )
-    else:
-        try:
-            client = OpenAI(api_key=api_key)
-            context = build_ai_context(m)
-            prompt = (
-                "Use the following dataset context to answer the user's question.\n\n"
-                f"{context}\n\n"
-                "Now answer the question with: Insight → Evidence → Action (3 bullets max each)."
-            )
-            messages = st.session_state.ai_messages + [{"role": "user", "content": prompt}]
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.3,
-            )
-            ans = resp.choices[0].message.content.strip()
-            st.session_state.ai_messages.append({"role": "assistant", "content": ans})
-            with st.chat_message("assistant"):
-                st.markdown(ans)
-        except Exception as e:
-            with st.chat_message("assistant"):
-                st.error("Ask AI failed.")
-                st.code(str(e))
+if ask_btn and q.strip():
+    ctx = build_context_string(summary) if "build_context_string" in globals() else ""
+    answer = answer_question_with_openai(q.strip(), ctx)
+    st.markdown("**Answer**")
+    st.write(answer)
 
 st.divider()
 
