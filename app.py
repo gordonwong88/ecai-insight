@@ -40,6 +40,35 @@ def clean_display_text(s: str) -> str:
     return s
 
 import io
+# -----------------------------
+# Executive emphasis helper
+# -----------------------------
+def emphasize_exec_keywords(text: str) -> str:
+    """
+    Add bold emphasis to key executive signals:
+    - Store names (HK-, SG-, JP-, CN-)
+    - Money amounts ($)
+    - Percentages (%)
+    - Rankings (#1, top 2)
+    """
+    if not text:
+        return text
+
+    # Money
+    text = re.sub(r"(\$[0-9,.]+[KMB]?)", r"**\1**", text)
+
+    # Percentages
+    text = re.sub(r"(\d+\.?\d*%)", r"**\1**", text)
+
+    # Rankings
+    text = re.sub(r"(#\d+|top \d+)", r"**\1**", text, flags=re.I)
+
+    # Store / location codes
+    text = re.sub(r"((HK|SG|JP|CN)-[A-Za-z0-9]+)", r"**\1**", text)
+
+    return text
+
+
 import os
 import re
 import textwrap
@@ -251,6 +280,27 @@ def render_bar_chart(fig: go.Figure, *, width_ratio: float = 0.6) -> None:
     with cols[1]:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
+
+
+
+
+def line_trend(df: pd.DataFrame, date_col: str, value_col: str, title: str) -> go.Figure:
+    """Executive-grade daily trend line for a single metric (defaults to currency)."""
+    daily = df.groupby(pd.Grouper(key=date_col, freq="D"))[value_col].sum().reset_index()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=daily[date_col],
+            y=daily[value_col],
+            mode="lines",
+            line=dict(width=3),
+            hovertemplate="%{x|%Y-%m-%d}<br>$%{y:,.2s}<extra></extra>",
+        )
+    )
+    fig = apply_consulting_theme(fig, title=title, height=360, y_is_currency=True)
+    fig.update_xaxes(showgrid=False, tickformat="%b %d")
+    return fig
 
 
 def safe_money(x: float) -> str:
