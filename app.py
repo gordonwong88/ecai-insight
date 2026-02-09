@@ -157,6 +157,20 @@ TABLEAU10 = [
 ]
 
 
+
+
+# Consultancy palette (McKinsey-style: neutral base + restrained accents)
+CONSULTING_PALETTE = [
+    "#0B1F3B",  # deep navy (primary)
+    "#2A6F97",  # blue (secondary)
+    "#2F855A",  # green
+    "#B7791F",  # amber
+    "#9B2C2C",  # red
+    "#4A5568",  # slate
+    "#718096",  # gray
+    "#A0AEC0",  # light gray
+]
+
 # -----------------------------
 # Consultancy-grade Plotly theme (applies to all charts)
 # -----------------------------
@@ -176,11 +190,11 @@ def apply_consulting_theme(
         template="plotly_white",
         height=height or fig.layout.height or 380,
         margin=dict(l=48, r=26, t=62, b=52),
-        font=dict(family="Inter, Arial, sans-serif", size=14, color="#111827"),
+        font=dict(family="Inter, Arial, sans-serif", size=13, color="#111827"),
         title=dict(font=dict(size=18, color="#111827")),
         paper_bgcolor="white",
         plot_bgcolor="white",
-        colorway=TABLEAU10,
+        colorway=CONSULTING_PALETTE,
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -194,21 +208,21 @@ def apply_consulting_theme(
     fig.update_xaxes(
         title=None,
         showline=True,
-        linewidth=2,
-        linecolor="#111827",
+        linewidth=1.0,
+        linecolor="#1F2937",
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
-        gridcolor="rgba(17,24,39,0.06)",
+        gridcolor="rgba(17,24,39,0.07)",
         zeroline=False,
     )
     fig.update_yaxes(
         title=None,
         showline=True,
-        linewidth=2,
-        linecolor="#111827",
+        linewidth=1.0,
+        linecolor="#1F2937",
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
-        gridcolor="rgba(17,24,39,0.08)",
+        gridcolor="rgba(17,24,39,0.07)",
         zeroline=False,
     )
 
@@ -656,8 +670,8 @@ def bar_categorical(
 
     # Leader emphasis color scheme (Option 1)
     if colors is None:
-        leader = TABLEAU10[0]
-        muted = "#CBD5E1"  # cool gray
+        leader = CONSULTING_PALETTE[0]
+        muted = "#D1D5DB"  # cool gray
         colors = [leader] + [muted] * max(0, len(x) - 1)
     else:
         colors = colors[: len(x)]
@@ -669,7 +683,7 @@ def bar_categorical(
             y=y,
             customdata=base_x,
             marker=dict(color=colors),
-            width=0.33,  # ~33% thinner
+            width=0.22,  # ~33% thinner
             text=y,
             texttemplate=f"%{{text:{text_fmt}}}",
             textposition="auto",
@@ -679,7 +693,7 @@ def bar_categorical(
     )
 
     fig = apply_consulting_theme(fig, title=title, height=380, y_is_currency=True)
-    fig.update_layout(bargap=0.65)  # more whitespace between bars
+    fig.update_layout(bargap=0.78)  # more whitespace between bars
 
     fig.update_xaxes(
         type="category",
@@ -719,7 +733,7 @@ def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
     s = m.df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(5)
     dfp = s.reset_index()
     dfp.columns = ["Store", "Revenue"]
-    colors = [TABLEAU10[i % len(TABLEAU10)] for i in range(len(dfp))]
+    colors = [CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)] for i in range(len(dfp))]
     fig = bar_categorical(
         x_labels=dfp["Store"].tolist(),
         y_values=dfp["Revenue"].tolist(),
@@ -787,7 +801,7 @@ def revenue_by_category(m: RetailModel, topn: int = 8) -> Optional[Tuple[go.Figu
     s = m.df.groupby(m.col_category)[m.col_revenue].sum().sort_values(ascending=False).head(topn)
     dfp = s.reset_index()
     dfp.columns = ["Category", "Revenue"]
-    colors = [TABLEAU10[i % len(TABLEAU10)] for i in range(len(dfp))]
+    colors = [CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)] for i in range(len(dfp))]
     fig = bar_categorical(
         x_labels=dfp["Category"].tolist(),
         y_values=dfp["Revenue"].tolist(),
@@ -805,7 +819,7 @@ def revenue_by_channel(m: RetailModel, topn: int = 8) -> Optional[Tuple[go.Figur
     s = m.df.groupby(m.col_channel)[m.col_revenue].sum().sort_values(ascending=False).head(topn)
     dfp = s.reset_index()
     dfp.columns = ["Channel", "Revenue"]
-    colors = [TABLEAU10[i % len(TABLEAU10)] for i in range(len(dfp))]
+    colors = [CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)] for i in range(len(dfp))]
     fig = bar_categorical(
         x_labels=dfp["Channel"].tolist(),
         y_values=dfp["Revenue"].tolist(),
@@ -828,7 +842,7 @@ def volatility_by_channel(m: RetailModel) -> Optional[Tuple[go.Figure, pd.DataFr
         return None
     dfp = agg[["Volatility"]].head(8).reset_index()
     dfp.columns = ["Channel", "Volatility (relative)"]
-    colors = [TABLEAU10[i % len(TABLEAU10)] for i in range(len(dfp))]
+    colors = [CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)] for i in range(len(dfp))]
     fig = bar_categorical(
         x_labels=dfp["Channel"].tolist(),
         y_values=dfp["Volatility (relative)"].tolist(),
