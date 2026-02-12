@@ -246,7 +246,6 @@ def apply_consulting_theme(
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
-        zeroline=False,
                     )
     fig.update_yaxes(
         title=None,
@@ -254,19 +253,15 @@ def apply_consulting_theme(
         linewidth=1,
         linecolor="#374151",
         ticks="outside",
-        zeroline=False,
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
-        zeroline=False,
                     )
 
     if y_is_currency:
         # $1.2M style ticks
-        fig.update_yaxes(
-        zeroline=False,tickprefix="$", tickformat=",.2s")
+        fig.update_yaxes(tickprefix="$", tickformat=",.2s")
     elif y_is_pct:
-        fig.update_yaxes(
-        zeroline=False,tickformat=".0%")
+        fig.update_yaxes(tickformat=".0%")
 
     # Cleaner hover
     fig.update_traces(hoverlabel=dict(font_size=12), hovertemplate=None)
@@ -782,7 +777,6 @@ def bar_categorical(
     )
     fig.update_yaxes(
         title_text=y_title,
-        zeroline=False,
         rangemode="tozero",
         range=[0, ymax + ypad],
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
