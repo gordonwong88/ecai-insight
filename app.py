@@ -246,10 +246,8 @@ def apply_consulting_theme(
         ticks="outside",
         tickfont=dict(size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
-        zeroline=True,
-        zerolinewidth=1,
-        zerolinecolor="#111827",
-    )
+        zeroline=False,
+                    )
     fig.update_yaxes(
         title=None,
         showline=True,
@@ -259,10 +257,8 @@ def apply_consulting_theme(
         zeroline=False,
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#374151"),
         gridcolor="rgba(17,24,39,0.07)",
-        zeroline=True,
-        zerolinewidth=1,
-        zerolinecolor="#111827",
-    )
+        zeroline=False,
+                    )
 
     if y_is_currency:
         # $1.2M style ticks
@@ -1110,7 +1106,7 @@ st.subheader("Executive Summary")
 for p in summary_points[:12]:
     _t = clean_display_text(p)
     if _t:
-        st.markdown(f"• {_t}")
+        st.markdown(f"• {emphasize_exec_keywords_html(_t)}", unsafe_allow_html=True)
 
 st.divider()
 
@@ -1124,7 +1120,7 @@ ins_sections = build_business_insights_sections(m)
 for i, (sec_title, bullets) in enumerate(ins_sections.items()):
     st.markdown(f"#### {sec_title}")
     for b in bullets:
-        st.markdown(f"- {clean_display_text(b)}")
+        st.markdown(f"- {emphasize_exec_keywords_html(clean_display_text(b))}", unsafe_allow_html=True)
     if i < len(ins_sections) - 1:
         st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 
