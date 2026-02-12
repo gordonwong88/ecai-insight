@@ -1197,9 +1197,6 @@ def render_onepager_dashboard(m) -> None:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-, unsafe_allow_html=True)
-
-
 st.divider()
 
 with st.sidebar:
