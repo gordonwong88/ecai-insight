@@ -1104,9 +1104,7 @@ def insight_card(title: str, fig: go.Figure, *, what: list[str], why: list[str],
     st.markdown(f'<div class="ec-sub">What this shows</div>{_html_bullets(what)}', unsafe_allow_html=True)
     st.markdown(f'<div class="ec-sub">Why it matters</div>{_html_bullets(why)}', unsafe_allow_html=True)
     st.markdown(f'<div class="ec-sub">What to do</div>{_html_bullets(action)}', unsafe_allow_html=True)
-    st.markdown("</div>"
-
-
+    st.markdown("</div>", unsafe_allow_html=True)
 # -----------------------------
 # One-pager Executive Dashboard (6-grid)
 # -----------------------------
