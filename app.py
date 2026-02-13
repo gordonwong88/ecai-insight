@@ -291,59 +291,72 @@ ONEPAGER_CSS = """
 </style>
 """
 
-def _tile(title: str, fig: go.Figure, note: str) -> None:
-    st.markdown(f"<div class='ec-tile'><h4>{title}</h4>", unsafe_allow_html=True)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    st.markdown(f"<div class='note'>{emphasize_exec_keywords_html(note)}</div></div>", unsafe_allow_html=True)
+
+
+DASH_NOTE_STYLE = "border:1px dashed rgba(17,24,39,0.25); border-radius:12px; padding:10px 12px; background:#ffffff; font-size:12px; color:#374151; line-height:1.35;"
+
+
+def _dash_note(md: str) -> None:
+    # md is simple markdown; convert **bold** to <b> for reliable rendering inside HTML
+    html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", md)
+    st.markdown(f"<div style='{DASH_NOTE_STYLE}'>{html}</div>", unsafe_allow_html=True)
 
 def render_onepager_dashboard(m, df) -> None:
     st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
     st.markdown("<div class='ec-onepager-title'>Executive Dashboard</div>", unsafe_allow_html=True)
 
-
+    # Build figures (unwrap tuples if returned)
     def _as_fig(obj):
-        # Some chart builders return (fig, meta). We only need the fig.
-        if isinstance(obj, tuple) and len(obj) > 0:
-            return obj[0]
-        return obj
-    # 6 charts (all functions exist in v5AG stable)
+        return obj[0] if isinstance(obj, tuple) and len(obj) else obj
+
     fig_trend = _as_fig(line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)"))
-    fig_trend = apply_consulting_theme(fig_trend, title="Revenue Trend (Daily)", height=220, y_is_currency=True)
+    fig_trend = apply_consulting_theme(fig_trend, title="Revenue Trend (Daily)", height=320, y_is_currency=True)
 
     fig_topstores, df_top = top5_stores_bar(m)
-    fig_topstores = apply_consulting_theme(fig_topstores, title="Top Stores (Top 5)", height=220, y_is_currency=True)
+    fig_topstores = apply_consulting_theme(fig_topstores, title="Top Stores (Top 5)", height=320, y_is_currency=True)
     top_store = df_top.iloc[0]["Store"] if len(df_top) else "Top store"
 
     fig_cat = _as_fig(revenue_by_category(m))
-    fig_cat = apply_consulting_theme(fig_cat, title="Revenue by Category (Top 5)", height=220, y_is_currency=True)
+    fig_cat = apply_consulting_theme(fig_cat, title="Revenue by Category (Top 5)", height=320, y_is_currency=True)
 
     fig_price = _as_fig(pricing_effectiveness(m))
-    fig_price = apply_consulting_theme(fig_price, title="Pricing Effectiveness", height=220, y_is_currency=True)
+    fig_price = apply_consulting_theme(fig_price, title="Pricing Effectiveness", height=320, y_is_currency=True)
 
     fig_channel = _as_fig(revenue_by_channel(m))
-    fig_channel = apply_consulting_theme(fig_channel, title="Revenue by Channel (Top 3)", height=220, y_is_currency=True)
+    fig_channel = apply_consulting_theme(fig_channel, title="Revenue by Channel (Top 3)", height=320, y_is_currency=True)
 
     fig_vol = _as_fig(volatility_by_channel(m))
-    fig_vol = apply_consulting_theme(fig_vol, title="Volatility by Channel", height=220, y_is_currency=False)
+    fig_vol = apply_consulting_theme(fig_vol, title="Volatility by Channel", height=320, y_is_currency=False)
 
     r1 = st.columns(3, gap="large")
     with r1[0]:
-        _tile("Revenue Trend", fig_trend, "Protect **momentum**; investigate spikes and dips.")
+        with st.container(border=True):
+            st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
+            _dash_note("Protect **momentum**; investigate spikes and dips.")
     with r1[1]:
-        _tile("Top Stores", fig_topstores, f"Revenue is concentrated — prioritise **{top_store}** and top drivers.")
+        with st.container(border=True):
+            st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
+            _dash_note(f"Revenue is concentrated — prioritise **{top_store}** and top drivers.")
     with r1[2]:
-        _tile("Category Mix", fig_cat, "Double down on **top categories**; fix weak lines.")
+        with st.container(border=True):
+            st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+            _dash_note("Double down on **top categories**; fix weak lines.")
 
     r2 = st.columns(3, gap="large")
     with r2[0]:
-        _tile("Pricing / Discounts", fig_price, "Use **pricing discipline**; moderate discounts can outperform aggressive ones.")
+        with st.container(border=True):
+            st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
+            _dash_note("Use **pricing discipline**; moderate discounts can outperform aggressive ones.")
     with r2[1]:
-        _tile("Channels", fig_channel, "Reallocate effort to channels that **convert**; fix weakest channel.")
+        with st.container(border=True):
+            st.plotly_chart(fig_channel, use_container_width=True, config={"displayModeBar": False})
+            _dash_note("Reallocate effort to channels that **convert**; fix weakest channel.")
     with r2[2]:
-        _tile("Predictability", fig_vol, "Reduce volatility: stabilise operations where swings are highest.")
+        with st.container(border=True):
+            st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
+            _dash_note("Reduce volatility: stabilise operations where swings are highest.")
 
     st.markdown("---")
-
 def plot_half_width(fig: go.Figure, *, config: dict | None = None) -> None:
     """Left-aligned half-width chart (consultant deck proportion)."""
     col1, col2 = st.columns([0.55, 0.45])
