@@ -222,7 +222,7 @@ def apply_consulting_theme(
     fig.update_layout(
         template="plotly_white",
         height=height or fig.layout.height or 380,
-        margin=dict(l=48, r=26, t=62, b=52),
+        margin=dict(l=48, r=26, t=62, b=34),
         font=dict(family="Inter, Arial, sans-serif", size=13, color="#111827"),
         title=dict(font=dict(size=18, color="#111827")),
         paper_bgcolor="white",
@@ -243,18 +243,18 @@ def apply_consulting_theme(
         showline=True,
         linewidth=1,
         linecolor="#374151",
-        ticks="outside",
+        ticks="", ticklen=0,
         tickfont=dict(size=12, color="#374151"),
-        gridcolor="rgba(17,24,39,0.07)",
+        gridcolor="rgba(17,24,39,0.05)",
                     )
     fig.update_yaxes(
         title=None,
         showline=True,
         linewidth=1,
         linecolor="#374151",
-        ticks="outside",
+        ticks="", ticklen=0,
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#374151"),
-        gridcolor="rgba(17,24,39,0.07)",
+        gridcolor="rgba(17,24,39,0.05)",
                     )
 
     if y_is_currency:
@@ -745,7 +745,7 @@ def bar_categorical(
         colors = colors[: len(ranked)]
 
     ymax = max(y) if y else 0.0
-    ypad = ymax * 0.12 if ymax > 0 else 1.0
+    ypad = ymax * 0.10 if ymax > 0 else 1.0
 
     fig = go.Figure()
     fig.add_trace(
@@ -773,37 +773,19 @@ def bar_categorical(
         categoryarray=ranked,
         title_text=x_title,
         showgrid=False,
+        ticklabelposition="outside",
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
     fig.update_yaxes(
         title_text=y_title,
-        
+        range=[0, ymax + ypad],
         autorange=False,
-        
+        rangemode="tozero",
+        zeroline=False,
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
-
-    # STRICT_ZERO_BASELINE_CLEAN
-    ymax = max(y) if len(y) > 0 else 1
-    fig.update_yaxes(
-        range=[0, ymax],
-        autorange=False,
-        showgrid=False,   # remove grey gridline at 0
-        zeroline=False,
-        showline=True,
-        linewidth=1.2,
-        linecolor="#111827"
-    )
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1.2,
-        linecolor="#111827"
-    )
-    fig.update_layout(
-        margin=dict(l=48, r=20, t=48, b=24)
-    )
-
     return fig
+
 def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
     s = m.df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(5)
     dfp = s.reset_index()
