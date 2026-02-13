@@ -1052,151 +1052,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
-# -----------------------------
-# Consultant paper card (chart + narrative)
-# -----------------------------
-CARD_CSS = """
-<style>
-.ec-card{
-  border: 1px solid rgba(17,24,39,0.10);
-  border-radius: 14px;
-  padding: 16px 16px 12px 16px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(17,24,39,0.04);
-  margin-bottom: 18px;
-}
-.ec-card h3{
-  margin: 0 0 10px 0;
-  font-size: 16px;
-  font-weight: 700;
-  color: #111827;
-}
-.ec-sub{
-  margin-top: 12px;
-  font-weight: 700;
-  color: #111827;
-  font-size: 13px;
-}
-.ec-card ul{
-  margin: 6px 0 0 18px;
-}
-.ec-card li{
-  margin: 4px 0;
-  color: #111827;
-  font-size: 13px;
-  line-height: 1.35;
-}
-</style>
-"""
-
-def _html_bullets(items: list[str]) -> str:
-    if not items:
-        return ""
-    lis = "\n".join([f"<li>{emphasize_exec_keywords_html(i)}</li>" for i in items])
-    return f"<ul>{lis}</ul>"
-
-def insight_card(title: str, fig: go.Figure, *, what: list[str], why: list[str], action: list[str]) -> None:
-    """Render a consultant-style card (chart + 3 executive sections)."""
-    st.markdown(CARD_CSS, unsafe_allow_html=True)
-    st.markdown(f'<div class="ec-card"><h3>{title}</h3>', unsafe_allow_html=True)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    st.markdown(f'<div class="ec-sub">What this shows</div>{_html_bullets(what)}', unsafe_allow_html=True)
-    st.markdown(f'<div class="ec-sub">Why it matters</div>{_html_bullets(why)}', unsafe_allow_html=True)
-    st.markdown(f'<div class="ec-sub">What to do</div>{_html_bullets(action)}', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-# -----------------------------
-# One-pager Executive Dashboard (6-grid)
-# -----------------------------
-ONEPAGER_CSS = """
-<style>
-.ec-onepager{
-  border: 1px solid rgba(17,24,39,0.10);
-  border-radius: 16px;
-  padding: 14px 14px 6px 14px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(17,24,39,0.04);
-  margin: 6px 0 18px 0;
-}
-.ec-tile{
-  border: 1px solid rgba(17,24,39,0.10);
-  border-radius: 14px;
-  padding: 12px 12px 10px 12px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(17,24,39,0.03);
-  margin-bottom: 12px;
-  height: 100%;
-}
-.ec-tile h4{
-  margin: 0 0 6px 0;
-  font-size: 13px;
-  font-weight: 700;
-  color: #111827;
-}
-.ec-tile .ec-note{
-  margin-top: 6px;
-  font-size: 12px;
-  color: #374151;
-  line-height: 1.25;
-}
-.ec-tile .ec-note b{ color:#111827; }
-.ec-tightplot .stPlotlyChart{ margin-top: -8px; }
-</style>
-"""
-
-def _tile(fig: go.Figure, title: str, note: str) -> None:
-    st.markdown(f'<div class="ec-tile ec-tightplot"><h4>{title}</h4>', unsafe_allow_html=True)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    st.markdown(f'<div class="ec-note">{emphasize_exec_keywords_html(note)}</div></div>', unsafe_allow_html=True)
-
-def render_onepager_dashboard(m) -> None:
-    """6-grid one-pager dashboard placed above Executive Summary."""
-    st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
-    st.markdown('<div class="ec-onepager">', unsafe_allow_html=True)
-    st.subheader("Executive One‑Pager")
-
-    # Build compact figures (height tuned for tiles)
-    fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
-    fig_trend = apply_consulting_theme(fig_trend, title="Revenue Trend (Daily)", height=220, y_is_currency=True)
-
-    fig_topstores, df_topstores = top5_stores_bar(m)
-    fig_topstores = apply_consulting_theme(fig_topstores, title="Top Stores (Top 5)", height=220, y_is_currency=True)
-
-    fig_cat, _ = top5_category_bar(m)
-    fig_cat = apply_consulting_theme(fig_cat, title="Category Mix (Top 5)", height=220, y_is_currency=True)
-
-    fig_price, _ = discount_effectiveness_bar(m)
-    fig_price = apply_consulting_theme(fig_price, title="Discount Effectiveness", height=220, y_is_currency=True)
-
-    fig_chn, _ = channel_bar(m)
-    fig_chn = apply_consulting_theme(fig_chn, title="Channel Split", height=220, y_is_currency=True)
-
-    # Store stability mini (if available in your app)
-    try:
-        fig_stability, _ = store_stability_bar(m)
-        fig_stability = apply_consulting_theme(fig_stability, title="Store Stability", height=220, y_is_currency=False)
-    except Exception:
-        # Fallback: reuse top stores chart if stability isn't available
-        fig_stability = fig_topstores
-
-    r1 = st.columns(3, gap="large")
-    with r1[0]:
-        _tile(fig_trend, "Revenue Trend", "Direction matters: protect momentum and investigate spikes.")
-    with r1[1]:
-        _tile(fig_topstores, "Top Stores", "Revenue concentration: focus on **top drivers** first.")
-    with r1[2]:
-        _tile(fig_cat, "Category Mix", "Where money is made: double down on **top categories**.")
-
-    r2 = st.columns(3, gap="large")
-    with r2[0]:
-        _tile(fig_price, "Pricing / Discounts", "Pricing discipline: mid discounts often outperform aggressive ones.")
-    with r2[1]:
-        _tile(fig_chn, "Channels", "Shift budget to channels that convert; fix underperformers.")
-    with r2[2]:
-        _tile(fig_stability, "Store Stability", "Reduce volatility: stabilise operations in stores with big swings.")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
 st.divider()
 
 with st.sidebar:
@@ -1273,30 +1128,26 @@ st.divider()
 # -----------------------------
 st.subheader("Charts & Insights")
 
-# 1–2) Consultant paper row (2-up)
-c1, c2 = st.columns(2, gap="large")
+# 1) Overall trend
+fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
+plot_half_width(fig_trend, config={"displayModeBar": False})
+insight_block(
+    "Revenue Trend",
+    what=["Overall revenue direction over time (daily total)."],
+    why=["Sets the context: growth vs stability.", "Helps spot spikes that may come from promotions or one-off events."],
+    action=["If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully."],
+)
 
-with c1:
-    fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
-    insight_card(
-        "Revenue Trend (Daily)",
-        fig_trend,
-        what=["Overall revenue direction over time (daily total)."],
-        why=["Sets the context: growth vs stability.", "Helps spot spikes that may come from promotions or one-off events."],
-        action=["If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully."],
-    )
-
-with c2:
-    fig_topstores, df_topstores = top5_stores_bar(m)
-    top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
-    insight_card(
-        "Top Revenue-Generating Stores (Top 5)",
-        fig_topstores,
-        what=[f"Revenue is concentrated in a small number of stores, led by {top_store_name}."],
-        why=["Top stores disproportionately drive outcomes.", "Operational issues in one key store can move the whole month."],
-        action=["Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere."],
-    )
-
+# 2) Top 5 stores
+fig_topstores, df_topstores = top5_stores_bar(m)
+plot_half_width(fig_topstores, config={"displayModeBar": False})
+top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
+insight_block(
+    "Top Stores",
+    what=[f"Revenue is concentrated in a small number of stores, led by **{top_store_name}**."],
+    why=["Top stores disproportionately drive outcomes.", "Operational issues in one key store can move the whole month."],
+    action=["Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere."],
+)
 
 # 3) Store stability (mini charts)
 st.markdown("### Store Stability (Top 5)")
