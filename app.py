@@ -293,6 +293,15 @@ ONEPAGER_CSS = """
 
 
 
+
+ONEPAGER_LAYOUT_TWEAKS = '''
+<style>
+/* Reduce horizontal gaps between columns */
+div[data-testid="stHorizontalBlock"] {gap: 0.75rem !important;}
+/* Reduce padding inside bordered containers (used by dashboard tiles) */
+div[data-testid="stVerticalBlockBorderWrapper"] > div {padding-top: 0.6rem !important; padding-bottom: 0.55rem !important;}
+</style>
+'''
 DASH_NOTE_STYLE = "border:1px dashed rgba(17,24,39,0.25); border-radius:12px; padding:10px 12px; background:#ffffff; font-size:12px; color:#374151; line-height:1.35;"
 
 
@@ -303,7 +312,9 @@ def _dash_note(md: str) -> None:
 
 def render_onepager_dashboard(m, df) -> None:
     st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
-    st.markdown("<div class='ec-onepager-title'>Executive Dashboard</div>", unsafe_allow_html=True)
+    
+    st.markdown(ONEPAGER_LAYOUT_TWEAKS, unsafe_allow_html=True)
+st.markdown("<div class='ec-onepager-title'>Executive Dashboard</div>", unsafe_allow_html=True)
 
     # Build figures (unwrap tuples if returned)
     def _as_fig(obj):
@@ -328,7 +339,7 @@ def render_onepager_dashboard(m, df) -> None:
     fig_vol = _as_fig(volatility_by_channel(m))
     fig_vol = apply_consulting_theme(fig_vol, title="Volatility by Channel", height=320, y_is_currency=False)
 
-    r1 = st.columns(3, gap="large")
+    r1 = st.columns(3, gap='small')
     with r1[0]:
         with st.container(border=True):
             st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
@@ -342,7 +353,7 @@ def render_onepager_dashboard(m, df) -> None:
             st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
             _dash_note("Double down on **top categories**; fix weak lines.")
 
-    r2 = st.columns(3, gap="large")
+    r2 = st.columns(3, gap='small')
     with r2[0]:
         with st.container(border=True):
             st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
