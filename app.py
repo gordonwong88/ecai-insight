@@ -1168,6 +1168,15 @@ df = m.df
 # -----------------------------
 summary_points = build_business_summary_points(m)
 
+
+# -----------------------------
+# Executive One‑Pager (6‑grid)
+# -----------------------------
+try:
+    render_onepager_dashboard(m, df)
+except Exception as _e:
+    st.warning(f"One‑Pager unavailable: {_e}")
+
 st.subheader("Executive Summary")
 for p in summary_points[:12]:
     _t = clean_display_text(p)
