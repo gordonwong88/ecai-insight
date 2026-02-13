@@ -293,15 +293,6 @@ ONEPAGER_CSS = """
 
 
 
-
-ONEPAGER_LAYOUT_TWEAKS = '''
-<style>
-/* Reduce horizontal gaps between columns */
-div[data-testid="stHorizontalBlock"] {gap: 0.75rem !important;}
-/* Reduce padding inside bordered containers (used by dashboard tiles) */
-div[data-testid="stVerticalBlockBorderWrapper"] > div {padding-top: 0.6rem !important; padding-bottom: 0.55rem !important;}
-</style>
-'''
 DASH_NOTE_STYLE = "border:1px dashed rgba(17,24,39,0.25); border-radius:12px; padding:10px 12px; background:#ffffff; font-size:12px; color:#374151; line-height:1.35;"
 
 
@@ -312,9 +303,7 @@ def _dash_note(md: str) -> None:
 
 def render_onepager_dashboard(m, df) -> None:
     st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
-    
-    st.markdown(ONEPAGER_LAYOUT_TWEAKS, unsafe_allow_html=True)
-st.markdown("<div class='ec-onepager-title'>Executive Dashboard</div>", unsafe_allow_html=True)
+    st.markdown("<div class='ec-onepager-title'>Executive Dashboard</div>", unsafe_allow_html=True)
 
     # Build figures (unwrap tuples if returned)
     def _as_fig(obj):
