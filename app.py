@@ -222,7 +222,7 @@ def apply_consulting_theme(
     fig.update_layout(
         template="plotly_white",
         height=height or fig.layout.height or 380,
-        margin=dict(l=48, r=26, t=62, b=34),
+        margin=dict(l=48, r=26, t=62, b=52),
         font=dict(family="Inter, Arial, sans-serif", size=13, color="#111827"),
         title=dict(font=dict(size=18, color="#111827")),
         paper_bgcolor="white",
@@ -243,18 +243,18 @@ def apply_consulting_theme(
         showline=True,
         linewidth=1,
         linecolor="#374151",
-        ticks="", ticklen=0,
+        ticks="outside",
         tickfont=dict(size=12, color="#374151"),
-        gridcolor="rgba(17,24,39,0.05)",
+        gridcolor="rgba(17,24,39,0.07)",
                     )
     fig.update_yaxes(
         title=None,
         showline=True,
         linewidth=1,
         linecolor="#374151",
-        ticks="", ticklen=0,
+        ticks="outside",
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#374151"),
-        gridcolor="rgba(17,24,39,0.05)",
+        gridcolor="rgba(17,24,39,0.07)",
                     )
 
     if y_is_currency:
@@ -268,6 +268,98 @@ def apply_consulting_theme(
 
     return fig
 
+
+
+
+# -----------------------------
+# Executive One‑Pager (6‑grid) — clean, stable implementation
+# -----------------------------
+ONEPAGER_CSS = """
+<style>
+.ec-onepager-title{margin: 0 0 8px 0; font-weight: 800; font-size: 18px; color:#111827;}
+.ec-tile{
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: 14px;
+  padding: 12px 12px 10px 12px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(17,24,39,0.04);
+  margin-bottom: 14px;
+}
+.ec-tile h4{margin:0 0 6px 0; font-size: 13px; font-weight: 800; color:#111827;}
+.ec-tile .note{margin-top: 6px; font-size: 12px; color:#374151; line-height: 1.25;}
+.ec-tile .note b{color:#111827;}
+</style>
+"""
+
+def _tile_open(title: str) -> None:
+    st.markdown(f"<div class='ec-tile'><h4>{title}</h4>", unsafe_allow_html=True)
+
+def _tile_note(note: str) -> None:
+    st.markdown(f"<div class='note'>{emphasize_exec_keywords_html(note)}</div>", unsafe_allow_html=True)
+
+def _tile_close() -> None:
+    st.markdown("</div>", unsafe_allow_html=True)
+
+def render_onepager_dashboard(m, df) -> None:
+    """6-grid one-pager dashboard shown above Executive Summary."""
+    st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
+    st.markdown("<div class='ec-onepager-title'>Executive One‑Pager</div>", unsafe_allow_html=True)
+
+    # Build 6 compact figures using existing, stable chart builders
+    fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
+    fig_trend = apply_consulting_theme(fig_trend, title="Revenue Trend (Daily)", height=220, y_is_currency=True)
+
+    fig_topstores, df_top = top5_stores_bar(m)
+    fig_topstores = apply_consulting_theme(fig_topstores, title="Top Stores (Top 5)", height=220, y_is_currency=True)
+
+    fig_cat = revenue_by_category(m)
+    fig_cat = apply_consulting_theme(fig_cat, title="Category (Top 5)", height=220, y_is_currency=True)
+
+    fig_price = pricing_effectiveness(m)
+    fig_price = apply_consulting_theme(fig_price, title="Discount Effectiveness", height=220, y_is_currency=True)
+
+    fig_channel = revenue_by_channel(m)
+    fig_channel = apply_consulting_theme(fig_channel, title="Channel (Top 3)", height=220, y_is_currency=True)
+
+    fig_vol = volatility_by_channel(m)
+    fig_vol = apply_consulting_theme(fig_vol, title="Volatility (Predictability)", height=220, y_is_currency=False)
+
+    r1 = st.columns(3, gap="large")
+    with r1[0]:
+        _tile_open("Revenue Trend")
+        st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
+        _tile_note("Direction matters: protect **momentum** and investigate spikes.")
+        _tile_close()
+    with r1[1]:
+        top_store = df_top.iloc[0]["Store"] if len(df_top) else "Top store"
+        _tile_open("Top Stores")
+        st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
+        _tile_note(f"Revenue concentration: prioritise **{top_store}** and other top drivers.")
+        _tile_close()
+    with r1[2]:
+        _tile_open("Category Mix")
+        st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+        _tile_note("Double down on **top categories**; fix underperforming lines.")
+        _tile_close()
+
+    r2 = st.columns(3, gap="large")
+    with r2[0]:
+        _tile_open("Pricing / Discounts")
+        st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
+        _tile_note("Pricing discipline: moderate discounts often outperform aggressive ones.")
+        _tile_close()
+    with r2[1]:
+        _tile_open("Channels")
+        st.plotly_chart(fig_channel, use_container_width=True, config={"displayModeBar": False})
+        _tile_note("Reallocate effort to channels that **convert**; tighten the weakest channel.")
+        _tile_close()
+    with r2[2]:
+        _tile_open("Predictability")
+        st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
+        _tile_note("Reduce volatility: stabilise operations where swings are high.")
+        _tile_close()
+
+    st.markdown("---")
 
 def plot_half_width(fig: go.Figure, *, config: dict | None = None) -> None:
     """Left-aligned half-width chart (consultant deck proportion)."""
@@ -745,7 +837,7 @@ def bar_categorical(
         colors = colors[: len(ranked)]
 
     ymax = max(y) if y else 0.0
-    ypad = ymax * 0.10 if ymax > 0 else 1.0
+    ypad = ymax * 0.12 if ymax > 0 else 1.0
 
     fig = go.Figure()
     fig.add_trace(
@@ -773,7 +865,6 @@ def bar_categorical(
         categoryarray=ranked,
         title_text=x_title,
         showgrid=False,
-        ticklabelposition="outside",
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
     fig.update_yaxes(
@@ -781,7 +872,6 @@ def bar_categorical(
         range=[0, ymax + ypad],
         autorange=False,
         rangemode="tozero",
-        zeroline=False,
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
     return fig
