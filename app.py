@@ -783,10 +783,24 @@ def bar_categorical(
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
 
-    # STRICT_ZERO_BASELINE: force x-axis to sit exactly on 0 (no padding, no negative space)
+    # STRICT_ZERO_BASELINE_CLEAN
+    ymax = max(y) if len(y) > 0 else 1
     fig.update_yaxes(
-        range=[0, max(y) * 1.08 if max(y) > 0 else 1],
-        autorange=False
+        range=[0, ymax],
+        autorange=False,
+        showgrid=False,   # remove grey gridline at 0
+        zeroline=False,
+        showline=True,
+        linewidth=1.2,
+        linecolor="#111827"
+    )
+    fig.update_xaxes(
+        showline=True,
+        linewidth=1.2,
+        linecolor="#111827"
+    )
+    fig.update_layout(
+        margin=dict(l=48, r=20, t=48, b=24)
     )
 
     return fig
