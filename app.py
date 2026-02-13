@@ -272,11 +272,11 @@ def apply_consulting_theme(
 
 
 # -----------------------------
-# Executive One‑Pager (6‑grid) — clean, stable implementation
+# Executive One‑Pager (6‑grid)
 # -----------------------------
 ONEPAGER_CSS = """
 <style>
-.ec-onepager-title{margin: 0 0 8px 0; font-weight: 800; font-size: 18px; color:#111827;}
+.ec-onepager-title{margin: 6px 0 10px 0; font-weight: 900; font-size: 18px; color:#111827;}
 .ec-tile{
   border: 1px solid rgba(17,24,39,0.10);
   border-radius: 14px;
@@ -285,79 +285,56 @@ ONEPAGER_CSS = """
   box-shadow: 0 1px 2px rgba(17,24,39,0.04);
   margin-bottom: 14px;
 }
-.ec-tile h4{margin:0 0 6px 0; font-size: 13px; font-weight: 800; color:#111827;}
+.ec-tile h4{margin:0 0 6px 0; font-size: 13px; font-weight: 900; color:#111827;}
 .ec-tile .note{margin-top: 6px; font-size: 12px; color:#374151; line-height: 1.25;}
 .ec-tile .note b{color:#111827;}
 </style>
 """
 
-def _tile_open(title: str) -> None:
+def _tile(title: str, fig: go.Figure, note: str) -> None:
     st.markdown(f"<div class='ec-tile'><h4>{title}</h4>", unsafe_allow_html=True)
-
-def _tile_note(note: str) -> None:
-    st.markdown(f"<div class='note'>{emphasize_exec_keywords_html(note)}</div>", unsafe_allow_html=True)
-
-def _tile_close() -> None:
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.markdown(f"<div class='note'>{emphasize_exec_keywords_html(note)}</div></div>", unsafe_allow_html=True)
 
 def render_onepager_dashboard(m, df) -> None:
-    """6-grid one-pager dashboard shown above Executive Summary."""
     st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
     st.markdown("<div class='ec-onepager-title'>Executive One‑Pager</div>", unsafe_allow_html=True)
 
-    # Build 6 compact figures using existing, stable chart builders
+    # 6 charts (all functions exist in v5AG stable)
     fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
     fig_trend = apply_consulting_theme(fig_trend, title="Revenue Trend (Daily)", height=220, y_is_currency=True)
 
     fig_topstores, df_top = top5_stores_bar(m)
     fig_topstores = apply_consulting_theme(fig_topstores, title="Top Stores (Top 5)", height=220, y_is_currency=True)
+    top_store = df_top.iloc[0]["Store"] if len(df_top) else "Top store"
 
     fig_cat = revenue_by_category(m)
-    fig_cat = apply_consulting_theme(fig_cat, title="Category (Top 5)", height=220, y_is_currency=True)
+    fig_cat = apply_consulting_theme(fig_cat, title="Revenue by Category (Top 5)", height=220, y_is_currency=True)
 
     fig_price = pricing_effectiveness(m)
-    fig_price = apply_consulting_theme(fig_price, title="Discount Effectiveness", height=220, y_is_currency=True)
+    fig_price = apply_consulting_theme(fig_price, title="Pricing Effectiveness", height=220, y_is_currency=True)
 
     fig_channel = revenue_by_channel(m)
-    fig_channel = apply_consulting_theme(fig_channel, title="Channel (Top 3)", height=220, y_is_currency=True)
+    fig_channel = apply_consulting_theme(fig_channel, title="Revenue by Channel (Top 3)", height=220, y_is_currency=True)
 
     fig_vol = volatility_by_channel(m)
-    fig_vol = apply_consulting_theme(fig_vol, title="Volatility (Predictability)", height=220, y_is_currency=False)
+    fig_vol = apply_consulting_theme(fig_vol, title="Volatility by Channel", height=220, y_is_currency=False)
 
     r1 = st.columns(3, gap="large")
     with r1[0]:
-        _tile_open("Revenue Trend")
-        st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
-        _tile_note("Direction matters: protect **momentum** and investigate spikes.")
-        _tile_close()
+        _tile("Revenue Trend", fig_trend, "Protect **momentum**; investigate spikes and dips.")
     with r1[1]:
-        top_store = df_top.iloc[0]["Store"] if len(df_top) else "Top store"
-        _tile_open("Top Stores")
-        st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
-        _tile_note(f"Revenue concentration: prioritise **{top_store}** and other top drivers.")
-        _tile_close()
+        _tile("Top Stores", fig_topstores, f"Revenue is concentrated — prioritise **{top_store}** and top drivers.")
     with r1[2]:
-        _tile_open("Category Mix")
-        st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
-        _tile_note("Double down on **top categories**; fix underperforming lines.")
-        _tile_close()
+        _tile("Category Mix", fig_cat, "Double down on **top categories**; fix weak lines.")
 
     r2 = st.columns(3, gap="large")
     with r2[0]:
-        _tile_open("Pricing / Discounts")
-        st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
-        _tile_note("Pricing discipline: moderate discounts often outperform aggressive ones.")
-        _tile_close()
+        _tile("Pricing / Discounts", fig_price, "Use **pricing discipline**; moderate discounts can outperform aggressive ones.")
     with r2[1]:
-        _tile_open("Channels")
-        st.plotly_chart(fig_channel, use_container_width=True, config={"displayModeBar": False})
-        _tile_note("Reallocate effort to channels that **convert**; tighten the weakest channel.")
-        _tile_close()
+        _tile("Channels", fig_channel, "Reallocate effort to channels that **convert**; fix weakest channel.")
     with r2[2]:
-        _tile_open("Predictability")
-        st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
-        _tile_note("Reduce volatility: stabilise operations where swings are high.")
-        _tile_close()
+        _tile("Predictability", fig_vol, "Reduce volatility: stabilise operations where swings are highest.")
 
     st.markdown("---")
 
