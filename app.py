@@ -768,7 +768,6 @@ def bar_categorical(
     fig.update_layout(bargap=0.78)
 
     fig.update_xaxes(
-        automargin=True,
         type="category",
         categoryorder="array",
         categoryarray=ranked,
@@ -778,26 +777,16 @@ def bar_categorical(
     )
     fig.update_yaxes(
         title_text=y_title,
-        range=[0, ymax + ypad],
+        
         autorange=False,
-        rangemode="tozero",
+        
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
     )
 
-    # CONSULTANT_BAR_POLISH: tighten composition + stronger baseline (no zeroline tricks)
-    fig.update_layout(
-        bargap=0.55,  # more whitespace between categories -> cleaner composition
-        margin=dict(l=46, r=18, t=44, b=34),
-    )
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1.3,
-        linecolor="#1f2937",
-        ticks="outside",
-        ticklen=4,
-        tickwidth=1,
-        tickcolor="rgba(31,41,55,0.6)",
-        ticklabelposition="outside",
+    # STRICT_ZERO_BASELINE: force x-axis to sit exactly on 0 (no padding, no negative space)
+    fig.update_yaxes(
+        range=[0, max(y) * 1.08 if max(y) > 0 else 1],
+        autorange=False
     )
 
     return fig
