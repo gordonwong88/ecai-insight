@@ -272,7 +272,7 @@ def apply_consulting_theme(
 
 
 # -----------------------------
-# Executive One‑Pager (6‑grid)
+# Executive Dashboard (6‑grid)
 # -----------------------------
 ONEPAGER_CSS = """
 <style>
@@ -298,26 +298,32 @@ def _tile(title: str, fig: go.Figure, note: str) -> None:
 
 def render_onepager_dashboard(m, df) -> None:
     st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
-    st.markdown("<div class='ec-onepager-title'>Executive One‑Pager</div>", unsafe_allow_html=True)
+    st.markdown("<div class='ec-onepager-title'>Executive Dashboard</div>", unsafe_allow_html=True)
 
+
+    def _as_fig(obj):
+        # Some chart builders return (fig, meta). We only need the fig.
+        if isinstance(obj, tuple) and len(obj) > 0:
+            return obj[0]
+        return obj
     # 6 charts (all functions exist in v5AG stable)
-    fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
+    fig_trend = _as_fig(line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)"))
     fig_trend = apply_consulting_theme(fig_trend, title="Revenue Trend (Daily)", height=220, y_is_currency=True)
 
     fig_topstores, df_top = top5_stores_bar(m)
     fig_topstores = apply_consulting_theme(fig_topstores, title="Top Stores (Top 5)", height=220, y_is_currency=True)
     top_store = df_top.iloc[0]["Store"] if len(df_top) else "Top store"
 
-    fig_cat = revenue_by_category(m)
+    fig_cat = _as_fig(revenue_by_category(m))
     fig_cat = apply_consulting_theme(fig_cat, title="Revenue by Category (Top 5)", height=220, y_is_currency=True)
 
-    fig_price = pricing_effectiveness(m)
+    fig_price = _as_fig(pricing_effectiveness(m))
     fig_price = apply_consulting_theme(fig_price, title="Pricing Effectiveness", height=220, y_is_currency=True)
 
-    fig_channel = revenue_by_channel(m)
+    fig_channel = _as_fig(revenue_by_channel(m))
     fig_channel = apply_consulting_theme(fig_channel, title="Revenue by Channel (Top 3)", height=220, y_is_currency=True)
 
-    fig_vol = volatility_by_channel(m)
+    fig_vol = _as_fig(volatility_by_channel(m))
     fig_vol = apply_consulting_theme(fig_vol, title="Volatility by Channel", height=220, y_is_currency=False)
 
     r1 = st.columns(3, gap="large")
@@ -1170,12 +1176,12 @@ summary_points = build_business_summary_points(m)
 
 
 # -----------------------------
-# Executive One‑Pager (6‑grid)
+# Executive Dashboard (6‑grid)
 # -----------------------------
 try:
     render_onepager_dashboard(m, df)
 except Exception as _e:
-    st.warning(f"One‑Pager unavailable: {_e}")
+    st.warning(f"Executive Dashboard unavailable: {_e}")
 
 st.subheader("Executive Summary")
 for p in summary_points[:12]:
