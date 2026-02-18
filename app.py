@@ -1260,159 +1260,74 @@ insight_block(
     action=["Fix volatility first (availability, staffing, promotion timing). Use stable stores as benchmarks for best practices."],
 )
 
+
 # 4) Pricing effectiveness
 pe = pricing_effectiveness(m)
 if pe is not None:
     fig_price, df_price = pe
-    plot_half_width(fig_price, config={"displayModeBar": False})
-    insight_block(
-        "Pricing Effectiveness",
-        what=["Moderate discounts often perform better than aggressive discounting."],
-        why=["Large discounts can erode revenue quality without improving outcomes.", "Pricing discipline is a repeatable advantage."],
-        action=["Use small discounts as default. Treat deep discounts as experiments with clear goals and limits."],
-    )
+    col_chart, col_comment = st.columns([2, 1], gap="large")
+    with col_chart:
+        st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
+    with col_comment:
+        st.markdown(
+            "<div style='border:1px dashed #C8CCD0; padding:14px; border-radius:8px; background:#FAFBFC;'>",
+            unsafe_allow_html=True,
+        )
+        insight_block(
+            "Pricing Effectiveness",
+            what=["Moderate discounts often perform better than aggressive discounting."],
+            why=["Large discounts can erode revenue quality without improving outcomes.", "Pricing discipline is a repeatable advantage."],
+            action=["Use small discounts as default. Treat deep discounts as experiments with clear goals and limits."],
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 else:
     st.info("Pricing Effectiveness is unavailable (no usable discount column found).")
+
+
 
 # 5) Revenue by Category
 cat = revenue_by_category(m, topn=8)
 if cat is not None:
     fig_cat, _ = cat
-    plot_half_width(fig_cat, config={"displayModeBar": False})
-    insight_block(
-        "Category Mix",
-        what=["A few categories typically drive most revenue."],
-        why=["Category mix often matters more than SKU count.", "Weak categories can drag overall performance."],
-        action=["Double down on winner categories (stock depth, placement). Review whether weak categories need repositioning or removal."],
-    )
+    col_chart, col_comment = st.columns([2, 1], gap="large")
+    with col_chart:
+        st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+    with col_comment:
+        st.markdown(
+            "<div style='border:1px dashed #C8CCD0; padding:14px; border-radius:8px; background:#FAFBFC;'>",
+            unsafe_allow_html=True,
+        )
+        insight_block(
+            "Category Mix",
+            what=["A few categories typically drive most revenue."],
+            why=["Category mix often matters more than SKU count.", "Weak categories can drag overall performance."],
+            action=["Double down on winner categories (stock depth, placement). Review whether weak categories need repositioning or removal."],
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+else:
+    st.info("Category Mix is unavailable (no usable category column found).")
+
+
 
 # 6) Revenue by Channel
-chn = revenue_by_channel(m, topn=8)
-if chn is not None:
-    fig_chn, _ = chn
-    plot_half_width(fig_chn, config={"displayModeBar": False})
-    insight_block(
-        "Channel Mix",
-        what=["Channels contribute very differently to revenue."],
-        why=["Scaling the right channel can be cheaper than opening new stores.", "Channel concentration adds risk if one channel weakens."],
-        action=["Invest more in high-performing channels. Fix or rethink consistently weak channels."],
-    )
+ch = revenue_by_channel(m, topn=8)
+if ch is not None:
+    fig_ch, _ = ch
+    col_chart, col_comment = st.columns([2, 1], gap="large")
+    with col_chart:
+        st.plotly_chart(fig_ch, use_container_width=True, config={"displayModeBar": False})
+    with col_comment:
+        st.markdown(
+            "<div style='border:1px dashed #C8CCD0; padding:14px; border-radius:8px; background:#FAFBFC;'>",
+            unsafe_allow_html=True,
+        )
+        insight_block(
+            "Channels",
+            what=["Channels contribute very differently to revenue."],
+            why=["Scaling the right channel can be cheaper than opening new stores.", "Channel concentration adds risk if one channel weakens."],
+            action=["Invest more in high-performing channels. Fix or rethink consistently weak channels."],
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+else:
+    st.info("Channels view is unavailable (no usable channel column found).")
 
-st.divider()
-
-# -----------------------------
-# Advanced analysis (COLLAPSED)
-# -----------------------------
-with st.expander("Advanced analysis (optional)"):
-    st.markdown("### Raw Data Preview")
-    st.dataframe(df.head(50), use_container_width=True)
-
-    st.markdown("### Data Quality & Assumptions")
-    profile = pd.DataFrame({
-        "Column": df.columns,
-        "Type": [str(df[c].dtype) for c in df.columns],
-        "Missing %": [float(df[c].isna().mean()) for c in df.columns],
-        "Unique": [int(df[c].nunique(dropna=True)) for c in df.columns],
-    })
-    st.dataframe(profile, use_container_width=True)
-
-    st.markdown("### Correlation (numeric fields)")
-    num = df.select_dtypes(include=[np.number])
-    if num.shape[1] >= 2:
-        corr = num.corr()
-        fig_corr = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale="Blues")
-        fig_corr = apply_consulting_theme(fig_corr, title="Numeric Correlation (Advanced)", height=440)
-        fig_corr.update_xaxes(side="bottom")
-        plot_half_width(fig_corr)
-    else:
-        st.info("Not enough numeric fields to compute correlation.")
-
-    vol_ch = volatility_by_channel(m)
-    if vol_ch is not None:
-        fig_vol, _ = vol_ch
-        st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
-
-
-# -----------------------------
-# Ask AI (CEO-level Q&A)
-# -----------------------------
-st.subheader("Ask AI (CEO Q&A)")
-st.caption("Ask questions about your data (e.g., 'Why did revenue drop?' 'Which store should I fix first?'). Answers are generated from your uploaded dataset summary.")
-
-# Inline Q&A (input stays directly under this section)
-q = st.text_input("Ask a question", placeholder="e.g., What should I focus on next week and why?")
-ask_btn = st.button("Ask AI")
-
-if ask_btn and q.strip():
-    # Use the existing Executive Summary bullets as the context
-    _ctx = ""
-    try:
-        _ctx = "\n".join([clean_display_text(x) for x in summary_points[:12] if clean_display_text(x)])
-    except Exception:
-        _ctx = ""
-    answer = answer_question_with_openai(q.strip(), _ctx)
-    st.markdown("**Answer**")
-    st.write(answer)
-
-st.divider()
-
-
-# -----------------------------
-# Exports
-# -----------------------------
-st.subheader("Export Executive Brief")
-st.markdown(
-    """
-Download a short executive-ready summary for sharing or review.
-
-- **PDF Executive Brief** — selected insights only  
-- **PPT Executive Pack** — one insight per slide (16:9)
-    """
-)
-
-# Prepare chart bundle for export (selected only)
-export_items: List[Tuple[str, go.Figure, str]] = []
-
-export_items.append(("Revenue Trend", fig_trend, "Overall direction of revenue over time.\nUse this to spot promotion spikes and slowdowns."))
-export_items.append(("Top Revenue-Generating Stores (Top 5)", fig_topstores, "Revenue is concentrated in a small number of stores.\nProtect performance in the top stores first."))
-
-# Add one representative store chart (best to keep brief)
-if figs:
-    export_items.append((f"Store Stability — {store_names[0]}", figs[0], "Stability matters for forecasting and inventory.\nFix volatility before scaling growth."))
-
-if pe is not None:
-    export_items.append(("Pricing Effectiveness", pe[0], "Moderate discounts often outperform aggressive discounting.\nUse deep discounts as controlled experiments."))
-
-if cat is not None:
-    export_items.append(("Category Mix", cat[0], "Category mix drives revenue structure.\nDouble down on winners; review weak categories."))
-
-if chn is not None:
-    export_items.append(("Channel Mix", chn[0], "Channel contribution is uneven.\nInvest in channels that consistently perform."))
-
-colA, colB = st.columns([1, 1])
-
-with colA:
-    if st.button("Generate PDF Executive Brief", type="primary"):
-        try:
-            pdf_bytes = build_pdf_exec_brief(
-                title="EC-AI Insight — Executive Brief",
-                subtitle="Retail sales performance, explained clearly.",
-                summary_points=summary_points,
-                chart_items=export_items,
-            )
-            st.download_button("Download PDF", data=pdf_bytes, file_name="ecai_executive_brief.pdf", mime="application/pdf")
-        except Exception as e:
-            st.error("PDF export failed.")
-            st.code(str(e))
-
-with colB:
-    if st.button("Generate PPT Executive Pack"):
-        try:
-            ppt_bytes = build_ppt_talking_deck(
-                deck_title="EC-AI Insight — Executive Pack",
-                chart_items=export_items,
-            )
-            st.download_button("Download PPT", data=ppt_bytes, file_name="ecai_talking_deck.pptx", mime="application/vnd.openxmlformats-officedocument.presentationml.presentation")
-        except Exception as e:
-            st.error("PPT export failed.")
-            st.code(str(e))
