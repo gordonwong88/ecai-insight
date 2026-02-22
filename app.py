@@ -301,7 +301,7 @@ def _dash_note(md: str) -> None:
     html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", md)
     st.markdown(f"<div style='{DASH_NOTE_STYLE}'>{html}</div>", unsafe_allow_html=True)
 
-def render_onepager_dashboard(m, df) -> None:
+def render_onepager_dashboard(m, df) -> dict:
     st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
     st.markdown("<div class='ec-onepager-title'>Executive Dashboard</div>", unsafe_allow_html=True)
 
@@ -356,7 +356,18 @@ def render_onepager_dashboard(m, df) -> None:
             st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
             _dash_note("Reduce volatility: stabilise operations where swings are highest.")
 
+    figs_dict = {
+        "Revenue Trend (Daily)": fig_trend,
+        "Top Stores (Top 5)": fig_topstores,
+        "Revenue by Category (Top 5)": fig_cat,
+        "Pricing Effectiveness": fig_price,
+        "Revenue by Channel (Top 3)": fig_channel,
+        "Volatility by Channel": fig_vol,
+    }
+
     st.markdown("---")
+    return figs_dict
+
 def plot_half_width(fig: go.Figure, *, config: dict | None = None) -> None:
     """Left-aligned half-width chart (consultant deck proportion)."""
     col1, col2 = st.columns([0.55, 0.45])
@@ -1192,7 +1203,7 @@ summary_points = build_business_summary_points(m)
 # Executive Dashboard (6‑grid)
 # -----------------------------
 try:
-    render_onepager_dashboard(m, df)
+    export_figures = render_onepager_dashboard(m, df)
 except Exception as _e:
     st.warning(f"Executive Dashboard unavailable: {_e}")
 
@@ -1331,3 +1342,127 @@ if ch is not None:
 else:
     st.info("Channels view is unavailable (no usable channel column found).")
 
+
+
+
+# -----------------------------
+# Advanced analytics + Ask AI + Exports (restored)
+# -----------------------------
+st.divider()
+
+with st.expander("Advanced analytics (optional)", expanded=False):
+    st.caption("Optional deeper diagnostics for power users. Collapsed by default to keep the UI executive-clean.")
+    try:
+        num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        if len(num_cols) >= 2:
+            corr = df[num_cols].corr(numeric_only=True)
+            # Show top correlations with revenue if available
+            if m.col_revenue in corr.columns:
+                top_corr = (
+                    corr[m.col_revenue]
+                    .drop(labels=[m.col_revenue], errors="ignore")
+                    .sort_values(key=lambda s: s.abs(), ascending=False)
+                    .head(10)
+                    .reset_index()
+                    .rename(columns={"index": "Metric", m.col_revenue: "Correlation"})
+                )
+                st.markdown("**Top correlations with Revenue (directional)**")
+                st.dataframe(top_corr, use_container_width=True, hide_index=True)
+            st.markdown("**Correlation heatmap (numeric metrics)**")
+            fig_corr = px.imshow(
+                corr,
+                text_auto=False,
+                aspect="auto",
+                color_continuous_scale="Blues",
+            )
+            fig_corr.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=420)
+            st.plotly_chart(fig_corr, use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.info("Not enough numeric columns to compute correlations.")
+    except Exception as e:
+        st.warning(f"Advanced analytics unavailable: {e}")
+
+st.subheader("Ask AI (CEO Q&A)")
+st.caption("Ask questions about your data (e.g., “Why did revenue drop?” “Which store should I fix first?”).")
+
+# Build a lightweight context from the generated insights
+_context_lines: List[str] = []
+try:
+    _context_lines.append(f"Dataset: {len(df)} rows, {df[m.col_date].nunique() if m.col_date else 'NA'} days.")
+except Exception:
+    pass
+try:
+    _context_lines += [f"- {clean_display_text(x)}" for x in exec_points if clean_display_text(x)]
+except Exception:
+    pass
+try:
+    for sec_title, bullets in insight_sections.items():
+        _context_lines.append(f"{sec_title}:")
+        _context_lines += [f"- {clean_display_text(x)}" for x in bullets if clean_display_text(x)]
+except Exception:
+    pass
+context_text = "\n".join([x for x in _context_lines if x]).strip()
+
+if "ask_ai_history" not in st.session_state:
+    st.session_state.ask_ai_history = []
+
+q_col, btn_col = st.columns([0.82, 0.18])
+with q_col:
+    user_q = st.text_input("Ask EC-AI…", value="", key="ask_ai_question", placeholder="E.g., What should I focus on next week?")
+with btn_col:
+    ask_clicked = st.button("Ask", use_container_width=True)
+
+if ask_clicked and user_q.strip():
+    with st.spinner("Thinking…"):
+        answer = answer_question_with_openai(user_q.strip(), context_text)
+    st.session_state.ask_ai_history.insert(0, (user_q.strip(), answer))
+    st.session_state.ask_ai_history = st.session_state.ask_ai_history[:6]
+
+for q, a in st.session_state.ask_ai_history[:3]:
+    st.markdown(f"**Q:** {q}")
+    st.markdown(a)
+
+st.divider()
+st.subheader("Export Executive Pack")
+st.caption("Download a shareable executive-ready brief.")
+
+c1, c2 = st.columns(2)
+with c1:
+    if st.button("Generate PDF Executive Brief", use_container_width=True):
+        try:
+            pdf_bytes = build_pdf_executive_brief(
+                title="EC-AI Insight — Executive Brief",
+                subtitle="Sales performance, explained clearly.",
+                executive_summary=exec_points,
+                sections=insight_sections,
+                figures=export_figures,
+            )
+            st.download_button(
+                "Download PDF",
+                data=pdf_bytes,
+                file_name="ecai_executive_brief.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.error(f"PDF generation failed: {e}")
+
+with c2:
+    if st.button("Generate Executive Pack (PPT)", use_container_width=True):
+        try:
+            pptx_bytes = build_ppt_talking_deck(
+                title="EC-AI Insight — Executive Pack",
+                subtitle="One insight per slide",
+                executive_summary=exec_points,
+                sections=insight_sections,
+                figures=export_figures,
+            )
+            st.download_button(
+                "Download PPTX",
+                data=pptx_bytes,
+                file_name="ecai_executive_pack.pptx",
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.error(f"PPT generation failed: {e}")
