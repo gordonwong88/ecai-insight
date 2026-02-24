@@ -176,6 +176,38 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
 
 /* Make expanders less cramped */
 div[data-testid="stExpander"] > details { padding: 0.25rem 0.25rem 0.5rem 0.25rem; }
+
+/* Right-side insight box */
+.ecai-note-box{
+  border: 1.5px dashed rgba(16, 24, 40, 0.25);
+  border-radius: 12px;
+  padding: 14px 14px 10px 14px;
+  background: rgba(255,255,255,0.75);
+}
+.ecai-note-title{
+  font-weight: 800;
+  font-size: 14px;
+  margin-bottom: 10px;
+  color: #0B1F3A;
+}
+.ecai-note-h{
+  font-weight: 800;
+  margin-top: 10px;
+  margin-bottom: 6px;
+  color: #0B1F3A;
+  font-size: 13px;
+}
+.ecai-note-box ul{
+  margin: 0 0 0 18px;
+  padding: 0;
+}
+.ecai-note-box li{
+  margin: 0 0 6px 0;
+  color: rgba(16,24,40,0.88);
+  line-height: 1.35;
+  font-size: 13px;
+}
+
 </style>
     """,
     unsafe_allow_html=True,
@@ -1026,6 +1058,44 @@ def insight_block(title: str, what: List[str], why: List[str], action: List[str]
 # -----------------------------
 # Export helpers (PDF + PPT with charts + commentary)
 # -----------------------------
+
+
+
+def insight_block_right(title: str, what, why, action):
+    """Right-side commentary box (consultant style)."""
+    def _ul(items):
+        if not items:
+            return ""
+        lis = "".join([f"<li>{clean_display_text(str(x))}</li>" for x in items])
+        return f"<ul>{lis}</ul>"
+
+    html = f"""
+    <div class="ecai-note-box">
+      <div class="ecai-note-title">{clean_display_text(title)}</div>
+      <div class="ecai-note-h">What this shows</div>
+      {_ul(what)}
+      <div class="ecai-note-h">Why it matters</div>
+      {_ul(why)}
+      <div class="ecai-note-h">What to do</div>
+      {_ul(action)}
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+def chart_with_right_insights(fig, title: str, what, why, action, height: int | None = None):
+    """Render a chart left and insights right (single row)."""
+    col_l, col_r = st.columns([2.25, 1], gap="large")
+    with col_l:
+        if height is not None:
+            try:
+                fig.update_layout(height=height)
+            except Exception:
+                pass
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with col_r:
+        insight_block_right(title, what, why, action)
+
+
 def fig_to_png_bytes(fig: go.Figure, scale: int = 2) -> bytes:
     # Requires kaleido
     return fig.to_image(format="png", scale=scale)
@@ -1234,29 +1304,27 @@ st.divider()
 # -----------------------------
 # Key Performance Visuals (DEFAULT)
 # -----------------------------
-st.subheader("Charts & Insights")
-
-# 1) Overall trend
-fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
-plot_half_width(fig_trend, config={"displayModeBar": False})
-insight_block(
-    "Revenue Trend",
+# 1) Revenue Trend (Daily)
+fig_trend, df_daily = revenue_trend_daily(m)
+chart_with_right_insights(
+    fig_trend,
+    title="Revenue Trend",
     what=["Overall revenue direction over time (daily total)."],
     why=["Sets the context: growth vs stability.", "Helps spot spikes that may come from promotions or one-off events."],
     action=["If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully."],
+    height=420,
 )
-
 # 2) Top 5 stores
 fig_topstores, df_topstores = top5_stores_bar(m)
-plot_half_width(fig_topstores, config={"displayModeBar": False})
 top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
-insight_block(
-    "Top Stores",
+chart_with_right_insights(
+    fig_topstores,
+    title="Top Stores",
     what=[f"Revenue is concentrated in a small number of stores, led by **{top_store_name}**."],
     why=["Top stores disproportionately drive outcomes.", "Operational issues in one key store can move the whole month."],
     action=["Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere."],
+    height=420,
 )
-
 # 3) Store stability (mini charts)
 st.markdown("### Store Stability (Top 5)")
 figs, store_names = store_small_multiples(m)
