@@ -176,38 +176,6 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
 
 /* Make expanders less cramped */
 div[data-testid="stExpander"] > details { padding: 0.25rem 0.25rem 0.5rem 0.25rem; }
-
-/* Right-side insight box */
-.ecai-note-box{
-  border: 1.5px dashed rgba(16, 24, 40, 0.25);
-  border-radius: 12px;
-  padding: 14px 14px 10px 14px;
-  background: rgba(255,255,255,0.75);
-}
-.ecai-note-title{
-  font-weight: 800;
-  font-size: 14px;
-  margin-bottom: 10px;
-  color: #0B1F3A;
-}
-.ecai-note-h{
-  font-weight: 800;
-  margin-top: 10px;
-  margin-bottom: 6px;
-  color: #0B1F3A;
-  font-size: 13px;
-}
-.ecai-note-box ul{
-  margin: 0 0 0 18px;
-  padding: 0;
-}
-.ecai-note-box li{
-  margin: 0 0 6px 0;
-  color: rgba(16,24,40,0.88);
-  line-height: 1.35;
-  font-size: 13px;
-}
-
 </style>
     """,
     unsafe_allow_html=True,
@@ -1058,47 +1026,49 @@ def insight_block(title: str, what: List[str], why: List[str], action: List[str]
 # -----------------------------
 # Export helpers (PDF + PPT with charts + commentary)
 # -----------------------------
+def fig_to_png_bytes(fig: go.Figure, scale: int = 2) -> bytes:
+    # Requires kaleido
+    return fig.to_image(format="png", scale=scale)
 
+def render_chart_with_commentary(
+    fig,
+    *,
+    what_points=None,
+    why_points=None,
+    todo_points=None,
+    left_ratio=3,
+    right_ratio=1,
+    height=None,
+):
+    """Standard left-chart + right-commentary layout used across EC-AI Insight."""
+    what_points = what_points or []
+    why_points = why_points or []
+    todo_points = todo_points or []
 
-
-def insight_block_right(title: str, what, why, action):
-    """Right-side commentary box (consultant style)."""
-    def _ul(items):
-        if not items:
-            return ""
-        lis = "".join([f"<li>{clean_display_text(str(x))}</li>" for x in items])
-        return f"<ul>{lis}</ul>"
-
-    html = f"""
-    <div class="ecai-note-box">
-      <div class="ecai-note-title">{clean_display_text(title)}</div>
-      <div class="ecai-note-h">What this shows</div>
-      {_ul(what)}
-      <div class="ecai-note-h">Why it matters</div>
-      {_ul(why)}
-      <div class="ecai-note-h">What to do</div>
-      {_ul(action)}
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
-
-def chart_with_right_insights(fig, title: str, what, why, action, height: int | None = None):
-    """Render a chart left and insights right (single row)."""
-    col_l, col_r = st.columns([2.25, 1], gap="large")
+    col_l, col_r = st.columns([left_ratio, right_ratio], gap="large")
     with col_l:
         if height is not None:
             try:
                 fig.update_layout(height=height)
             except Exception:
                 pass
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig, use_container_width=True)
+
     with col_r:
-        insight_block_right(title, what, why, action)
+        st.markdown(
+            """
+<div style="border:1.6px dashed #C8CCD0; border-radius:12px; padding:16px 18px; background:#FFFFFF;">
+""",
+            unsafe_allow_html=True,
+        )
+        insight_block(
+            what_points=what_points,
+            why_points=why_points,
+            todo_points=todo_points,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
-def fig_to_png_bytes(fig: go.Figure, scale: int = 2) -> bytes:
-    # Requires kaleido
-    return fig.to_image(format="png", scale=scale)
 
 def build_pdf_exec_brief(
     title: str,
@@ -1304,27 +1274,39 @@ st.divider()
 # -----------------------------
 # Key Performance Visuals (DEFAULT)
 # -----------------------------
-# 1) Revenue Trend (Daily)
-fig_trend, df_daily = revenue_trend_daily(m)
-chart_with_right_insights(
-    fig_trend,
-    title="Revenue Trend",
-    what=["Overall revenue direction over time (daily total)."],
-    why=["Sets the context: growth vs stability.", "Helps spot spikes that may come from promotions or one-off events."],
-    action=["If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully."],
-    height=420,
-)
+st.subheader("Charts & Insights")
+
+# 1) Overall trend
+fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
+col_l, col_r = st.columns([2, 1], gap="large")
+with col_l:
+    st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
+with col_r:
+    st.markdown('<div style="border: 1px dashed rgba(15,23,42,.25); border-radius: 14px; padding: 14px 16px; margin-top: 6px;">', unsafe_allow_html=True)
+    insight_block(
+        "Revenue Trend",
+        what=["Overall revenue direction over time (daily total)."],
+        why=["Sets the context: growth vs stability.", "Helps spot spikes that may come from promotions or one-off events."],
+        action=["If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully."],
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
 # 2) Top 5 stores
 fig_topstores, df_topstores = top5_stores_bar(m)
-top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
-chart_with_right_insights(
-    fig_topstores,
-    title="Top Stores",
-    what=[f"Revenue is concentrated in a small number of stores, led by **{top_store_name}**."],
-    why=["Top stores disproportionately drive outcomes.", "Operational issues in one key store can move the whole month."],
-    action=["Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere."],
-    height=420,
-)
+col_l, col_r = st.columns([2, 1], gap="large")
+with col_l:
+    st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
+with col_r:
+    top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
+    st.markdown('<div style="border: 1px dashed rgba(15,23,42,.25); border-radius: 14px; padding: 14px 16px; margin-top: 6px;">', unsafe_allow_html=True)
+    insight_block(
+        "Top Stores",
+        what=[f"Revenue is concentrated in a small number of stores, led by **{top_store_name}**."],
+        why=["Top stores disproportionately drive outcomes.", "Operational issues in one key store can move the whole month."],
+        action=["Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere."],
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
 # 3) Store stability (mini charts)
 st.markdown("### Store Stability (Top 5)")
 figs, store_names = store_small_multiples(m)
