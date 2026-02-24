@@ -281,7 +281,7 @@ ONEPAGER_CSS = """
   border: 1px solid rgba(17,24,39,0.10);
   border-radius: 14px;
   padding: 12px 12px 10px 12px;
-  background: #F5F6F8;
+  background: #ffffff;
   box-shadow: 0 1px 2px rgba(17,24,39,0.04);
   margin-bottom: 14px;
 }
@@ -293,7 +293,7 @@ ONEPAGER_CSS = """
 
 
 
-DASH_NOTE_STYLE = "border:1px dashed rgba(17,24,39,0.25); border-radius:12px; padding:10px 12px; background: #F5F6F8; font-size:12px; color:#374151; line-height:1.35;"
+DASH_NOTE_STYLE = "border:1px dashed rgba(17,24,39,0.25); border-radius:12px; padding:10px 12px; background:#ffffff; font-size:12px; color:#374151; line-height:1.35;"
 
 
 def _dash_note(md: str) -> None:
@@ -1030,6 +1030,46 @@ def fig_to_png_bytes(fig: go.Figure, scale: int = 2) -> bytes:
     # Requires kaleido
     return fig.to_image(format="png", scale=scale)
 
+def render_chart_with_commentary(
+    fig,
+    *,
+    what_points=None,
+    why_points=None,
+    todo_points=None,
+    left_ratio=3,
+    right_ratio=1,
+    height=None,
+):
+    """Standard left-chart + right-commentary layout used across EC-AI Insight."""
+    what_points = what_points or []
+    why_points = why_points or []
+    todo_points = todo_points or []
+
+    col_l, col_r = st.columns([left_ratio, right_ratio], gap="large")
+    with col_l:
+        if height is not None:
+            try:
+                fig.update_layout(height=height)
+            except Exception:
+                pass
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col_r:
+        st.markdown(
+            """
+<div style="border:1.6px dashed #C8CCD0; border-radius:12px; padding:16px 18px; background:#FFFFFF;">
+""",
+            unsafe_allow_html=True,
+        )
+        insight_block(
+            what_points=what_points,
+            why_points=why_points,
+            todo_points=todo_points,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+
 def build_pdf_exec_brief(
     title: str,
     subtitle: str,
@@ -1238,24 +1278,34 @@ st.subheader("Charts & Insights")
 
 # 1) Overall trend
 fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
-plot_half_width(fig_trend, config={"displayModeBar": False})
-insight_block(
-    "Revenue Trend",
-    what=["Overall revenue direction over time (daily total)."],
-    why=["Sets the context: growth vs stability.", "Helps spot spikes that may come from promotions or one-off events."],
-    action=["If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully."],
-)
+col_l, col_r = st.columns([2, 1], gap="large")
+with col_l:
+    st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
+with col_r:
+    st.markdown('<div style="border: 1px dashed rgba(15,23,42,.25); border-radius: 14px; padding: 14px 16px; margin-top: 6px;">', unsafe_allow_html=True)
+    insight_block(
+        "Revenue Trend",
+        what=["Overall revenue direction over time (daily total)."],
+        why=["Sets the context: growth vs stability.", "Helps spot spikes that may come from promotions or one-off events."],
+        action=["If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully."],
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # 2) Top 5 stores
 fig_topstores, df_topstores = top5_stores_bar(m)
-plot_half_width(fig_topstores, config={"displayModeBar": False})
-top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
-insight_block(
-    "Top Stores",
-    what=[f"Revenue is concentrated in a small number of stores, led by **{top_store_name}**."],
-    why=["Top stores disproportionately drive outcomes.", "Operational issues in one key store can move the whole month."],
-    action=["Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere."],
-)
+col_l, col_r = st.columns([2, 1], gap="large")
+with col_l:
+    st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
+with col_r:
+    top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top store"
+    st.markdown('<div style="border: 1px dashed rgba(15,23,42,.25); border-radius: 14px; padding: 14px 16px; margin-top: 6px;">', unsafe_allow_html=True)
+    insight_block(
+        "Top Stores",
+        what=[f"Revenue is concentrated in a small number of stores, led by **{top_store_name}**."],
+        why=["Top stores disproportionately drive outcomes.", "Operational issues in one key store can move the whole month."],
+        action=["Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere."],
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # 3) Store stability (mini charts)
 st.markdown("### Store Stability (Top 5)")
