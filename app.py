@@ -71,11 +71,202 @@ def _get_openai_api_key() -> str | None:
     return os.environ.get("OPENAI_API_KEY")
 
 
+def _fmt_money(x: float) -> str:
+    try:
+        x = float(x)
+    except Exception:
+        return "N/A"
+    sign = "-" if x < 0 else ""
+    x = abs(x)
+    if x >= 1_000_000_000:
+        return f"{sign}${x/1_000_000_000:.2f}B"
+    if x >= 1_000_000:
+        return f"{sign}${x/1_000_000:.2f}M"
+    if x >= 1_000:
+        return f"{sign}${x/1_000:.1f}K"
+    return f"{sign}${x:,.0f}"
+
+
+def _fmt_pct(x: float) -> str:
+    try:
+        return f"{float(x)*100:.1f}%"
+    except Exception:
+        return "N/A"
+
+
+def _safe_div(a: float, b: float) -> float:
+    try:
+        a = float(a)
+        b = float(b)
+        return a / b if b not in (0, 0.0) else float("nan")
+    except Exception:
+        return float("nan")
+
+
+def _build_ai_context(df: pd.DataFrame, m: dict) -> str:
+    """Build a compact, fact-heavy context block for Ask AI."""
+    if df is None or df.empty:
+        return "No dataset loaded."
+
+    col_date = m.get("date")
+    col_rev = m.get("revenue")
+    col_store = m.get("store")
+    col_cat = m.get("category")
+    col_channel = m.get("channel")
+    col_disc = m.get("discount")
+
+    overview_lines = []
+    n_rows = len(df)
+
+    date_min = date_max = None
+    n_days = None
+    if col_date and col_date in df.columns:
+        d = pd.to_datetime(df[col_date], errors="coerce")
+        date_min = d.min()
+        date_max = d.max()
+        if pd.notna(date_min) and pd.notna(date_max):
+            n_days = int((date_max - date_min).days) + 1
+
+    total_rev = None
+    if col_rev and col_rev in df.columns:
+        total_rev = float(pd.to_numeric(df[col_rev], errors="coerce").fillna(0).sum())
+
+    overview_lines.append(f"Rows: {n_rows}")
+    if n_days is not None:
+        overview_lines.append(f"Date range: {date_min.date()} to {date_max.date()} ({n_days} days)")
+    else:
+        overview_lines.append("Date range: N/A (missing/invalid date column)")
+    overview_lines.append(f"Total revenue: {_fmt_money(total_rev) if total_rev is not None else 'N/A'}")
+
+    def top_contrib(col_name: str, top_n: int = 5):
+        if not (col_name and col_name in df.columns and col_rev and col_rev in df.columns):
+            return None
+        tmp = df[[col_name, col_rev]].copy()
+        tmp[col_rev] = pd.to_numeric(tmp[col_rev], errors="coerce").fillna(0)
+        g = tmp.groupby(col_name, dropna=False)[col_rev].sum().sort_values(ascending=False)
+        g = g[g.index.notna()]
+        top = g.head(top_n)
+        if top.empty:
+            return None
+        tot = float(g.sum())
+        out = []
+        for i, (k, v) in enumerate(top.items(), start=1):
+            out.append({"rank": i, "name": str(k), "revenue": float(v), "share": float(_safe_div(v, tot)) if tot else float("nan")})
+        return {"total": tot, "top": out}
+
+    top_stores = top_contrib(col_store, 5)
+    top_cats = top_contrib(col_cat, 5)
+    top_channels = top_contrib(col_channel, 5)
+
+    momentum_lines = []
+    if col_date and col_date in df.columns and col_rev and col_rev in df.columns:
+        tmp = df[[col_date, col_rev]].copy()
+        tmp[col_date] = pd.to_datetime(tmp[col_date], errors="coerce")
+        tmp[col_rev] = pd.to_numeric(tmp[col_rev], errors="coerce").fillna(0)
+        tmp = tmp.dropna(subset=[col_date])
+        daily = tmp.groupby(col_date, as_index=False)[col_rev].sum().sort_values(col_date)
+        if len(daily) >= 10:
+            mid = len(daily) // 2
+            first = float(daily.iloc[:mid][col_rev].sum())
+            second = float(daily.iloc[mid:][col_rev].sum())
+            delta = second - first
+            momentum_lines.append(f"First half revenue: {_fmt_money(first)}")
+            momentum_lines.append(f"Second half revenue: {_fmt_money(second)} (Δ {_fmt_money(delta)})")
+            if len(daily) >= 28:
+                last14 = float(daily.iloc[-14:][col_rev].sum())
+                prev14 = float(daily.iloc[-28:-14][col_rev].sum())
+                mom14 = last14 - prev14
+                momentum_lines.append(f"Last 14 days: {_fmt_money(last14)} vs prior 14: {_fmt_money(prev14)} (Δ {_fmt_money(mom14)})")
+            peak_row = daily.loc[daily[col_rev].idxmax()]
+            trough_row = daily.loc[daily[col_rev].idxmin()]
+            momentum_lines.append(f"Peak day: {pd.to_datetime(peak_row[col_date]).date()} at {_fmt_money(peak_row[col_rev])}")
+            momentum_lines.append(f"Lowest day: {pd.to_datetime(trough_row[col_date]).date()} at {_fmt_money(trough_row[col_rev])}")
+        else:
+            momentum_lines.append("Not enough daily points to compute momentum (need ~10+ days).")
+    else:
+        momentum_lines.append("Trend metrics unavailable (need date + revenue columns).")
+
+    discount_lines = []
+    if col_disc and col_disc in df.columns and col_rev and col_rev in df.columns:
+        tmp = df[[col_disc, col_rev]].copy()
+        tmp[col_rev] = pd.to_numeric(tmp[col_rev], errors="coerce").fillna(0)
+        if pd.api.types.is_numeric_dtype(tmp[col_disc]) or pd.to_numeric(tmp[col_disc], errors="coerce").notna().mean() > 0.8:
+            disc_num = pd.to_numeric(tmp[col_disc], errors="coerce")
+            bins = [-float("inf"), 0.02, 0.05, 0.10, 0.20, float("inf")]
+            labels = ["0–2%", "2–5%", "5–10%", "10–20%", "20%+"]
+            tmp["discount_band"] = pd.cut(disc_num, bins=bins, labels=labels)
+            band = "discount_band"
+        else:
+            band = col_disc
+        g = tmp.groupby(band)[col_rev].agg(["mean", "count"]).reset_index()
+        g = g.dropna(subset=[band]).sort_values("mean", ascending=False)
+        if not g.empty:
+            for _, r in g.head(5).iterrows():
+                discount_lines.append(f"{r[band]}: avg {_fmt_money(r['mean'])} (n={int(r['count'])})")
+    else:
+        discount_lines.append("Discount metrics unavailable (need discount + revenue columns).")
+
+    def format_top(title: str, obj):
+        if not obj:
+            return f"{title}: N/A"
+        lines = [f"{title} (by revenue):"]
+        for it in obj["top"]:
+            lines.append(f"- {it['rank']}. {it['name']}: {_fmt_money(it['revenue'])} ({_fmt_pct(it['share'])})")
+        if len(obj["top"]) >= 2 and obj["total"]:
+            top1 = obj["top"][0]["revenue"]
+            top2 = obj["top"][1]["revenue"]
+            lines.append(f"Concentration: Top1 {_fmt_pct(_safe_div(top1, obj['total']))}, Top2 {_fmt_pct(_safe_div(top1+top2, obj['total']))}")
+        return "\n".join(lines)
+
+    context = f"""You are EC-AI Insight. Answer strictly using the dataset facts below.
+Rules:
+- ALWAYS reference actual numbers from this context (use $ amounts, dates, % shares).
+- Do NOT invent metrics or give generic advice.
+- If something is not in context, say 'Not available in this dataset/context' and specify what column/metric would be needed.
+
+DATASET FACTS
+{chr(10).join(overview_lines)}
+
+{format_top('Top Stores', top_stores)}
+
+{format_top('Top Categories', top_cats)}
+
+{format_top('Top Channels', top_channels)}
+
+Trend / Momentum:
+{chr(10).join('- ' + s for s in momentum_lines)}
+
+Discount effectiveness (avg revenue per sale, best bands first):
+{chr(10).join('- ' + s for s in discount_lines)}
+
+Available columns: {', '.join(map(str, df.columns))}
+"""
+    return context
+
 def answer_question_with_openai(question: str, context: str) -> str:
-    """CEO-level Q&A based on provided context only."""
-    api_key = _get_openai_api_key()
-    if OpenAI is None or not api_key:
-        return "Ask AI is not configured yet. Please add `OPENAI_API_KEY` in Streamlit Secrets."
+    api_key = get_api_key()
+    if not api_key:
+        return "OpenAI API key not configured. Add OPENAI_API_KEY in Streamlit secrets."
+
+    try:
+        client = OpenAI(api_key=api_key)
+        sys = context.strip()
+        user = f"Question: {question.strip()}
+
+Answer using ONLY the dataset facts above."
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0.2,
+            max_tokens=350,
+            messages=[
+                {"role": "system", "content": sys},
+                {"role": "user", "content": user},
+            ],
+        )
+        response_text = (resp.choices[0].message.content or "").strip()
+        return response_text or "No response."
+    except Exception as e:
+        return f"Ask AI error: {e}"
 
     client = OpenAI(api_key=api_key)
 
@@ -83,10 +274,7 @@ def answer_question_with_openai(question: str, context: str) -> str:
         "You are EC-AI, an executive analytics consultant. "
         "Respond in a CEO-ready style: Insight → Evidence → Action. "
         "Be concise, practical, and avoid jargon. "
-        "Only use the provided context; if the answer isn't supported, say what's missing. "
-        "Always reference actual dataset numbers when available (totals, deltas, shares, rankings, dates). "
-        "Avoid generic business advice. Base responses strictly on the provided context (data columns, computed metrics). "
-        "If you cannot cite numbers from the context for a claim, clearly say so and ask for the missing field or metric."
+        "Only use the provided context; if the answer isn't supported, say what's missing."
     )
 
     user = f"CONTEXT (from dashboard summary):\n{context}\n\nQUESTION:\n{question}"
@@ -1454,8 +1642,14 @@ try:
         _context_lines += [f"- {clean_display_text(x)}" for x in bullets if clean_display_text(x)]
 except Exception:
     pass
-context_text = "\n".join([x for x in _context_lines if x]).strip()
+dashboard_notes = "
+".join([x for x in _context_lines if x]).strip()
+context_text = _build_ai_context(df, m)
+if dashboard_notes:
+    context_text = context_text + "
 
+DASHBOARD INSIGHTS (auto-generated):
+" + dashboard_notes
 if "ask_ai_history" not in st.session_state:
     st.session_state.ask_ai_history = []
 
