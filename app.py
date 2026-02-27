@@ -253,7 +253,7 @@ Available columns: {', '.join(map(str, df.columns))}
     return context
 
 def answer_question_with_openai(question: str, context: str) -> str:
-    api_key = get_api_key()
+    api_key = _get_openai_api_key()
     if not api_key:
         return "OpenAI API key not configured. Add OPENAI_API_KEY in Streamlit secrets."
 
