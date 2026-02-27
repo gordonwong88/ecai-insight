@@ -71,6 +71,12 @@ def _get_openai_api_key() -> str | None:
     return os.environ.get("OPENAI_API_KEY")
 
 
+
+
+def get_api_key() -> str | None:
+    """Backwards-compatible alias."""
+    return _get_openai_api_key()
+
 def _fmt_money(x: float) -> str:
     try:
         x = float(x)
@@ -244,22 +250,34 @@ Available columns: {', '.join(map(str, df.columns))}
     return context
 
 def answer_question_with_openai(question: str, context: str) -> str:
+    """Ask AI using a fact-heavy context block. Always grounded."""
     api_key = get_api_key()
     if not api_key:
         return "OpenAI API key not configured. Add OPENAI_API_KEY in Streamlit secrets."
 
+    if OpenAI is None:
+        return "OpenAI SDK not installed. Add 'openai' to requirements.txt."
+
+    q = (question or "").strip()
+    if not q:
+        return "Please enter a question."
+
     try:
         client = OpenAI(api_key=api_key)
-        sys = context.strip()
-        user = f"Question: {question.strip()}
+        system = (context or "").strip()
+        user = f"""Question:
+{q}
 
-Answer using ONLY the dataset facts above."
+Instructions:
+- Answer using ONLY the dataset facts in the system context.
+- Always cite numbers ($, %, dates) from the context when relevant.
+- If the context lacks required info, say what is missing (which column/metric)."""
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0.2,
-            max_tokens=350,
+            max_tokens=380,
             messages=[
-                {"role": "system", "content": sys},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         )
@@ -267,30 +285,6 @@ Answer using ONLY the dataset facts above."
         return response_text or "No response."
     except Exception as e:
         return f"Ask AI error: {e}"
-
-    client = OpenAI(api_key=api_key)
-
-    system = (
-        "You are EC-AI, an executive analytics consultant. "
-        "Respond in a CEO-ready style: Insight → Evidence → Action. "
-        "Be concise, practical, and avoid jargon. "
-        "Only use the provided context; if the answer isn't supported, say what's missing."
-    )
-
-    user = f"CONTEXT (from dashboard summary):\n{context}\n\nQUESTION:\n{question}"
-
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.2,
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception as e:
-        return f"Ask AI failed: {e}"
 
 
 # Export deps (optional at runtime)
@@ -1633,23 +1627,19 @@ try:
 except Exception:
     pass
 try:
-    _context_lines += [f"- {clean_display_text(x)}" for x in exec_points if clean_display_text(x)]
+    _context_lines += [f"- {clean_display_text(x)}" for x in summary_points if clean_display_text(x)]
 except Exception:
     pass
 try:
-    for sec_title, bullets in insight_sections.items():
+    for sec_title, bullets in ins_sections.items():
         _context_lines.append(f"{sec_title}:")
         _context_lines += [f"- {clean_display_text(x)}" for x in bullets if clean_display_text(x)]
 except Exception:
     pass
-dashboard_notes = "
-".join([x for x in _context_lines if x]).strip()
+dashboard_notes = "\n".join([x for x in _context_lines if x]).strip()
 context_text = _build_ai_context(df, m)
 if dashboard_notes:
-    context_text = context_text + "
-
-DASHBOARD INSIGHTS (auto-generated):
-" + dashboard_notes
+    context_text = context_text + "\n\nDASHBOARD INSIGHTS (auto-generated):\n" + dashboard_notes
 if "ask_ai_history" not in st.session_state:
     st.session_state.ask_ai_history = []
 
@@ -1670,19 +1660,71 @@ for q, a in st.session_state.ask_ai_history[:3]:
     st.markdown(a)
 
 st.divider()
+
 st.subheader("Export Executive Pack")
-st.caption("Download a shareable executive-ready brief.")
+st.caption("Download a shareable executive-ready brief (PDF) or slide pack (PPTX).")
+
+# Build chart items for export (only include charts that exist)
+chart_items: List[Tuple[str, go.Figure, str]] = []
+
+try:
+    chart_items.append((
+        "Revenue Trend (Daily)",
+        fig_trend,
+        "• Trend line of daily revenue.\n• Use this to spot spikes/dips and protect momentum."
+    ))
+except Exception:
+    pass
+
+try:
+    chart_items.append((
+        "Top Revenue-Generating Stores (Top 5)",
+        fig_topstores,
+        "• Revenue concentration by store.\n• Prioritise execution in the top stores first."
+    ))
+except Exception:
+    pass
+
+try:
+    if pe is not None:
+        chart_items.append((
+            "Pricing Effectiveness — Avg Revenue per Sale by Discount Level",
+            fig_price,
+            "• Compares average revenue per sale across discount levels.\n• Use moderate discounts by default; treat deep discounts as controlled tests."
+        ))
+except Exception:
+    pass
+
+try:
+    if cat is not None:
+        chart_items.append((
+            "Revenue by Category",
+            fig_cat,
+            "• Shows which categories drive revenue.\n• Double down on winners; fix or trim weak categories."
+        ))
+except Exception:
+    pass
+
+try:
+    if ch is not None:
+        chart_items.append((
+            "Revenue by Channel",
+            fig_ch,
+            "• Channel contribution to revenue.\n• Reallocate effort to channels that consistently perform."
+        ))
+except Exception:
+    pass
 
 c1, c2 = st.columns(2)
+
 with c1:
     if st.button("Generate PDF Executive Brief", use_container_width=True):
         try:
-            pdf_bytes = build_pdf_executive_brief(
+            pdf_bytes = build_pdf_exec_brief(
                 title="EC-AI Insight — Executive Brief",
                 subtitle="Sales performance, explained clearly.",
-                executive_summary=exec_points,
-                sections=insight_sections,
-                figures=export_figures,
+                summary_points=summary_points,
+                chart_items=chart_items,
             )
             st.download_button(
                 "Download PDF",
@@ -1695,14 +1737,11 @@ with c1:
             st.error(f"PDF generation failed: {e}")
 
 with c2:
-    if st.button("Generate Executive Pack (PPT)", use_container_width=True):
+    if st.button("Generate Executive Pack (PPTX)", use_container_width=True):
         try:
             pptx_bytes = build_ppt_talking_deck(
-                title="EC-AI Insight — Executive Pack",
-                subtitle="One insight per slide",
-                executive_summary=exec_points,
-                sections=insight_sections,
-                figures=export_figures,
+                deck_title="EC-AI Insight — Executive Pack",
+                chart_items=chart_items,
             )
             st.download_button(
                 "Download PPTX",
