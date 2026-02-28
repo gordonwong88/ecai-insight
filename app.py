@@ -109,7 +109,10 @@ def _safe_div(a: float, b: float) -> float:
         return float("nan")
 
 
-def _build_ai_context(df: pd.DataFrame, m: dict) -> str:
+def _build_ai_context(df: pd.DataFrame, m) -> str:
+    # Be defensive: some earlier versions accidentally pass a non-dict mapping.
+    if not isinstance(m, dict):
+        m = {}
     """Build a compact, fact-heavy context block for Ask AI."""
     if df is None or df.empty:
         return "No dataset loaded."
