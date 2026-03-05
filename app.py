@@ -1391,6 +1391,7 @@ st.divider()
 with st.sidebar:
     st.header("Data")
     up = st.file_uploader("Upload CSV", type=["csv"])
+    demo_clicked = st.button("🚀 Try Demo Dataset (Retail Fashion, HK)")
     st.caption("Tip: First load on Streamlit Cloud may take 30–60 seconds if the app was asleep.")
 
     st.header("Exports")
