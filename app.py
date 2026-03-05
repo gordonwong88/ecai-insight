@@ -43,6 +43,7 @@ import io
 import os
 import re
 import textwrap
+import time
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 
@@ -623,7 +624,9 @@ CANDIDATES = {
     "date": ["date", "orderdate", "transactiondate", "salesdate", "invoice_date", "day"],
     "store": ["store", "store_name", "shop", "branch", "location", "outlet"],
     "revenue": ["revenue", "sales", "amount", "net_sales", "total", "total_sales", "gmv"],
+    "cost": ["cost", "cogs", "cost_of_goods", "costofgoods", "item_cost", "unit_cost"],
     "category": ["category", "product_category", "dept", "department", "cat"],
+    "product": ["product", "product_name", "item", "item_name", "sku", "style"],
     "channel": ["channel", "sales_channel", "platform", "source"],
     "payment": ["payment", "payment_method", "tender", "paymethod"],
     "discount": ["discount", "discount_rate", "disc", "discount_pct", "promo_discount"],
@@ -659,8 +662,10 @@ def detect_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
 # -----------------------------
 # Formatting helpers
 # -----------------------------
+CURRENCY_SYMBOL = "HK$"
+
 def fmt_currency(x: float) -> str:
-    """Short currency format: $1.50M / $86.4K / $950."""
+    """Short currency format: HK$1.50M / HK$86.4K / HK$950."""
     try:
         if x is None or (isinstance(x, float) and np.isnan(x)):
             return "—"
@@ -670,12 +675,12 @@ def fmt_currency(x: float) -> str:
     sign = "-" if x < 0 else ""
     x = abs(x)
     if x >= 1_000_000_000:
-        return f"{sign}${x/1_000_000_000:.2f}B"
+        return f"{sign}{CURRENCY_SYMBOL}{x/1_000_000_000:.2f}B"
     if x >= 1_000_000:
-        return f"{sign}${x/1_000_000:.2f}M"
+        return f"{sign}{CURRENCY_SYMBOL}{x/1_000_000:.2f}M"
     if x >= 1_000:
-        return f"{sign}${x/1_000:.1f}K"
-    return f"{sign}${x:.0f}"
+        return f"{sign}{CURRENCY_SYMBOL}{x/1_000:.1f}K"
+    return f"{sign}{CURRENCY_SYMBOL}{x:.0f}"
 
 def fmt_pct(x: float, digits: int = 0) -> str:
     try:
@@ -716,7 +721,9 @@ class RetailModel:
     col_date: str
     col_store: str
     col_revenue: str
+    col_cost: Optional[str] = None
     col_category: Optional[str] = None
+    col_product: Optional[str] = None
     col_channel: Optional[str] = None
     col_payment: Optional[str] = None
     col_discount: Optional[str] = None
@@ -1399,15 +1406,25 @@ with st.sidebar:
         st.write("Diagnostics unavailable:", e)
 
 # Load data
+if "demo_df_raw" not in st.session_state:
+    st.session_state.demo_df_raw = None
+
 df_raw = None
-if up is not None:
+data_source = None
+
+if demo_clicked:
+    st.session_state.demo_df_raw = load_demo_dataset_fashion_hk()
+    df_raw = st.session_state.demo_df_raw
+    data_source = "demo"
+elif up is not None:
     try:
         df_raw = pd.read_csv(up)
     except Exception:
         up.seek(0)
         df_raw = pd.read_csv(up, encoding="latin-1")
+    data_source = "upload"
 else:
-    st.info("Upload a CSV to begin. (Retail sales / transaction data works best.)")
+    st.info("Upload a CSV to begin, or click **Try Demo Dataset**.")
 
 if df_raw is None:
     st.stop()
