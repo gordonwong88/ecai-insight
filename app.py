@@ -339,6 +339,97 @@ def emphasize_exec_keywords_html(text: str) -> str:
 # -----------------------------
 # Page config + global styling
 # -----------------------------
+
+# =========================
+# Demo Dataset (Retail Fashion - Hong Kong, 8 weeks, HKD)
+# =========================
+def load_demo_dataset_fashion_hk(num_weeks: int = 8, seed: int = 42) -> pd.DataFrame:
+    """Generate a realistic-looking retail fashion transaction dataset for demo.
+    - Hong Kong market
+    - 8 weeks by default
+    - Includes Cost for margin analysis
+    """
+    rng = np.random.default_rng(seed)
+
+    stores = [
+        "Central", "Causeway Bay", "Tsim Sha Tsui", "Mong Kok",
+        "Sha Tin", "Tsuen Wan", "Kowloon Bay", "Yuen Long"
+    ]
+    categories = ["Tops", "Bottoms", "Dresses", "Outerwear", "Accessories", "Shoes", "Activewear"]
+    products_by_cat = {
+        "Tops": ["Cotton T-Shirt", "Casual Shirt", "Polo Shirt", "Knit Sweater"],
+        "Bottoms": ["Slim Fit Jeans", "Chino Pants", "Pleated Skirt", "Denim Shorts"],
+        "Dresses": ["Summer Dress", "Wrap Dress", "Midi Dress"],
+        "Outerwear": ["Denim Jacket", "Bomber Jacket", "Lightweight Coat", "Hoodie"],
+        "Accessories": ["Leather Belt", "Canvas Tote", "Cap", "Sunglasses"],
+        "Shoes": ["Running Shoes", "Sneakers", "Loafers"],
+        "Activewear": ["Yoga Pants", "Sports Bra", "Training Tee"]
+    }
+
+    # Date range: last (num_weeks * 7) days, inclusive
+    days = num_weeks * 7
+    end_date = pd.Timestamp.today().normalize()
+    dates = pd.date_range(end=end_date, periods=days, freq="D")
+
+    rows = []
+    # Demand seasonality: weekends slightly higher
+    for d in dates:
+        weekday = d.dayofweek  # Mon=0 ... Sun=6
+        day_multiplier = 1.15 if weekday >= 5 else 1.0
+
+        for store in stores:
+            # Store traffic variance
+            store_multiplier = 1.0 + (stores.index(store) - 3.5) * 0.02  # mild gradient
+            # transactions per store per day
+            n_txn = int(rng.integers(18, 32) * day_multiplier * store_multiplier)
+
+            for _ in range(max(5, n_txn)):
+                category = rng.choice(categories, p=[0.18, 0.16, 0.12, 0.13, 0.14, 0.14, 0.13])
+                product = rng.choice(products_by_cat[category])
+
+                # Units sold per transaction
+                units = int(rng.integers(1, 5))
+
+                # Price bands by category (HKD)
+                if category in ["Outerwear", "Shoes"]:
+                    price = float(rng.uniform(380, 980))
+                elif category in ["Dresses"]:
+                    price = float(rng.uniform(280, 720))
+                elif category in ["Activewear"]:
+                    price = float(rng.uniform(220, 650))
+                elif category in ["Bottoms"]:
+                    price = float(rng.uniform(260, 780))
+                elif category in ["Accessories"]:
+                    price = float(rng.uniform(120, 520))
+                else:  # Tops
+                    price = float(rng.uniform(160, 520))
+
+                revenue = units * price
+
+                # Cost ratio varies by category: accessories often higher margin
+                if category in ["Accessories"]:
+                    cost_ratio = float(rng.uniform(0.35, 0.55))
+                elif category in ["Outerwear", "Shoes"]:
+                    cost_ratio = float(rng.uniform(0.45, 0.68))
+                else:
+                    cost_ratio = float(rng.uniform(0.42, 0.65))
+
+                cost = revenue * cost_ratio
+
+                rows.append({
+                    "Date": d,
+                    "Store": store,
+                    "Category": category,
+                    "Product": product,
+                    "Units": units,
+                    "Revenue": round(revenue, 2),
+                    "Cost": round(cost, 2),
+                })
+
+    df = pd.DataFrame(rows)
+    return df
+
+
 st.set_page_config(page_title="EC-AI Insight", layout="wide")
 
 # Slightly larger, more executive typography.
