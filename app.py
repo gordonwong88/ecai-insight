@@ -269,13 +269,26 @@ def answer_question_with_openai(question: str, context: str) -> str:
     try:
         client = OpenAI(api_key=api_key)
         system = (context or "").strip()
-        user = f"""Question:
+                user = f"""Question:
 {q}
 
-Instructions:
-- Answer using ONLY the dataset facts in the system context.
-- Always cite numbers ($, %, dates) from the context when relevant.
-- If the context lacks required info, say what is missing (which column/metric)."""
+You are EC-AI, an AI Business Analyst.
+
+OUTPUT FORMAT (must follow exactly, plain text only):
+Key Finding:
+Evidence from your data:
+Recommended Actions:
+What to check next:
+
+Rules:
+- Use ONLY the dataset facts provided in the system context.
+- Do NOT invent numbers. If you use numbers, they must come from the context.
+- Keep it concise: ~4–5 sentences total, plus bullets.
+- Under 'Evidence from your data', include 2–4 bullet points with HK$ / % / dates when available.
+- Under 'Recommended Actions', include 2–4 practical bullet points.
+- If the context lacks required info, say what is missing (which column/metric). Do not guess.
+- No markdown symbols (*, **, #, backticks)."""
+
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0.2,
@@ -286,7 +299,28 @@ Instructions:
             ],
         )
         response_text = (resp.choices[0].message.content or "").strip()
-        return response_text or "No response."
+
+# Light post-processing to keep executive readability and avoid markdown artifacts.
+# Preserve section headers; clean other lines.
+cleaned_lines = []
+for line in response_text.splitlines():
+    line = (line or "").strip()
+    if not line:
+        continue
+    if line.startswith(("Key Finding:", "Evidence from your data:", "Recommended Actions:", "What to check next:")):
+        cleaned_lines.append(line)
+        continue
+
+    # Fix common spacing artifacts like "about28150" -> "about 28150"
+    line = re.sub(r"(?i)\babout(\d)", r"about \1", line)
+
+    line2 = clean_display_text(line)
+    if line2:
+        cleaned_lines.append(line2)
+
+final_text = "\n".join(cleaned_lines).strip()
+return final_text or "No response."
+
     except Exception as e:
         return f"Ask AI error: {e}"
 
