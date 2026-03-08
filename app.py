@@ -272,23 +272,10 @@ def answer_question_with_openai(question: str, context: str) -> str:
         user = f"""Question:
 {q}
 
-You are EC-AI, an AI Business Analyst.
-
-OUTPUT FORMAT (must follow exactly, plain text only):
-Key Finding:
-Evidence from your data:
-Recommended Actions:
-What to check next:
-
-Rules:
-- Use ONLY the dataset facts provided in the system context.
-- Do NOT invent numbers. If you use numbers, they must come from the context.
-- Keep it concise: ~4–5 sentences total, plus bullets.
-- Under 'Evidence from your data', include 2–4 bullet points with HK$ / % / dates when available.
-- Under 'Recommended Actions', include 2–4 practical bullet points.
-- If the context lacks required info, say what is missing (which column/metric). Do not guess.
-- No markdown symbols (*, **, #, backticks)."""
-
+Instructions:
+- Answer using ONLY the dataset facts in the system context.
+- Always cite numbers ($, %, dates) from the context when relevant.
+- If the context lacks required info, say what is missing (which column/metric)."""
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0.2,
@@ -299,27 +286,7 @@ Rules:
             ],
         )
         response_text = (resp.choices[0].message.content or "").strip()
-
-        # Light post-processing to keep executive readability and avoid markdown artifacts.
-        # Preserve section headers; clean other lines.
-        cleaned_lines = []
-        for line in response_text.splitlines():
-            line = (line or "").strip()
-            if not line:
-                continue
-            if line.startswith(("Key Finding:", "Evidence from your data:", "Recommended Actions:", "What to check next:")):
-                cleaned_lines.append(line)
-                continue
-
-            # Fix common spacing artifacts like "about28150" -> "about 28150"
-            line = re.sub(r"(?i)\babout(\d)", r"about \1", line)
-
-            line2 = clean_display_text(line)
-            if line2:
-                cleaned_lines.append(line2)
-
-        final_text = "\n".join(cleaned_lines).strip()
-        return final_text or "No response."
+        return response_text or "No response."
     except Exception as e:
         return f"Ask AI error: {e}"
 
@@ -907,7 +874,9 @@ def prep_retail(df_raw: pd.DataFrame) -> RetailModel:
         col_date=col_date,
         col_store=col_store,
         col_revenue=col_revenue,
+        col_cost=cols["cost"],
         col_category=cols["category"],
+        col_product=cols["product"],
         col_channel=cols["channel"],
         col_payment=cols["payment"],
         col_discount=col_discount,
@@ -1124,6 +1093,57 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
     sections["What to focus on next"] = next_bullets
 
     return sections
+
+def render_parallel_insight_cards(ins_sections: Dict[str, List[str]]) -> None:
+    """Render first 3 business insight sections as parallel cards for a premium SaaS feel."""
+    items = list(ins_sections.items())
+    if not items:
+        return
+
+    st.markdown("### AI-Generated Key Insights")
+    st.caption("Automatically detected from your dataset")
+
+    primary = items[0] if len(items) > 0 else None
+    secondary = items[1] if len(items) > 1 else None
+    tertiary = items[2] if len(items) > 2 else None
+    remaining = items[3:] if len(items) > 3 else []
+
+    # Large primary card
+    if primary is not None:
+        title, bullets = primary
+        with st.container(border=True):
+            st.markdown(f"#### {title}")
+            for i, b in enumerate(bullets[:3]):
+                clean = clean_display_text(b)
+                if clean:
+                    prefix = "•" if i > 0 else ""
+                    st.markdown((f"{prefix} {emphasize_exec_keywords_html(clean)}").strip(), unsafe_allow_html=True)
+
+    # Two smaller support cards
+    cols = st.columns(2, gap="small")
+    for idx, item in enumerate([secondary, tertiary]):
+        with cols[idx]:
+            if item is None:
+                st.empty()
+            else:
+                title, bullets = item
+                with st.container(border=True):
+                    st.markdown(f"#### {title}")
+                    for b in bullets[:3]:
+                        clean = clean_display_text(b)
+                        if clean:
+                            st.markdown(f"• {emphasize_exec_keywords_html(clean)}", unsafe_allow_html=True)
+
+    # Any remaining sections shown below in a clean full-width block
+    if remaining:
+        for sec_title, bullets in remaining:
+            with st.container(border=True):
+                st.markdown(f"#### {sec_title}")
+                for b in bullets:
+                    clean = clean_display_text(b)
+                    if clean:
+                        st.markdown(f"• {emphasize_exec_keywords_html(clean)}", unsafe_allow_html=True)
+
 # -----------------------------
 # Chart builders (strict categorical alignment)
 # -----------------------------
@@ -1586,18 +1606,10 @@ for p in summary_points[:12]:
 st.divider()
 
 # -----------------------------
-# Business Insights (DEFAULT)
+# Business Insights (cards)
 # -----------------------------
-st.subheader("Business Insights")
-st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
-
 ins_sections = build_business_insights_sections(m)
-for i, (sec_title, bullets) in enumerate(ins_sections.items()):
-    st.markdown(f"#### {sec_title}")
-    for b in bullets:
-        st.markdown(f"- {emphasize_exec_keywords_html(clean_display_text(b))}", unsafe_allow_html=True)
-    if i < len(ins_sections) - 1:
-        st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
+render_parallel_insight_cards(ins_sections)
 
 st.divider()
 
