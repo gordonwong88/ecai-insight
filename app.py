@@ -585,65 +585,67 @@ def render_onepager_dashboard(m, df) -> dict:
     st.markdown(ONEPAGER_CSS, unsafe_allow_html=True)
     st.markdown("<div class='ec-onepager-title'>Executive Dashboard</div>", unsafe_allow_html=True)
 
-    # Build figures (unwrap tuples if returned)
     def _as_fig(obj):
         return obj[0] if isinstance(obj, tuple) and len(obj) else obj
 
-    fig_trend = _as_fig(line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)"))
-    fig_trend = apply_consulting_theme(fig_trend, title="Revenue Trend (Daily)", height=320, y_is_currency=True)
+    def _safe_style(fig, title, *, y_is_currency=False, y_is_pct=False):
+        if fig is None:
+            return None
+        return apply_consulting_theme(fig, title=title, height=320, y_is_currency=y_is_currency, y_is_pct=y_is_pct)
+
+    fig_trend = _safe_style(
+        _as_fig(line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")),
+        "Revenue Trend (Daily)",
+        y_is_currency=True,
+    )
 
     fig_topstores, df_top = top5_stores_bar(m)
-    fig_topstores = apply_consulting_theme(fig_topstores, title="Top Stores (Top 5)", height=320, y_is_currency=True)
+    fig_topstores = _safe_style(fig_topstores, "Top Stores (Top 5)", y_is_currency=True)
     top_store = df_top.iloc[0]["Store"] if len(df_top) else "Top store"
 
-    fig_cat = _as_fig(revenue_by_category(m))
-    fig_cat = apply_consulting_theme(fig_cat, title="Revenue by Category (Top 5)", height=320, y_is_currency=True)
+    fig_cat = _safe_style(_as_fig(revenue_by_category(m)), "Revenue by Category (Top 5)", y_is_currency=True)
+    fig_price = _safe_style(_as_fig(pricing_effectiveness(m)), "Pricing Effectiveness", y_is_currency=True)
+    fig_channel = _safe_style(_as_fig(revenue_by_channel(m)), "Revenue by Channel (Top 3)", y_is_currency=True)
+    fig_vol = _safe_style(_as_fig(volatility_by_channel(m)), "Volatility by Channel", y_is_currency=False)
 
-    fig_price = _as_fig(pricing_effectiveness(m))
-    fig_price = apply_consulting_theme(fig_price, title="Pricing Effectiveness", height=320, y_is_currency=True)
+    panels = [
+        (fig_trend, "Protect **momentum**; investigate spikes and dips."),
+        (fig_topstores, f"Revenue is concentrated — prioritise **{top_store}** and top drivers."),
+        (fig_cat, "Double down on **top categories**; fix weak lines."),
+        (fig_price, "Use **pricing discipline**; moderate discounts can outperform aggressive ones."),
+        (fig_channel, "Reallocate effort to channels that **convert**; fix weakest channel."),
+        (fig_vol, "Reduce volatility: stabilise operations where swings are highest."),
+    ]
 
-    fig_channel = _as_fig(revenue_by_channel(m))
-    fig_channel = apply_consulting_theme(fig_channel, title="Revenue by Channel (Top 3)", height=320, y_is_currency=True)
+    row1 = st.columns(3, gap='small')
+    row2 = st.columns(3, gap='small')
 
-    fig_vol = _as_fig(volatility_by_channel(m))
-    fig_vol = apply_consulting_theme(fig_vol, title="Volatility by Channel", height=320, y_is_currency=False)
+    for col, (fig, note) in zip(row1, panels[:3]):
+        with col:
+            with st.container(border=True):
+                if fig is not None:
+                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    _dash_note(note)
+                else:
+                    st.markdown("<div class='ec-subtle'>Chart unavailable for this dataset.</div>", unsafe_allow_html=True)
 
-    r1 = st.columns(3, gap='small')
-    with r1[0]:
-        with st.container(border=True):
-            st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
-            _dash_note("Protect **momentum**; investigate spikes and dips.")
-    with r1[1]:
-        with st.container(border=True):
-            st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
-            _dash_note(f"Revenue is concentrated — prioritise **{top_store}** and top drivers.")
-    with r1[2]:
-        with st.container(border=True):
-            st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
-            _dash_note("Double down on **top categories**; fix weak lines.")
+    for col, (fig, note) in zip(row2, panels[3:]):
+        with col:
+            with st.container(border=True):
+                if fig is not None:
+                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    _dash_note(note)
+                else:
+                    st.markdown("<div class='ec-subtle'>Chart unavailable for this dataset.</div>", unsafe_allow_html=True)
 
-    r2 = st.columns(3, gap='small')
-    with r2[0]:
-        with st.container(border=True):
-            st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
-            _dash_note("Use **pricing discipline**; moderate discounts can outperform aggressive ones.")
-    with r2[1]:
-        with st.container(border=True):
-            st.plotly_chart(fig_channel, use_container_width=True, config={"displayModeBar": False})
-            _dash_note("Reallocate effort to channels that **convert**; fix weakest channel.")
-    with r2[2]:
-        with st.container(border=True):
-            st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
-            _dash_note("Reduce volatility: stabilise operations where swings are highest.")
-
-    figs_dict = {
+    figs_dict = {k: v for k, v in {
         "Revenue Trend (Daily)": fig_trend,
         "Top Stores (Top 5)": fig_topstores,
         "Revenue by Category (Top 5)": fig_cat,
         "Pricing Effectiveness": fig_price,
         "Revenue by Channel (Top 3)": fig_channel,
         "Volatility by Channel": fig_vol,
-    }
+    }.items() if v is not None}
 
     st.markdown("---")
     return figs_dict
@@ -874,9 +876,7 @@ def prep_retail(df_raw: pd.DataFrame) -> RetailModel:
         col_date=col_date,
         col_store=col_store,
         col_revenue=col_revenue,
-        col_cost=cols["cost"],
         col_category=cols["category"],
-        col_product=cols["product"],
         col_channel=cols["channel"],
         col_payment=cols["payment"],
         col_discount=col_discount,
@@ -1093,57 +1093,6 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
     sections["What to focus on next"] = next_bullets
 
     return sections
-
-def render_parallel_insight_cards(ins_sections: Dict[str, List[str]]) -> None:
-    """Render first 3 business insight sections as parallel cards for a premium SaaS feel."""
-    items = list(ins_sections.items())
-    if not items:
-        return
-
-    st.markdown("### AI-Generated Key Insights")
-    st.caption("Automatically detected from your dataset")
-
-    primary = items[0] if len(items) > 0 else None
-    secondary = items[1] if len(items) > 1 else None
-    tertiary = items[2] if len(items) > 2 else None
-    remaining = items[3:] if len(items) > 3 else []
-
-    # Large primary card
-    if primary is not None:
-        title, bullets = primary
-        with st.container(border=True):
-            st.markdown(f"#### {title}")
-            for i, b in enumerate(bullets[:3]):
-                clean = clean_display_text(b)
-                if clean:
-                    prefix = "•" if i > 0 else ""
-                    st.markdown((f"{prefix} {emphasize_exec_keywords_html(clean)}").strip(), unsafe_allow_html=True)
-
-    # Two smaller support cards
-    cols = st.columns(2, gap="small")
-    for idx, item in enumerate([secondary, tertiary]):
-        with cols[idx]:
-            if item is None:
-                st.empty()
-            else:
-                title, bullets = item
-                with st.container(border=True):
-                    st.markdown(f"#### {title}")
-                    for b in bullets[:3]:
-                        clean = clean_display_text(b)
-                        if clean:
-                            st.markdown(f"• {emphasize_exec_keywords_html(clean)}", unsafe_allow_html=True)
-
-    # Any remaining sections shown below in a clean full-width block
-    if remaining:
-        for sec_title, bullets in remaining:
-            with st.container(border=True):
-                st.markdown(f"#### {sec_title}")
-                for b in bullets:
-                    clean = clean_display_text(b)
-                    if clean:
-                        st.markdown(f"• {emphasize_exec_keywords_html(clean)}", unsafe_allow_html=True)
-
 # -----------------------------
 # Chart builders (strict categorical alignment)
 # -----------------------------
@@ -1606,10 +1555,18 @@ for p in summary_points[:12]:
 st.divider()
 
 # -----------------------------
-# Business Insights (cards)
+# Business Insights (DEFAULT)
 # -----------------------------
+st.subheader("Business Insights")
+st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
+
 ins_sections = build_business_insights_sections(m)
-render_parallel_insight_cards(ins_sections)
+for i, (sec_title, bullets) in enumerate(ins_sections.items()):
+    st.markdown(f"#### {sec_title}")
+    for b in bullets:
+        st.markdown(f"- {emphasize_exec_keywords_html(clean_display_text(b))}", unsafe_allow_html=True)
+    if i < len(ins_sections) - 1:
+        st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 
 st.divider()
 
