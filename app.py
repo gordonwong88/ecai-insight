@@ -32,6 +32,8 @@ except Exception:
 try:
     from pptx import Presentation
     from pptx.util import Inches, Pt
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.dml.color import RGBColor
     PPT_AVAILABLE = True
 except Exception:
     PPT_AVAILABLE = False
@@ -122,6 +124,7 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
   background: #ffffff;
   box-shadow: 0 6px 18px rgba(17,24,39,0.05);
   min-height: 100%;
+  margin-top: 18px;
 }
 .ec-insight-section {
   margin-bottom: 12px;
@@ -620,6 +623,11 @@ def line_trend(df: pd.DataFrame, date_col: str, value_col: str, title: str) -> g
     return fig
 
 
+def _wrap_axis_label(label: str, width: int = 12) -> str:
+    parts = textwrap.wrap(str(label), width=width, break_long_words=False, break_on_hyphens=True)
+    return "<br>".join(parts) if parts else str(label)
+
+
 def bar_categorical(
     x_labels: List[str],
     y_values: List[float],
@@ -629,10 +637,13 @@ def bar_categorical(
     colors: Optional[List[str]] = None,
     text_fmt: str = ",.0f",
     y_is_currency: bool = True,
+    label_wrap_width: int = 14,
+    tick_angle: int = 0,
 ) -> go.Figure:
     base_x = [str(v) for v in x_labels]
+    wrapped = [_wrap_axis_label(v, width=label_wrap_width) for v in base_x]
     y = [float(v) if v is not None and not (isinstance(v, float) and np.isnan(v)) else 0.0 for v in y_values]
-    ranked = [f"{i+1}. {lbl}" for i, lbl in enumerate(base_x)]
+    ranked = [f"{i+1}.<br>{lbl}" for i, lbl in enumerate(wrapped)]
 
     if colors is None:
         leader = CONSULTING_PALETTE[0]
@@ -642,7 +653,7 @@ def bar_categorical(
         colors = colors[: len(ranked)]
 
     ymax = max(y) if y else 0.0
-    ypad = ymax * 0.12 if ymax > 0 else 1.0
+    ypad = ymax * 0.16 if ymax > 0 else 1.0
 
     fig = go.Figure()
     fig.add_trace(
@@ -661,8 +672,8 @@ def bar_categorical(
         )
     )
 
-    fig = apply_consulting_theme(fig, title=title, height=380, y_is_currency=y_is_currency)
-    fig.update_layout(bargap=0.78)
+    fig = apply_consulting_theme(fig, title=title, height=400, y_is_currency=y_is_currency)
+    fig.update_layout(bargap=0.78, margin=dict(l=48, r=26, t=62, b=86))
 
     fig.update_xaxes(
         type="category",
@@ -670,7 +681,9 @@ def bar_categorical(
         categoryarray=ranked,
         title_text=x_title,
         showgrid=False,
-        tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=12, color="#111827"),
+        tickangle=tick_angle,
+        automargin=True,
+        tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=11, color="#111827"),
     )
     fig.update_yaxes(
         title_text=y_title,
@@ -682,7 +695,7 @@ def bar_categorical(
     return fig
 
 
-def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
+def top5_stores_bardef top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
     s = m.df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(5)
     dfp = s.reset_index()
     dfp.columns = ["Store", "Revenue"]
@@ -694,8 +707,10 @@ def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
         y_title="Revenue",
         colors=colors,
         text_fmt=",.0f",
+        label_wrap_width=12,
+        tick_angle=0,
     )
-    fig.update_layout(height=380)
+    fig.update_layout(height=400)
     return fig, dfp
 
 
@@ -1138,6 +1153,7 @@ def render_chart_with_commentary(
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with col_r:
+        st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
         render_insight_card(what_points=what_points, why_points=why_points, todo_points=todo_points)
 
 
@@ -1392,60 +1408,95 @@ def build_pdf_exec_brief(
     return buf.getvalue()
 
 
+def _ppt_add_textbox(slide, left, top, width, height, text, font_size=18, bold=False, color=(17,24,39)):
+    box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
+    tf = box.text_frame
+    tf.clear()
+    p = tf.paragraphs[0]
+    p.text = text
+    p.font.size = Pt(font_size)
+    p.font.bold = bold
+    p.font.color.rgb = RGBColor(*color)
+    return box
+
+
+def _ppt_add_filled_box(slide, left, top, width, height, fill_rgb, line_rgb=(229,231,235), radius=False):
+    shape_type = MSO_SHAPE.ROUNDED_RECTANGLE if radius else MSO_SHAPE.RECTANGLE
+    shape = slide.shapes.add_shape(shape_type, Inches(left), Inches(top), Inches(width), Inches(height))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = RGBColor(*fill_rgb)
+    shape.line.color.rgb = RGBColor(*line_rgb)
+    return shape
+
+
 def build_ppt_talking_deck(
     deck_title: str,
     chart_items: List[Tuple[str, go.Figure, str]],
+    summary_points: Optional[List[str]] = None,
+    exec_cards: Optional[List[Dict[str, str]]] = None,
 ) -> bytes:
     if not PPT_AVAILABLE:
         raise RuntimeError("python-pptx is not installed. Add python-pptx to requirements.txt.")
+
+    summary_points = summary_points or []
+    exec_cards = exec_cards or []
 
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
-    title_slide_layout = prs.slide_layouts[0]
-    slide = prs.slides.add_slide(title_slide_layout)
-    slide.shapes.title.text = deck_title
-    subtitle = slide.placeholders[1]
-    subtitle.text = "Executive Pack — one insight per slide"
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _ppt_add_filled_box(slide, 0, 0, 13.333, 7.5, (245,247,250), line_rgb=(245,247,250))
+    _ppt_add_filled_box(slide, 0.0, 0.0, 13.333, 0.45, (11,31,59), line_rgb=(11,31,59))
+    _ppt_add_textbox(slide, 0.8, 1.0, 11.5, 0.8, deck_title, font_size=28, bold=True, color=(11,31,59))
+    _ppt_add_textbox(slide, 0.8, 1.9, 10.5, 0.5, "Executive storyline deck", font_size=16, color=(75,85,99))
+    _ppt_add_textbox(slide, 0.8, 2.8, 11.0, 1.1, "This pack highlights where revenue is made, where performance is fragile, and what management should do next.", font_size=18, color=(31,41,55))
 
-    blank_layout = prs.slide_layouts[6]
-    for (ctitle, fig, bullets) in chart_items:
-        slide = prs.slides.add_slide(blank_layout)
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _ppt_add_textbox(slide, 0.6, 0.35, 12.0, 0.5, "Executive Summary", font_size=24, bold=True, color=(17,24,39))
+    _ppt_add_textbox(slide, 0.6, 0.8, 12.0, 0.3, "Headline messages management can act on immediately", font_size=12, color=(107,114,128))
 
-        tx = slide.shapes.add_textbox(Inches(0.7), Inches(0.4), Inches(12.0), Inches(0.6))
-        tf = tx.text_frame
-        tf.clear()
-        p = tf.paragraphs[0]
-        p.text = ctitle
-        p.font.size = Pt(22)
-        p.font.bold = True
+    card_lefts = [0.6, 4.45, 8.3]
+    for i, card in enumerate(exec_cards[:3]):
+        _ppt_add_filled_box(slide, card_lefts[i], 1.25, 3.35, 1.65, (255,255,255), line_rgb=(229,231,235), radius=True)
+        _ppt_add_textbox(slide, card_lefts[i]+0.18, 1.42, 3.0, 0.25, str(card.get("title","")), font_size=10, bold=True, color=(107,114,128))
+        _ppt_add_textbox(slide, card_lefts[i]+0.18, 1.72, 3.0, 0.45, str(card.get("value","")), font_size=21, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, card_lefts[i]+0.18, 2.18, 3.0, 0.55, str(card.get("note","")), font_size=11, color=(55,65,81))
+
+    _ppt_add_filled_box(slide, 0.6, 3.2, 12.1, 3.6, (255,255,255), line_rgb=(229,231,235), radius=True)
+    _ppt_add_textbox(slide, 0.85, 3.42, 4.0, 0.3, "What management should know", font_size=13, bold=True, color=(17,24,39))
+    y = 3.78
+    for point in summary_points[:6]:
+        txt = md_to_plain(clean_display_text(point))
+        if txt:
+            _ppt_add_textbox(slide, 0.95, y, 11.2, 0.38, u"• " + txt, font_size=13, color=(31,41,55))
+            y += 0.48
+
+    for idx, (ctitle, fig, bullets) in enumerate(chart_items, start=1):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        _ppt_add_textbox(slide, 0.55, 0.28, 11.5, 0.45, ctitle, font_size=22, bold=True, color=(17,24,39))
+        bullet_lines = [md_to_plain(l).strip("-• ").strip() for l in str(bullets).split("\n") if str(l).strip()]
+        takeaway = bullet_lines[0] if bullet_lines else "Key takeaway"
+        _ppt_add_filled_box(slide, 0.55, 0.82, 12.0, 0.55, (243,244,246), line_rgb=(229,231,235), radius=True)
+        _ppt_add_textbox(slide, 0.75, 0.98, 11.5, 0.2, f"Takeaway: {takeaway}", font_size=12, bold=True, color=(17,24,39))
 
         png = fig_to_png_bytes(fig, scale=2)
         img_stream = io.BytesIO(png)
-        slide.shapes.add_picture(img_stream, Inches(0.7), Inches(1.2), width=Inches(7.2))
+        slide.shapes.add_picture(img_stream, Inches(0.55), Inches(1.55), width=Inches(7.35), height=Inches(4.45))
 
-        bx = slide.shapes.add_textbox(Inches(8.2), Inches(1.2), Inches(4.8), Inches(5.8))
-        btf = bx.text_frame
-        btf.word_wrap = True
-        btf.clear()
+        _ppt_add_filled_box(slide, 8.2, 1.55, 4.55, 4.45, (255,255,255), line_rgb=(229,231,235), radius=True)
+        _ppt_add_textbox(slide, 8.45, 1.8, 3.8, 0.22, "Why it matters", font_size=12, bold=True, color=(17,24,39))
+        y = 2.1
+        for line in bullet_lines[:3]:
+            _ppt_add_textbox(slide, 8.48, y, 3.95, 0.5, u"• " + line, font_size=12, color=(55,65,81))
+            y += 0.56
 
-        if bullets:
-            lines = [md_to_plain(l).strip("-• ").strip() for l in str(bullets).split("\n") if str(l).strip()]
-            p0 = btf.paragraphs[0]
-            p0.text = "Commentary"
-            p0.font.size = Pt(16)
-            p0.font.bold = True
+        _ppt_add_filled_box(slide, 8.35, 4.75, 4.25, 0.95, (248,250,252), line_rgb=(229,231,235), radius=True)
+        action_text = bullet_lines[1] if len(bullet_lines) > 1 else takeaway
+        _ppt_add_textbox(slide, 8.58, 4.98, 3.8, 0.22, "Recommended action", font_size=12, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.58, 5.22, 3.7, 0.38, action_text, font_size=11, color=(55,65,81))
 
-            for line in lines[:8]:
-                pp = btf.add_paragraph()
-                pp.text = line
-                pp.level = 0
-                pp.font.size = Pt(14)
-        else:
-            p0 = btf.paragraphs[0]
-            p0.text = "—"
-            p0.font.size = Pt(14)
+        _ppt_add_textbox(slide, 0.58, 6.3, 12.0, 0.24, f"Slide {idx + 2} | EC-AI Insight", font_size=9, color=(107,114,128))
 
     out = io.BytesIO()
     prs.save(out)
@@ -1723,17 +1774,6 @@ for i, (sec_title, bullets) in enumerate(ins_sections.items()):
     if i < len(ins_sections) - 1:
         st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 
-# Small test elements block
-with st.expander("Test Elements (v7)", expanded=False):
-    st.markdown(
-        """
-<div class="ec-pill">Executive-ready layout</div>
-<div class="ec-pill">3 Insight Cards</div>
-<div class="ec-pill">Suggested Questions</div>
-<div class="ec-pill">Safe Demo Dataset</div>
-""",
-        unsafe_allow_html=True,
-    )
 
 st.divider()
 
@@ -1758,11 +1798,12 @@ with st.expander("Advanced analytics (optional)", expanded=False):
 
             st.markdown("**Correlation heatmap (numeric metrics)**")
             fig_corr = px.imshow(
-                corr,
-                text_auto=False,
+                corr.round(2),
+                text_auto=".2f",
                 aspect="auto",
                 color_continuous_scale="Blues",
             )
+            fig_corr.update_traces(textfont=dict(color="white", size=12))
             fig_corr.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=420)
             st.plotly_chart(fig_corr, use_container_width=True, config={"displayModeBar": False})
         else:
@@ -1918,6 +1959,8 @@ with c2:
             pptx_bytes = build_ppt_talking_deck(
                 deck_title="EC-AI Insight — Executive Pack",
                 chart_items=chart_items,
+                summary_points=summary_points,
+                exec_cards=exec_cards,
             )
             st.download_button(
                 "Download PPTX",
