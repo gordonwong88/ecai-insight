@@ -105,13 +105,43 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
 }
 
 .ec-note-box {
-  border: 1px dashed rgba(17,24,39,0.22);
-  border-radius: 12px;
-  padding: 12px 14px;
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: 16px;
+  padding: 16px 18px;
   background: #ffffff;
+  box-shadow: 0 6px 18px rgba(17,24,39,0.05);
   font-size: 13px;
   color: #374151;
   line-height: 1.45;
+}
+
+.ec-insight-card {
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: 16px;
+  padding: 16px 18px;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(17,24,39,0.05);
+  min-height: 100%;
+}
+.ec-insight-section {
+  margin-bottom: 12px;
+}
+.ec-insight-section:last-child {
+  margin-bottom: 0;
+}
+.ec-insight-heading {
+  font-size: 13px;
+  font-weight: 800;
+  color: #111827;
+  margin-bottom: 6px;
+}
+.ec-insight-list {
+  margin: 0;
+  padding-left: 18px;
+}
+.ec-insight-list li {
+  margin: 0 0 6px 0;
+  color: #374151;
 }
 
 .ec-ai-answer {
@@ -1044,31 +1074,43 @@ def render_parallel_insight_cards(cards: List[Dict[str, str]]) -> None:
 # =========================================================
 # Commentary block
 # =========================================================
+def _html_bullets(items) -> str:
+    rows = []
+    for item in (items or []):
+        _t = clean_display_text(item)
+        if _t:
+            rows.append(f"<li>{emphasize_exec_keywords_html(_t)}</li>")
+    return "".join(rows)
+
+
+def render_insight_card(what_points=None, why_points=None, todo_points=None) -> None:
+    what_html = _html_bullets(what_points)
+    why_html = _html_bullets(why_points)
+    todo_html = _html_bullets(todo_points)
+
+    st.markdown(
+        f"""
+<div class='ec-insight-card'>
+  <div class='ec-insight-section'>
+    <div class='ec-insight-heading'>What this shows</div>
+    <ul class='ec-insight-list'>{what_html}</ul>
+  </div>
+  <div class='ec-insight-section'>
+    <div class='ec-insight-heading'>Why it matters</div>
+    <ul class='ec-insight-list'>{why_html}</ul>
+  </div>
+  <div class='ec-insight-section'>
+    <div class='ec-insight-heading'>What to do</div>
+    <ul class='ec-insight-list'>{todo_html}</ul>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def insight_block(what_points=None, why_points=None, todo_points=None) -> None:
-    what_points = what_points or []
-    why_points = why_points or []
-    todo_points = todo_points or []
-
-    if what_points:
-        st.markdown("**What this shows**")
-        for w in what_points:
-            _t = clean_display_text(w)
-            if _t:
-                st.markdown(f"- {_t}")
-
-    if why_points:
-        st.markdown("**Why it matters**")
-        for w in why_points:
-            _t = clean_display_text(w)
-            if _t:
-                st.markdown(f"- {_t}")
-
-    if todo_points:
-        st.markdown("**What to do**")
-        for a in todo_points:
-            _t = clean_display_text(a)
-            if _t:
-                st.markdown(f"- {_t}")
+    render_insight_card(what_points=what_points, why_points=why_points, todo_points=todo_points)
 
 
 def render_chart_with_commentary(
@@ -1096,12 +1138,7 @@ def render_chart_with_commentary(
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with col_r:
-        if boxed_commentary:
-            st.markdown("<div class='ec-note-box'>", unsafe_allow_html=True)
-            insight_block(what_points=what_points, why_points=why_points, todo_points=todo_points)
-            st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            insight_block(what_points=what_points, why_points=why_points, todo_points=todo_points)
+        render_insight_card(what_points=what_points, why_points=why_points, todo_points=todo_points)
 
 
 # =========================================================
@@ -1625,13 +1662,11 @@ for i, fig in enumerate(figs):
     with cols[i % 2]:
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-st.markdown("<div class='ec-note-box'>", unsafe_allow_html=True)
-insight_block(
+render_insight_card(
     what_points=["Some stores are steady while others swing day-to-day."],
     why_points=["Volatility makes forecasting and inventory planning harder.", "Stability is often execution rather than market demand."],
     todo_points=["Fix volatility first (availability, staffing, promotion timing). Use stable stores as benchmarks for best practices."],
 )
-st.markdown("</div>", unsafe_allow_html=True)
 
 # 4) Pricing Effectiveness
 pe = pricing_effectiveness(m)
@@ -1642,7 +1677,7 @@ if pe is not None:
         what_points=["Moderate discounts often perform better than aggressive discounting."],
         why_points=["Large discounts can erode revenue quality without improving outcomes.", "Pricing discipline is a repeatable advantage."],
         todo_points=["Use small discounts as default. Treat deep discounts as experiments with clear goals and limits."],
-        boxed_commentary=False,  # removed grey padding box
+        boxed_commentary=True,
     )
 else:
     st.info("Pricing Effectiveness is unavailable (no usable discount column found).")
@@ -1656,7 +1691,7 @@ if cat is not None:
         what_points=["A few categories typically drive most revenue."],
         why_points=["Category mix often matters more than SKU count.", "Weak categories can drag overall performance."],
         todo_points=["Double down on winner categories (stock depth, placement). Review whether weak categories need repositioning or removal."],
-        boxed_commentary=False,  # removed grey padding box
+        boxed_commentary=True,
     )
 else:
     st.info("Category Mix is unavailable (no usable category column found).")
