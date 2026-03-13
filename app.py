@@ -695,7 +695,7 @@ def bar_categorical(
     return fig
 
 
-def top5_stores_bardef top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
+def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
     s = m.df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False).head(5)
     dfp = s.reset_index()
     dfp.columns = ["Store", "Revenue"]
