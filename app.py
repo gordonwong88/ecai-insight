@@ -1153,7 +1153,7 @@ def render_chart_with_commentary(
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with col_r:
-        st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
         render_insight_card(what_points=what_points, why_points=why_points, todo_points=todo_points)
 
 
@@ -1305,6 +1305,16 @@ def answer_question_with_openai(question: str, context: str) -> str:
     if not q:
         return "Please enter a question."
 
+    q_lower = q.lower()
+    if any(k in q_lower for k in ["top 3", "three actions", "management action", "management actions", "what should management", "focus on next"]):
+        answer_style = "Give a concise executive answer with a short intro sentence and exactly 3 numbered recommendations. For each recommendation, include one supporting fact from the dataset. Do not use the headings Key Insight, Business Meaning, or Recommended Action."
+    elif any(k in q_lower for k in ["why", "explain", "what explains", "driver", "drivers"]):
+        answer_style = "Answer like a consultant: start with the direct answer in 1-2 sentences, then add 2-4 bullets with evidence. Do not use repetitive template headings."
+    elif any(k in q_lower for k in ["which", "compare", "better", "worse", "largest", "smallest"]):
+        answer_style = "Give the conclusion first, then provide a compact comparison using the most relevant numbers. Avoid generic management filler."
+    else:
+        answer_style = "Answer in a human, executive tone. Use a short paragraph followed by up to 3 bullets if helpful. Do not use the headings Key Insight, Business Meaning, or Recommended Action unless they are explicitly requested."
+
     try:
         client = OpenAI(api_key=api_key)
         user = f"""Question:
@@ -1312,12 +1322,11 @@ def answer_question_with_openai(question: str, context: str) -> str:
 
 Instructions:
 - Answer using ONLY the dataset facts in the system context.
-- Always cite numbers ($, %, dates) from the context when relevant.
-- Use the following structure:
-  1. Key Insight
-  2. Business Meaning
-  3. Recommended Action
-- If the context lacks required info, say what is missing."""
+- Always reference actual numbers ($, %, dates) from the context when relevant.
+- Sound like a McKinsey / BCG style consultant: concise, direct, and commercially useful.
+- {answer_style}
+- If the context lacks required info, say what is missing.
+- Never invent numbers or drivers not present in the context."""
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0.2,
@@ -1335,14 +1344,8 @@ Instructions:
 
 def render_structured_ai_answer(answer: str) -> None:
     st.markdown("<div class='ec-ai-answer'>", unsafe_allow_html=True)
-    cleaned = answer.strip()
-
-    if "1." in cleaned or "Key Insight" in cleaned:
-        st.markdown(cleaned)
-    else:
-        st.markdown("**Key Insight**")
-        st.markdown(cleaned)
-
+    cleaned = (answer or "").strip()
+    st.markdown(cleaned if cleaned else "No answer returned.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1382,6 +1385,12 @@ def build_pdf_exec_brief(
     story.append(Spacer(1, 0.18 * inch))
 
     story.append(Paragraph("<b>Executive Summary</b>", styles["ECBody"]))
+    if summary_points:
+        first_three = [md_to_plain(clean_display_text(p)) for p in summary_points[:3] if clean_display_text(p)]
+        for p in first_three:
+            story.append(Paragraph(f"• {p}", styles["ECBody"]))
+        story.append(Spacer(1, 0.10*inch))
+        story.append(Paragraph("<b>Detailed observations</b>", styles["ECBody"]))
     for p in summary_points[:12]:
         _t = md_to_plain(p)
         _t = clean_display_text(_t)
@@ -1429,6 +1438,11 @@ def _ppt_add_filled_box(slide, left, top, width, height, fill_rgb, line_rgb=(229
     return shape
 
 
+def _ppt_clip_text(text: str, max_chars: int = 150) -> str:
+    text = md_to_plain(clean_display_text(text or ""))
+    return text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + "…"
+
+
 def build_ppt_talking_deck(
     deck_title: str,
     chart_items: List[Tuple[str, go.Figure, str]],
@@ -1455,46 +1469,52 @@ def build_ppt_talking_deck(
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _ppt_add_textbox(slide, 0.6, 0.35, 12.0, 0.5, "Executive Summary", font_size=24, bold=True, color=(17,24,39))
     _ppt_add_textbox(slide, 0.6, 0.8, 12.0, 0.3, "Headline messages management can act on immediately", font_size=12, color=(107,114,128))
-
     card_lefts = [0.6, 4.45, 8.3]
     for i, card in enumerate(exec_cards[:3]):
         _ppt_add_filled_box(slide, card_lefts[i], 1.25, 3.35, 1.65, (255,255,255), line_rgb=(229,231,235), radius=True)
         _ppt_add_textbox(slide, card_lefts[i]+0.18, 1.42, 3.0, 0.25, str(card.get("title","")), font_size=10, bold=True, color=(107,114,128))
         _ppt_add_textbox(slide, card_lefts[i]+0.18, 1.72, 3.0, 0.45, str(card.get("value","")), font_size=21, bold=True, color=(17,24,39))
-        _ppt_add_textbox(slide, card_lefts[i]+0.18, 2.18, 3.0, 0.55, str(card.get("note","")), font_size=11, color=(55,65,81))
+        _ppt_add_textbox(slide, card_lefts[i]+0.18, 2.18, 3.0, 0.55, _ppt_clip_text(str(card.get("note","")), 120), font_size=10.5, color=(55,65,81))
 
     _ppt_add_filled_box(slide, 0.6, 3.2, 12.1, 3.6, (255,255,255), line_rgb=(229,231,235), radius=True)
     _ppt_add_textbox(slide, 0.85, 3.42, 4.0, 0.3, "What management should know", font_size=13, bold=True, color=(17,24,39))
     y = 3.78
     for point in summary_points[:6]:
-        txt = md_to_plain(clean_display_text(point))
+        txt = _ppt_clip_text(point, 150)
         if txt:
-            _ppt_add_textbox(slide, 0.95, y, 11.2, 0.38, u"• " + txt, font_size=13, color=(31,41,55))
+            _ppt_add_textbox(slide, 0.95, y, 11.2, 0.38, u"• " + txt, font_size=12.5, color=(31,41,55))
             y += 0.48
 
     for idx, (ctitle, fig, bullets) in enumerate(chart_items, start=1):
         slide = prs.slides.add_slide(prs.slide_layouts[6])
-        _ppt_add_textbox(slide, 0.55, 0.28, 11.5, 0.45, ctitle, font_size=22, bold=True, color=(17,24,39))
-        bullet_lines = [md_to_plain(l).strip("-• ").strip() for l in str(bullets).split("\n") if str(l).strip()]
-        takeaway = bullet_lines[0] if bullet_lines else "Key takeaway"
-        _ppt_add_filled_box(slide, 0.55, 0.82, 12.0, 0.55, (243,244,246), line_rgb=(229,231,235), radius=True)
-        _ppt_add_textbox(slide, 0.75, 0.98, 11.5, 0.2, f"Takeaway: {takeaway}", font_size=12, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 0.55, 0.28, 12.1, 0.42, ctitle, font_size=21, bold=True, color=(17,24,39))
+
+        raw_lines = [md_to_plain(l).strip().lstrip("-• ").strip() for l in str(bullets).split("\n") if str(l).strip()]
+        what = raw_lines[0] if len(raw_lines) > 0 else "This chart highlights the main commercial pattern in the data."
+        why = raw_lines[1] if len(raw_lines) > 1 else "This matters because management attention should follow the areas with the largest commercial impact."
+        action = raw_lines[2] if len(raw_lines) > 2 else "Prioritise the most important driver first, then scale what works."
+        observation = raw_lines[3] if len(raw_lines) > 3 else "Look for the leading bar, steepest slope, or highest-volatility area to identify the primary management lever."
+
+        _ppt_add_filled_box(slide, 0.55, 0.82, 12.1, 0.52, (243,244,246), line_rgb=(229,231,235), radius=True)
+        _ppt_add_textbox(slide, 0.72, 0.98, 11.8, 0.2, f"Headline takeaway: {_ppt_clip_text(what, 135)}", font_size=11.5, bold=True, color=(17,24,39))
 
         png = fig_to_png_bytes(fig, scale=2)
         img_stream = io.BytesIO(png)
-        slide.shapes.add_picture(img_stream, Inches(0.55), Inches(1.55), width=Inches(7.35), height=Inches(4.45))
+        slide.shapes.add_picture(img_stream, Inches(0.55), Inches(1.55), width=Inches(7.0), height=Inches(4.5))
 
-        _ppt_add_filled_box(slide, 8.2, 1.55, 4.55, 4.45, (255,255,255), line_rgb=(229,231,235), radius=True)
-        _ppt_add_textbox(slide, 8.45, 1.8, 3.8, 0.22, "Why it matters", font_size=12, bold=True, color=(17,24,39))
-        y = 2.1
-        for line in bullet_lines[:3]:
-            _ppt_add_textbox(slide, 8.48, y, 3.95, 0.5, u"• " + line, font_size=12, color=(55,65,81))
-            y += 0.56
+        _ppt_add_filled_box(slide, 7.85, 1.55, 4.85, 4.75, (255,255,255), line_rgb=(229,231,235), radius=True)
+        _ppt_add_textbox(slide, 8.1, 1.78, 4.3, 0.22, "What this shows", font_size=12, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.12, 2.02, 4.2, 0.58, u"• " + _ppt_clip_text(what, 145), font_size=10.5, color=(55,65,81))
 
-        _ppt_add_filled_box(slide, 8.35, 4.75, 4.25, 0.95, (248,250,252), line_rgb=(229,231,235), radius=True)
-        action_text = bullet_lines[1] if len(bullet_lines) > 1 else takeaway
-        _ppt_add_textbox(slide, 8.58, 4.98, 3.8, 0.22, "Recommended action", font_size=12, bold=True, color=(17,24,39))
-        _ppt_add_textbox(slide, 8.58, 5.22, 3.7, 0.38, action_text, font_size=11, color=(55,65,81))
+        _ppt_add_textbox(slide, 8.1, 2.68, 4.3, 0.22, "Why it matters", font_size=12, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.12, 2.92, 4.2, 0.72, u"• " + _ppt_clip_text(why, 170), font_size=10.5, color=(55,65,81))
+
+        _ppt_add_textbox(slide, 8.1, 3.74, 4.3, 0.22, "What to do", font_size=12, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.12, 3.98, 4.2, 0.72, u"• " + _ppt_clip_text(action, 170), font_size=10.5, color=(55,65,81))
+
+        _ppt_add_filled_box(slide, 8.02, 4.98, 4.45, 0.95, (248,250,252), line_rgb=(229,231,235), radius=True)
+        _ppt_add_textbox(slide, 8.24, 5.18, 4.0, 0.18, "Key observation", font_size=11.5, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.24, 5.42, 3.95, 0.36, _ppt_clip_text(observation, 165), font_size=10.2, color=(55,65,81))
 
         _ppt_add_textbox(slide, 0.58, 6.3, 12.0, 0.24, f"Slide {idx + 2} | EC-AI Insight", font_size=9, color=(107,114,128))
 
@@ -1606,14 +1626,20 @@ st.divider()
 
 with st.sidebar:
     st.header("Data Source")
-    source_mode = st.radio("Choose data source", ["Upload CSV", "Try Demo Dataset"], index=0)
+    if "use_demo_dataset" not in st.session_state:
+        st.session_state.use_demo_dataset = False
 
-    up = None
-    if source_mode == "Upload CSV":
-        up = st.file_uploader("Upload CSV", type=["csv"])
-        st.caption("Tip: first load on Streamlit Cloud may take 30–60 seconds if the app was asleep.")
-    else:
+    up = st.file_uploader("Upload CSV", type=["csv"])
+    if up is not None:
+        st.session_state.use_demo_dataset = False
+
+    if st.button("🚀 Try Demo Dataset (Retail Fashion, HK)", use_container_width=True):
+        st.session_state.use_demo_dataset = True
+
+    if st.session_state.use_demo_dataset:
         st.caption("Using built-in demo retail dataset.")
+    else:
+        st.caption("Tip: first load on Streamlit Cloud may take 30–60 seconds if the app was asleep.")
 
     st.header("Exports")
     export_scale = st.slider("Export image scale", min_value=1, max_value=3, value=2, help="Higher = clearer charts, but slower exports.")
@@ -1632,18 +1658,17 @@ with st.sidebar:
 
 # Load data
 df_raw = None
-if source_mode == "Try Demo Dataset":
+if st.session_state.get("use_demo_dataset", False):
     df_raw = build_demo_dataset()
-else:
-    if up is not None:
-        try:
-            df_raw = pd.read_csv(up)
-        except Exception:
-            up.seek(0)
-            df_raw = pd.read_csv(up, encoding="latin-1")
+elif up is not None:
+    try:
+        df_raw = pd.read_csv(up)
+    except Exception:
+        up.seek(0)
+        df_raw = pd.read_csv(up, encoding="latin-1")
 
 if df_raw is None:
-    st.info("Upload a CSV or choose Try Demo Dataset to begin.")
+    st.info("Upload a CSV or click 🚀 Try Demo Dataset to begin.")
     st.stop()
 
 # Prep
@@ -1844,33 +1869,45 @@ if "ask_ai_question" not in st.session_state:
     st.session_state.ask_ai_question = ""
 
 st.markdown("**Suggested Questions**")
+selected_question = None
 sq1, sq2, sq3 = st.columns(3)
 with sq1:
     if st.button("Which store should I fix first?", use_container_width=True):
-        st.session_state.ask_ai_question = "Which store should I fix first and why?"
+        selected_question = "Which store should I fix first and why?"
 with sq2:
     if st.button("Is discounting helping or hurting?", use_container_width=True):
-        st.session_state.ask_ai_question = "Is discounting helping or hurting revenue quality?"
+        selected_question = "Is discounting helping or hurting revenue quality?"
 with sq3:
     if st.button("What should management do next?", use_container_width=True):
-        st.session_state.ask_ai_question = "What should management focus on next based on this dataset?"
+        selected_question = "What should management focus on next based on this dataset?"
+
+if selected_question:
+    st.session_state.ask_ai_question = selected_question
 
 q_col, btn_col = st.columns([0.82, 0.18])
 with q_col:
     user_q = st.text_input(
         "Ask EC-AI…",
-        value=st.session_state.ask_ai_question,
+        value=st.session_state.get("ask_ai_question", ""),
         key="ask_ai_question_input",
         placeholder="E.g., What should I focus on next week?",
     )
 with btn_col:
     ask_clicked = st.button("Ask", use_container_width=True)
 
-if ask_clicked and user_q.strip():
+run_question = selected_question or (user_q.strip() if ask_clicked and user_q.strip() else "")
+if run_question:
     with st.spinner("Thinking…"):
-        answer = answer_question_with_openai(user_q.strip(), context_text)
-    st.session_state.ask_ai_history.insert(0, (user_q.strip(), answer))
-    st.session_state.ask_ai_history = st.session_state.ask_ai_history[:6]
+        answer = answer_question_with_openai(run_question, context_text)
+    st.session_state.ask_ai_question = run_question
+    st.session_state.ask_ai_history.insert(0, (run_question, answer))
+    deduped = []
+    seen = set()
+    for q, a in st.session_state.ask_ai_history:
+        if q not in seen:
+            deduped.append((q, a))
+            seen.add(q)
+    st.session_state.ask_ai_history = deduped[:6]
 
 for q, a in st.session_state.ask_ai_history[:3]:
     st.markdown(f"**Q:** {q}")
