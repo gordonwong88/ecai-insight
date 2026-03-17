@@ -155,6 +155,49 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
   margin-bottom: 10px;
 }
 
+.ceo-briefing {
+  border: 1px solid rgba(17,24,39,0.08);
+  border-radius: 16px;
+  padding: 18px 18px 14px 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 2px 8px rgba(17,24,39,0.04);
+}
+.ceo-briefing-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #6B7280;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 8px;
+}
+.ceo-briefing-headline {
+  font-size: 26px;
+  font-weight: 900;
+  color: #111827;
+  margin-bottom: 10px;
+}
+.ceo-briefing ul {
+  margin: 0.2rem 0 0.4rem 1.1rem;
+}
+.ceo-briefing li {
+  margin-bottom: 0.45rem;
+}
+.ceo-confidence {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #EEF2FF;
+  color: #1F2937;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+[data-testid="stHorizontalBlock"] div.stButton > button {
+  margin-top: 28px;
+  height: 42px;
+}
+
 .ec-pill {
   display: inline-block;
   padding: 4px 10px;
@@ -1013,6 +1056,118 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
 # =========================================================
 # Executive cards
 # =========================================================
+def profile_dataset(df: pd.DataFrame, m: RetailModel) -> Dict[str, object]:
+    missing_rate = float(df.isna().mean().mean()) if len(df.columns) else 0.0
+    date_days = int(df[m.col_date].nunique()) if m.col_date in df.columns else 0
+    return {
+        "row_count": int(len(df)),
+        "date_days": date_days,
+        "missing_rate": missing_rate,
+        "has_discount": bool(m.col_discount and m.col_discount in df.columns),
+        "has_channel": bool(m.col_channel and m.col_channel in df.columns),
+        "has_category": bool(m.col_category and m.col_category in df.columns),
+    }
+
+
+def compute_confidence_score(profile: Dict[str, object]) -> int:
+    score = 55
+    if int(profile.get("row_count", 0)) >= 500:
+        score += 10
+    if int(profile.get("date_days", 0)) >= 90:
+        score += 10
+    if float(profile.get("missing_rate", 1.0)) <= 0.05:
+        score += 10
+    if bool(profile.get("has_discount")):
+        score += 5
+    if bool(profile.get("has_channel")):
+        score += 5
+    if bool(profile.get("has_category")):
+        score += 5
+    return max(50, min(score, 95))
+
+
+def generate_priority_actions(m: RetailModel) -> List[Dict[str, str]]:
+    df = m.df
+    actions: List[Dict[str, str]] = []
+
+    store_rev = df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False)
+    total_rev = float(df[m.col_revenue].sum()) if len(df) else 0.0
+    if len(store_rev) >= 2 and total_rev > 0:
+        top_two = store_rev.head(2)
+        share = float(top_two.sum() / total_rev)
+        actions.append({
+            "title": f"Prioritize {top_two.index[0]} and {top_two.index[1]}",
+            "reason": f"These two stores generate about {fmt_pct(share, 0)} of total revenue.",
+        })
+
+    if m.col_discount is not None:
+        pe = pricing_effectiveness(m)
+        if pe is not None:
+            _, df_price = pe
+            if len(df_price) >= 2:
+                best = df_price.sort_values("Avg Revenue per Sale", ascending=False).iloc[0]
+                worst = df_price.sort_values("Avg Revenue per Sale", ascending=True).iloc[0]
+                actions.append({
+                    "title": "Reduce deep discounting",
+                    "reason": f"{best['Discount Band']} outperforms {worst['Discount Band']} on average revenue per sale.",
+                })
+
+    daily = df.groupby([m.col_store, pd.Grouper(key=m.col_date, freq="D")])[m.col_revenue].sum().reset_index()
+    vol = daily.groupby(m.col_store)[m.col_revenue].agg(["mean", "std"]).replace(0, np.nan)
+    vol["cv"] = vol["std"] / vol["mean"]
+    vol = vol.dropna(subset=["cv"]).sort_values("cv", ascending=False)
+    if len(vol):
+        store = str(vol.index[0])
+        actions.append({
+            "title": f"Stabilize {store} operations",
+            "reason": f"{store} shows the highest sales volatility in the dataset.",
+        })
+
+    if m.col_category is not None and len(actions) < 3:
+        cat_rev = df.groupby(m.col_category)[m.col_revenue].sum().sort_values(ascending=False)
+        if len(cat_rev):
+            cat = str(cat_rev.index[0])
+            share = float(cat_rev.iloc[0] / total_rev) if total_rev > 0 else np.nan
+            actions.append({
+                "title": f"Protect and grow {cat}",
+                "reason": f"{cat} contributes about {fmt_pct(share, 0)} of total revenue.",
+            })
+
+    deduped = []
+    seen = set()
+    for a in actions:
+        if a["title"] not in seen:
+            deduped.append(a)
+            seen.add(a["title"])
+    return deduped[:3]
+
+
+def build_ceo_briefing(actions: List[Dict[str, str]], confidence: int) -> Dict[str, object]:
+    return {
+        "headline": "Top 3 management actions",
+        "actions": actions[:3],
+        "confidence": confidence,
+    }
+
+
+def render_ceo_briefing(briefing: Dict[str, object]) -> None:
+    actions = briefing.get("actions", [])
+    lines = []
+    for i, item in enumerate(actions, start=1):
+        title = emphasize_exec_keywords_html(clean_display_text(item.get("title", "")))
+        reason = emphasize_exec_keywords_html(clean_display_text(item.get("reason", "")))
+        lines.append(f"<li><b>{i}. {title}</b><br><span style='color:#4B5563'>{reason}</span></li>")
+    actions_html = ''.join(lines)
+    st.markdown(f"""
+<div class='ceo-briefing'>
+  <div class='ceo-briefing-title'>CEO Briefing</div>
+  <div class='ceo-briefing-headline'>{briefing.get('headline', 'Top management actions')}</div>
+  <ul>{actions_html}</ul>
+  <div class='ceo-confidence'>Recommendation confidence: {briefing.get('confidence', 0)}%</div>
+</div>
+""", unsafe_allow_html=True)
+
+
 def build_exec_cards(m: RetailModel) -> List[Dict[str, str]]:
     df = m.df
     total_rev = float(df[m.col_revenue].sum())
@@ -1306,14 +1461,14 @@ def answer_question_with_openai(question: str, context: str) -> str:
         return "Please enter a question."
 
     q_lower = q.lower()
-    if any(k in q_lower for k in ["top 3", "three actions", "management action", "management actions", "what should management", "focus on next"]):
-        answer_style = "Give a concise executive answer with a short intro sentence and exactly 3 numbered recommendations. For each recommendation, include one supporting fact from the dataset. Do not use the headings Key Insight, Business Meaning, or Recommended Action."
-    elif any(k in q_lower for k in ["why", "explain", "what explains", "driver", "drivers"]):
-        answer_style = "Answer like a consultant: start with the direct answer in 1-2 sentences, then add 2-4 bullets with evidence. Do not use repetitive template headings."
+    if any(k in q_lower for k in ["how can i improve", "improve my business", "top 3", "three actions", "management action", "management actions", "what should management", "focus on next"]):
+        answer_style = "Use simple business language. Start with one short direct answer. Then give exactly 3 numbered actions. For each action, add one short reason with a real number from the dataset. Avoid academic words and avoid the headings Key Insight, Business Meaning, or Recommended Action."
+    elif any(k in q_lower for k in ["why", "explain", "what explains", "driver", "drivers", "underperforming"]):
+        answer_style = "Use simple business language. Start with the direct answer in 1-2 sentences, then add 2-3 bullets with plain-English evidence. Avoid jargon and repetitive template headings."
     elif any(k in q_lower for k in ["which", "compare", "better", "worse", "largest", "smallest"]):
-        answer_style = "Give the conclusion first, then provide a compact comparison using the most relevant numbers. Avoid generic management filler."
+        answer_style = "Give the answer first in one sentence, then show the comparison using the most relevant numbers. Keep words short and clear."
     else:
-        answer_style = "Answer in a human, executive tone. Use a short paragraph followed by up to 3 bullets if helpful. Do not use the headings Key Insight, Business Meaning, or Recommended Action unless they are explicitly requested."
+        answer_style = "Answer in a simple, human, executive tone. Use short sentences, easy words, and up to 3 bullets if helpful. Do not sound academic."
 
     try:
         client = OpenAI(api_key=api_key)
@@ -1323,8 +1478,9 @@ def answer_question_with_openai(question: str, context: str) -> str:
 Instructions:
 - Answer using ONLY the dataset facts in the system context.
 - Always reference actual numbers ($, %, dates) from the context when relevant.
-- Sound like a McKinsey / BCG style consultant: concise, direct, and commercially useful.
+- Sound like a sharp business adviser, but use simple words that a non-technical CEO can digest quickly.
 - {answer_style}
+- Keep the answer easy to scan.
 - If the context lacks required info, say what is missing.
 - Never invent numbers or drivers not present in the context."""
         resp = client.chat.completions.create(
@@ -1684,6 +1840,10 @@ df = m.df
 summary_points = build_business_summary_points(m)
 exec_cards = build_exec_cards(m)
 ins_sections = build_business_insights_sections(m)
+profile = profile_dataset(df, m)
+confidence_score = compute_confidence_score(profile)
+priority_actions = generate_priority_actions(m)
+ceo_briefing = build_ceo_briefing(priority_actions, confidence_score)
 
 # Executive Dashboard
 try:
@@ -1703,6 +1863,9 @@ for p in summary_points[:8]:
     _t = clean_display_text(p)
     if _t:
         st.markdown(f"• {emphasize_exec_keywords_html(_t)}", unsafe_allow_html=True)
+
+st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
+render_ceo_briefing(ceo_briefing)
 
 st.divider()
 
