@@ -63,7 +63,7 @@ st.markdown(
     """
 <style>
 html, body, [class*="css"]  { font-size: 16px; }
-p, li { font-size: 16px; line-height: 1.55; }
+p, li { font-size: 16px; line-height: 1.38; margin-bottom: 4px; }
 small, .stCaption { font-size: 14px; }
 
 h1 { font-size: 40px !important; margin-bottom: 0.25rem; }
@@ -71,9 +71,9 @@ h2 { font-size: 26px !important; margin-top: 1.2rem; }
 h3 { font-size: 20px !important; margin-top: 1.0rem; }
 h4 { font-size: 18px !important; margin-top: 0.9rem; }
 
-.ec-space { margin-top: 10px; margin-bottom: 10px; }
+.ec-space { margin-top: 4px; margin-bottom: 4px; }
 .ec-tight { margin-top: 2px; margin-bottom: 2px; }
-.ec-note { color: #555; font-size: 15px; }
+.ec-note { color: #555; font-size: 15px; margin-bottom: 4px; }
 .ec-kicker { color: #555; font-size: 18px; }
 .ec-subtle { color: #666; font-size: 15px; }
 
@@ -127,7 +127,7 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
   margin-top: 18px;
 }
 .ec-insight-section {
-  margin-bottom: 12px;
+  margin-bottom: 6px;
 }
 .ec-insight-section:last-child {
   margin-bottom: 0;
@@ -143,7 +143,7 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
   padding-left: 18px;
 }
 .ec-insight-list li {
-  margin: 0 0 6px 0;
+  margin: 0 0 2px 0;
   color: #374151;
 }
 
@@ -177,10 +177,10 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
   margin-bottom: 10px;
 }
 .ceo-briefing ul {
-  margin: 0.2rem 0 0.4rem 1.1rem;
+  margin: 0.1rem 0 0.2rem 1.1rem;
 }
 .ceo-briefing li {
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.2rem;
 }
 .ceo-confidence {
   display: inline-block;
@@ -223,6 +223,11 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
 }
 
 div[data-testid="stExpander"] > details { padding: 0.25rem 0.25rem 0.5rem 0.25rem; }
+
+ul { margin-top: 0.1rem; margin-bottom: 0.35rem; padding-left: 1.15rem; }
+li { margin-bottom: 0.15rem; }
+h2, h3, h4 { margin-bottom: 0.35rem !important; }
+
 </style>
 """,
     unsafe_allow_html=True,
@@ -298,22 +303,16 @@ def clean_col(s: str) -> str:
 
 
 def fmt_currency(x: float) -> str:
+    """Full currency format for executive readability: $86,400 instead of $86.4K."""
     try:
         if x is None or (isinstance(x, float) and np.isnan(x)):
             return "—"
         x = float(x)
     except Exception:
         return "—"
-
     sign = "-" if x < 0 else ""
     x = abs(x)
-    if x >= 1_000_000_000:
-        return f"{sign}${x/1_000_000_000:.2f}B"
-    if x >= 1_000_000:
-        return f"{sign}${x/1_000_000:.2f}M"
-    if x >= 1_000:
-        return f"{sign}${x/1_000:.1f}K"
-    return f"{sign}${x:.0f}"
+    return f"{sign}${x:,.0f}"
 
 
 def fmt_pct(x: float, digits: int = 0) -> str:
