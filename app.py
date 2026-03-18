@@ -1086,31 +1086,47 @@ def compute_confidence_score(profile: Dict[str, object]) -> int:
     return max(50, min(score, 95))
 
 
-def generate_priority_actions(m: RetailModel) -> List[Dict[str, str]]:
+def detect_insights(m: RetailModel) -> List[Dict[str, object]]:
     df = m.df
-    actions: List[Dict[str, str]] = []
+    insights: List[Dict[str, object]] = []
+    total_rev = float(df[m.col_revenue].sum()) if len(df) else 0.0
 
     store_rev = df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False)
-    total_rev = float(df[m.col_revenue].sum()) if len(df) else 0.0
     if len(store_rev) >= 2 and total_rev > 0:
-        top_two = store_rev.head(2)
-        share = float(top_two.sum() / total_rev)
-        actions.append({
-            "title": f"Prioritize {top_two.index[0]} and {top_two.index[1]}",
-            "reason": f"These two stores generate about {fmt_pct(share, 0)} of total revenue.",
-        })
+        top1_name, top1_val = str(store_rev.index[0]), float(store_rev.iloc[0])
+        top2_name, top2_val = str(store_rev.index[1]), float(store_rev.iloc[1])
+        top2_share = (top1_val + top2_val) / total_rev
+        if top2_share >= 0.40:
+            insights.append({
+                "type": "concentration",
+                "priority": 1,
+                "headline": f"Revenue is concentrated in {top1_name} and {top2_name}.",
+                "evidence": [
+                    f"{top1_name} and {top2_name} together generate {fmt_currency(top1_val + top2_val)}.",
+                    f"That is about {fmt_pct(top2_share, 0)} of total revenue.",
+                ],
+            })
 
     if m.col_discount is not None:
         pe = pricing_effectiveness(m)
         if pe is not None:
             _, df_price = pe
+            df_price = df_price.dropna(subset=["Avg Revenue per Sale"])
             if len(df_price) >= 2:
                 best = df_price.sort_values("Avg Revenue per Sale", ascending=False).iloc[0]
                 worst = df_price.sort_values("Avg Revenue per Sale", ascending=True).iloc[0]
-                actions.append({
-                    "title": "Reduce deep discounting",
-                    "reason": f"{best['Discount Band']} outperforms {worst['Discount Band']} on average revenue per sale.",
-                })
+                best_val = float(best["Avg Revenue per Sale"])
+                worst_val = float(worst["Avg Revenue per Sale"])
+                if worst_val < best_val * 0.9:
+                    insights.append({
+                        "type": "discount",
+                        "priority": 2,
+                        "headline": "Heavy discounting is hurting revenue per sale.",
+                        "evidence": [
+                            f"{best['Discount Band']} delivers {fmt_currency(best_val)} per sale.",
+                            f"{worst['Discount Band']} delivers only {fmt_currency(worst_val)} per sale.",
+                        ],
+                    })
 
     daily = df.groupby([m.col_store, pd.Grouper(key=m.col_date, freq="D")])[m.col_revenue].sum().reset_index()
     vol = daily.groupby(m.col_store)[m.col_revenue].agg(["mean", "std"]).replace(0, np.nan)
@@ -1118,28 +1134,114 @@ def generate_priority_actions(m: RetailModel) -> List[Dict[str, str]]:
     vol = vol.dropna(subset=["cv"]).sort_values("cv", ascending=False)
     if len(vol):
         store = str(vol.index[0])
-        actions.append({
-            "title": f"Stabilize {store} operations",
-            "reason": f"{store} shows the highest sales volatility in the dataset.",
-        })
+        score = float(vol.iloc[0]["cv"])
+        if score >= 0.70:
+            insights.append({
+                "type": "volatility",
+                "priority": 3,
+                "headline": f"{store} has unstable sales.",
+                "evidence": [
+                    f"{store} has the highest variability score in the dataset.",
+                    f"Volatility score is about {score:.2f}.",
+                ],
+            })
 
-    if m.col_category is not None and len(actions) < 3:
+    if m.col_category is not None and total_rev > 0:
         cat_rev = df.groupby(m.col_category)[m.col_revenue].sum().sort_values(ascending=False)
         if len(cat_rev):
             cat = str(cat_rev.index[0])
-            share = float(cat_rev.iloc[0] / total_rev) if total_rev > 0 else np.nan
-            actions.append({
-                "title": f"Protect and grow {cat}",
-                "reason": f"{cat} contributes about {fmt_pct(share, 0)} of total revenue.",
+            share = float(cat_rev.iloc[0] / total_rev)
+            if share >= 0.35:
+                insights.append({
+                    "type": "category",
+                    "priority": 4,
+                    "headline": f"{cat} is the main revenue driver.",
+                    "evidence": [
+                        f"{cat} contributes {fmt_currency(float(cat_rev.iloc[0]))}.",
+                        f"That is about {fmt_pct(share, 0)} of total revenue.",
+                    ],
+                })
+
+    df_sorted = df.sort_values(m.col_date)
+    if len(df_sorted):
+        days = max((df_sorted[m.col_date].max() - df_sorted[m.col_date].min()).days + 1, 1)
+        mid = df_sorted[m.col_date].min() + pd.Timedelta(days=days / 2)
+        rev_first = float(df_sorted.loc[df_sorted[m.col_date] <= mid, m.col_revenue].sum())
+        rev_second = float(df_sorted.loc[df_sorted[m.col_date] > mid, m.col_revenue].sum())
+        growth = (rev_second - rev_first) / rev_first if rev_first > 0 else np.nan
+        if not np.isnan(growth) and abs(growth) >= 0.05:
+            label = "improving" if growth > 0 else "softening"
+            insights.append({
+                "type": "momentum",
+                "priority": 5,
+                "headline": f"Revenue momentum is {label}.",
+                "evidence": [
+                    f"Second half revenue changed by {fmt_pct(growth, 0)} versus the first half.",
+                ],
             })
 
-    deduped = []
+    return sorted(insights, key=lambda x: int(x.get("priority", 99)))
+
+
+def generate_recommendations(insights: List[Dict[str, object]]) -> List[Dict[str, str]]:
+    recs: List[Dict[str, str]] = []
+    for ins in insights:
+        itype = ins.get("type")
+        evidence = ins.get("evidence", [])
+        if itype == "concentration":
+            recs.append({
+                "title": "Prioritize the top two stores",
+                "reason": evidence[1] if len(evidence) > 1 else "A small number of stores drive most revenue.",
+            })
+        elif itype == "discount":
+            recs.append({
+                "title": "Reduce deep discounting",
+                "reason": evidence[1] if len(evidence) > 1 else "High discounts are reducing revenue per sale.",
+            })
+        elif itype == "volatility":
+            recs.append({
+                "title": "Stabilize the weakest store operations",
+                "reason": evidence[0] if evidence else "One store shows unstable day-to-day sales.",
+            })
+        elif itype == "category":
+            recs.append({
+                "title": "Protect and grow the strongest category",
+                "reason": evidence[1] if len(evidence) > 1 else "One category drives a large share of revenue.",
+            })
+        elif itype == "momentum":
+            recs.append({
+                "title": "Review recent momentum and correct early",
+                "reason": evidence[0] if evidence else "Revenue direction has shifted meaningfully.",
+            })
+
+    deduped: List[Dict[str, str]] = []
     seen = set()
-    for a in actions:
-        if a["title"] not in seen:
-            deduped.append(a)
-            seen.add(a["title"])
+    for rec in recs:
+        if rec["title"] not in seen:
+            deduped.append(rec)
+            seen.add(rec["title"])
     return deduped[:3]
+
+
+def generate_priority_actions(m: RetailModel) -> List[Dict[str, str]]:
+    insights = detect_insights(m)
+    recs = generate_recommendations(insights)
+    if len(recs) < 3:
+        df = m.df
+        total_rev = float(df[m.col_revenue].sum()) if len(df) else 0.0
+        if m.col_category is not None and total_rev > 0:
+            cat_rev = df.groupby(m.col_category)[m.col_revenue].sum().sort_values(ascending=False)
+            if len(cat_rev):
+                recs.append({
+                    "title": "Protect the strongest category",
+                    "reason": f"{cat_rev.index[0]} contributes about {fmt_pct(float(cat_rev.iloc[0] / total_rev), 0)} of revenue.",
+                })
+        if len(recs) < 3:
+            recs.append({
+                "title": "Keep the top revenue drivers healthy",
+                "reason": "Focus on stock, staffing, and execution in the best-performing parts of the business.",
+            })
+    return recs[:3]
 
 
 def build_ceo_briefing(actions: List[Dict[str, str]], confidence: int) -> Dict[str, object]:
@@ -1462,7 +1564,7 @@ def answer_question_with_openai(question: str, context: str) -> str:
 
     q_lower = q.lower()
     if any(k in q_lower for k in ["how can i improve", "improve my business", "top 3", "three actions", "management action", "management actions", "what should management", "focus on next"]):
-        answer_style = "Use simple business language. Start with one short direct answer. Then give exactly 3 numbered actions. For each action, add one short reason with a real number from the dataset. Avoid academic words and avoid the headings Key Insight, Business Meaning, or Recommended Action."
+        answer_style = "Use simple business language. Start with one short direct answer. Then show exactly 3 numbered actions. Each action should have one short reason with a real number from the dataset. Keep sentences short and easy to scan. Avoid academic words and avoid the headings Key Insight, Business Meaning, or Recommended Action."
     elif any(k in q_lower for k in ["why", "explain", "what explains", "driver", "drivers", "underperforming"]):
         answer_style = "Use simple business language. Start with the direct answer in 1-2 sentences, then add 2-3 bullets with plain-English evidence. Avoid jargon and repetitive template headings."
     elif any(k in q_lower for k in ["which", "compare", "better", "worse", "largest", "smallest"]):
@@ -1498,9 +1600,21 @@ Instructions:
         return f"Ask AI error: {e}"
 
 
+def emphasize_ai_answer_markdown(text: str) -> str:
+    if not text:
+        return text or ""
+    text = re.sub(r"(\$[0-9,.]+[KMB]?)", r"**\1**", text)
+    text = re.sub(r"(\d+\.?\d*%)", r"**\1**", text)
+    text = re.sub(r"((HK|SG|JP|CN)-[A-Za-z0-9]+)", r"**\1**", text)
+    text = re.sub(r"(0–2%|2–5%|5–10%|10–20%|20%\+)", r"**\1**", text)
+    text = re.sub(r"^(What we found|What management should do|Short answer)\s*$", r"**\1**", text, flags=re.M)
+    return text
+
+
 def render_structured_ai_answer(answer: str) -> None:
     st.markdown("<div class='ec-ai-answer'>", unsafe_allow_html=True)
     cleaned = (answer or "").strip()
+    cleaned = emphasize_ai_answer_markdown(cleaned)
     st.markdown(cleaned if cleaned else "No answer returned.")
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1842,6 +1956,7 @@ exec_cards = build_exec_cards(m)
 ins_sections = build_business_insights_sections(m)
 profile = profile_dataset(df, m)
 confidence_score = compute_confidence_score(profile)
+detected_insights = detect_insights(m)
 priority_actions = generate_priority_actions(m)
 ceo_briefing = build_ceo_briefing(priority_actions, confidence_score)
 
