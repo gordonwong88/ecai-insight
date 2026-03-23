@@ -1951,7 +1951,6 @@ st.markdown(
 st.divider()
 
 with st.sidebar:
-    global LANG
     LANG = st.selectbox(T("Language / 語言"), ["English", "中文"], index=0)
     st.header("Data Source" if LANG == "English" else "資料來源")
     if "use_demo_dataset" not in st.session_state:
