@@ -22,6 +22,22 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 
+
+LANG = "English"
+
+UI_TEXT = {
+    "Executive Summary": {"English": "Executive Summary", "中文": "執行摘要"},
+    "Charts & Insights": {"English": "Charts & Insights", "中文": "圖表與重點"},
+    "AI Insights": {"English": "AI Insights", "中文": "AI 分析"},
+    "CEO Briefing": {"English": "CEO Briefing", "中文": "CEO 簡報"},
+    "Ask AI (CEO Q&A)": {"English": "Ask AI (CEO Q&A)", "中文": "Ask AI（CEO 問答）"},
+    "Export Executive Pack": {"English": "Export Executive Pack", "中文": "匯出管理層簡報"},
+    "Language / 語言": {"English": "Language / 語言", "中文": "Language / 語言"},
+}
+
+def T(key: str) -> str:
+    return UI_TEXT.get(key, {}).get(LANG, key)
+
 # Optional: Ask AI chat
 try:
     from openai import OpenAI
@@ -127,6 +143,16 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
   margin-top: 8px;
   min-height: 185px;
 }
+.ec-summary-card {
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: 16px;
+  padding: 14px 18px 10px 18px;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(17,24,39,0.05);
+  margin-top: 6px;
+}
+.ec-summary-list { margin: 0; padding-left: 18px; }
+.ec-summary-list li { margin-bottom: 3px; }
 .ec-insight-section {
   margin-bottom: 6px;
 }
@@ -244,14 +270,14 @@ TABLEAU10 = [
 ]
 
 CONSULTING_PALETTE = [
-    "#0B1F3B",  # deep navy
-    "#2A6F97",  # blue
-    "#2F855A",  # green
-    "#B7791F",  # amber
-    "#9B2C2C",  # red
-    "#4A5568",  # slate
-    "#718096",  # gray
-    "#A0AEC0",  # light gray
+    "#163A5F",  # deep blue
+    "#2A5B84",  # mc blue
+    "#3E7CA6",  # lighter blue
+    "#4FA3A5",  # teal
+    "#6B7280",  # dark grey
+    "#94A3B8",  # steel grey
+    "#CBD5E1",  # light grey
+    "#E2E8F0",  # pale grey
 ]
 
 
@@ -1252,6 +1278,22 @@ def build_ceo_briefing(actions: List[Dict[str, str]], confidence: int) -> Dict[s
     }
 
 
+def render_summary_card(summary_points: List[str]) -> None:
+    bullet_html = "".join(
+        f"<li>{emphasize_exec_keywords_html(clean_display_text(p))}</li>"
+        for p in summary_points[:8] if clean_display_text(p)
+    )
+    st.markdown(
+        f"""
+<div class="ec-summary-card">
+  <div class="ec-card-title">{T('Executive Summary')}</div>
+  <ul class="ec-summary-list">{bullet_html}</ul>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def render_ceo_briefing(briefing: Dict[str, object]) -> None:
     actions = briefing.get("actions", [])
     lines = []
@@ -1645,14 +1687,14 @@ def build_pdf_exec_brief(
         bottomMargin=0.7 * inch,
     )
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="ECBody", parent=styles["BodyText"], fontSize=11, leading=15))
-    styles.add(ParagraphStyle(name="ECTitle", parent=styles["Title"], fontSize=20, leading=24, alignment=TA_LEFT))
-    styles.add(ParagraphStyle(name="ECSub", parent=styles["BodyText"], fontSize=12, leading=16, textColor="#555555"))
+    styles.add(ParagraphStyle(name="ECBody", parent=styles["BodyText"], fontSize=11, leading=13, textColor="#374151"))
+    styles.add(ParagraphStyle(name="ECTitle", parent=styles["Title"], fontSize=20, leading=22, alignment=TA_LEFT, textColor="#163A5F"))
+    styles.add(ParagraphStyle(name="ECSub", parent=styles["BodyText"], fontSize=12, leading=14, textColor="#4B5563"))
 
     story = []
     story.append(Paragraph(title, styles["ECTitle"]))
     story.append(Paragraph(subtitle, styles["ECSub"]))
-    story.append(Spacer(1, 0.18 * inch))
+    story.append(Spacer(1, 0.04 * inch))
 
     story.append(Paragraph("<b>Executive Summary</b>", styles["ECBody"]))
     if summary_points:
@@ -1666,22 +1708,22 @@ def build_pdf_exec_brief(
         _t = clean_display_text(_t)
         if _t:
             story.append(Paragraph(f"• {_t}", styles["ECBody"]))
-    story.append(Spacer(1, 0.20 * inch))
+    story.append(Spacer(1, 0.04 * inch))
 
     story.append(Paragraph("<b>Key Charts & Commentary</b>", styles["ECBody"]))
-    story.append(Spacer(1, 0.12 * inch))
+    story.append(Spacer(1, 0.06 * inch))
 
     for (ctitle, fig, commentary) in chart_items:
         story.append(Paragraph(f"<b>{ctitle}</b>", styles["ECBody"]))
         if commentary:
             for line in md_to_plain_lines(commentary):
                 story.append(Paragraph(f"• {line}", styles["ECBody"]))
-        story.append(Spacer(1, 0.10 * inch))
+        story.append(Spacer(1, 0.04 * inch))
         png = fig_to_png_bytes(fig, scale=2)
         img_buf = io.BytesIO(png)
         img = RLImage(img_buf, width=6.7 * inch, height=3.2 * inch)
         story.append(img)
-        story.append(Spacer(1, 0.22 * inch))
+        story.append(Spacer(1, 0.10 * inch))
 
     doc.build(story)
     return buf.getvalue()
@@ -1704,6 +1746,12 @@ def _ppt_add_textbox(slide, left, top, width, height, text, font_size=18, bold=F
     p.font.size = Pt(font_size)
     p.font.bold = bold
     p.font.color.rgb = RGBColor(*color)
+    try:
+        p.space_after = Pt(2)
+        p.space_before = Pt(0)
+        p.line_spacing = 1.0
+    except Exception:
+        pass
     return box
 
 
@@ -1771,7 +1819,7 @@ def build_ppt_talking_deck(
         what = raw_lines[0] if len(raw_lines) > 0 else "This chart highlights the main commercial pattern in the data."
         why = raw_lines[1] if len(raw_lines) > 1 else "This matters because management attention should follow the areas with the largest commercial impact."
         action = raw_lines[2] if len(raw_lines) > 2 else "Prioritise the most important driver first, then scale what works."
-        observation = raw_lines[3] if len(raw_lines) > 3 else "Look for the leading bar, steepest slope, or highest-volatility area to identify the primary management lever."
+        observation = raw_lines[3] if len(raw_lines) > 3 else "Identify the main driver, any spikes, and the key management lever."
 
         _ppt_add_filled_box(slide, 0.55, 0.82, 12.1, 0.52, (243,244,246), line_rgb=(229,231,235), radius=True)
         _ppt_add_textbox(slide, 0.72, 0.98, 11.8, 0.2, f"Headline takeaway: {_ppt_clip_text(what, 135)}", font_size=11.5, bold=True, color=(17,24,39))
@@ -1790,9 +1838,9 @@ def build_ppt_talking_deck(
         _ppt_add_textbox(slide, 8.1, 3.74, 4.3, 0.22, "What to do", font_size=12, bold=True, color=(17,24,39))
         _ppt_add_textbox(slide, 8.12, 3.98, 4.2, 0.72, u"• " + _ppt_clip_text(action, 170), font_size=10.5, color=(55,65,81))
 
-        _ppt_add_filled_box(slide, 8.02, 4.98, 4.45, 1.08, (248,250,252), line_rgb=(229,231,235), radius=True)
+        _ppt_add_filled_box(slide, 8.02, 4.92, 4.55, 1.18, (248,250,252), line_rgb=(229,231,235), radius=True)
         _ppt_add_textbox(slide, 8.24, 5.14, 4.0, 0.18, "Key observation", font_size=11.5, bold=True, color=(17,24,39))
-        _ppt_add_textbox(slide, 8.24, 5.38, 4.02, 0.50, _ppt_clip_text(observation, 120), font_size=9.8, color=(55,65,81))
+        _ppt_add_textbox(slide, 8.24, 5.34, 4.12, 0.62, _ppt_clip_text(observation, 100), font_size=9.2, color=(55,65,81))
 
         _ppt_add_textbox(slide, 0.58, 6.3, 12.0, 0.24, f"Slide {idx + 2} | EC-AI Insight", font_size=9, color=(107,114,128))
 
@@ -1903,7 +1951,9 @@ st.markdown(
 st.divider()
 
 with st.sidebar:
-    st.header("Data Source")
+    global LANG
+    LANG = st.selectbox(T("Language / 語言"), ["English", "中文"], index=0)
+    st.header("Data Source" if LANG == "English" else "資料來源")
     if "use_demo_dataset" not in st.session_state:
         st.session_state.use_demo_dataset = False
 
@@ -1978,22 +2028,17 @@ except Exception as e:
 st.divider()
 
 # Executive Summary + 3 insight cards
-st.subheader("Executive Summary")
+st.subheader(T("Executive Summary"))
 render_parallel_insight_cards(exec_cards)
 st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
-
-for p in summary_points[:8]:
-    _t = clean_display_text(p)
-    if _t:
-        st.markdown(f"• {emphasize_exec_keywords_html(_t)}", unsafe_allow_html=True)
-
+render_summary_card(summary_points)
 st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 render_ceo_briefing(ceo_briefing)
 
 st.divider()
 
 # Charts & Insights
-st.subheader("Charts & Insights")
+st.subheader(T("Charts & Insights"))
 
 # 1) Overall trend
 fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
@@ -2098,7 +2143,7 @@ def render_ai_insight_cards(ins_sections: Dict[str, List[str]]) -> None:
                 )
 
 # AI Insights
-st.subheader("AI Insights")
+st.subheader(T("AI Insights"))
 render_ai_insight_cards(ins_sections)
 
 st.divider()
@@ -2138,7 +2183,7 @@ with st.expander("Advanced analytics (optional)", expanded=False):
         st.warning(f"Advanced analytics unavailable: {e}")
 
 # Ask AI
-st.subheader("Ask AI (CEO Q&A)")
+st.subheader(T("Ask AI (CEO Q&A)"))
 st.caption("Ask questions about your data (for example: Why did revenue soften? Which store should I fix first?)")
 
 _context_lines: List[str] = []
@@ -2217,7 +2262,7 @@ for q, a in st.session_state.ask_ai_history[:3]:
 st.divider()
 
 # Export pack
-st.subheader("Export Executive Pack")
+st.subheader(T("Export Executive Pack"))
 st.caption("Download a shareable executive-ready brief (PDF) or slide pack (PPTX).")
 
 chart_items: List[Tuple[str, go.Figure, str]] = []
