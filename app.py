@@ -793,7 +793,7 @@ def store_small_multiples(m: RetailModel) -> Tuple[List[go.Figure], List[str]]:
         daily = sub.groupby(pd.Grouper(key=m.col_date, freq="D"))[m.col_revenue].sum().reset_index()
 
         fig = go.Figure()
-        color = TABLEAU10[i % len(TABLEAU10)]
+        color = CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)]
         fig.add_trace(
             go.Scatter(
                 x=daily[m.col_date],
@@ -835,7 +835,7 @@ def pricing_effectiveness(m: RetailModel) -> Optional[Tuple[go.Figure, pd.DataFr
         y_values=dfp["Avg Revenue per Sale"].fillna(0).tolist(),
         title="Pricing Effectiveness — Avg Revenue per Sale by Discount Level",
         y_title="Avg Revenue per Sale",
-        colors=[TABLEAU10[i % len(TABLEAU10)] for i in range(len(dfp))],
+        colors=[CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)] for i in range(len(dfp))],
         text_fmt=",.0f",
     )
     return fig, dfp
