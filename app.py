@@ -124,7 +124,8 @@ h4 { font-size: 18px !important; margin-top: 0.9rem; }
   background: #ffffff;
   box-shadow: 0 6px 18px rgba(17,24,39,0.05);
   min-height: 100%;
-  margin-top: 18px;
+  margin-top: 8px;
+  min-height: 185px;
 }
 .ec-insight-section {
   margin-bottom: 6px;
@@ -1690,6 +1691,14 @@ def _ppt_add_textbox(slide, left, top, width, height, text, font_size=18, bold=F
     box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(height))
     tf = box.text_frame
     tf.clear()
+    tf.word_wrap = True
+    try:
+        tf.margin_left = Pt(2)
+        tf.margin_right = Pt(2)
+        tf.margin_top = Pt(1)
+        tf.margin_bottom = Pt(1)
+    except Exception:
+        pass
     p = tf.paragraphs[0]
     p.text = text
     p.font.size = Pt(font_size)
@@ -1781,9 +1790,9 @@ def build_ppt_talking_deck(
         _ppt_add_textbox(slide, 8.1, 3.74, 4.3, 0.22, "What to do", font_size=12, bold=True, color=(17,24,39))
         _ppt_add_textbox(slide, 8.12, 3.98, 4.2, 0.72, u"• " + _ppt_clip_text(action, 170), font_size=10.5, color=(55,65,81))
 
-        _ppt_add_filled_box(slide, 8.02, 4.98, 4.45, 0.95, (248,250,252), line_rgb=(229,231,235), radius=True)
-        _ppt_add_textbox(slide, 8.24, 5.18, 4.0, 0.18, "Key observation", font_size=11.5, bold=True, color=(17,24,39))
-        _ppt_add_textbox(slide, 8.24, 5.42, 3.95, 0.36, _ppt_clip_text(observation, 165), font_size=10.2, color=(55,65,81))
+        _ppt_add_filled_box(slide, 8.02, 4.98, 4.45, 1.08, (248,250,252), line_rgb=(229,231,235), radius=True)
+        _ppt_add_textbox(slide, 8.24, 5.14, 4.0, 0.18, "Key observation", font_size=11.5, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.24, 5.38, 4.02, 0.50, _ppt_clip_text(observation, 120), font_size=9.8, color=(55,65,81))
 
         _ppt_add_textbox(slide, 0.58, 6.3, 12.0, 0.24, f"Slide {idx + 2} | EC-AI Insight", font_size=9, color=(107,114,128))
 
@@ -2065,17 +2074,32 @@ else:
 
 st.divider()
 
+def render_ai_insight_cards(ins_sections: Dict[str, List[str]]) -> None:
+    items = list(ins_sections.items())
+    rows = [items[i:i+2] for i in range(0, len(items), 2)]
+    for row in rows:
+        cols = st.columns(2, gap="small")
+        for idx, (sec_title, bullets) in enumerate(row):
+            with cols[idx]:
+                bullet_html = "".join(
+                    f"<li>{emphasize_exec_keywords_html(clean_display_text(b))}</li>"
+                    for b in bullets if clean_display_text(b)
+                )
+                st.markdown(
+                    f"""
+<div class="ec-insight-card">
+  <div class="ec-card-title">{sec_title}</div>
+  <div class="ec-insight-section">
+    <ul class="ec-insight-list">{bullet_html}</ul>
+  </div>
+</div>
+""",
+                    unsafe_allow_html=True,
+                )
+
 # AI Insights
 st.subheader("AI Insights")
-for i, (sec_title, bullets) in enumerate(ins_sections.items()):
-    st.markdown(f"#### {sec_title}")
-    for b in bullets:
-        t = clean_display_text(b)
-        if t:
-            st.markdown(f"- {emphasize_exec_keywords_html(t)}", unsafe_allow_html=True)
-    if i < len(ins_sections) - 1:
-        st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
-
+render_ai_insight_cards(ins_sections)
 
 st.divider()
 
