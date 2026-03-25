@@ -38,6 +38,10 @@ UI_TEXT = {
 def T(key: str) -> str:
     return UI_TEXT.get(key, {}).get(LANG, key)
 
+
+def L(en: str, zh: str) -> str:
+    return zh if LANG == '中文' else en
+
 # Optional: Ask AI chat
 try:
     from openai import OpenAI
@@ -265,8 +269,8 @@ h2, h3, h4 { margin-bottom: 0.35rem !important; }
 # Palette
 # =========================================================
 TABLEAU10 = [
-    "#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F",
-    "#EDC948", "#B07AA1", "#FF9DA7", "#9C755F", "#BAB0AC"
+    "#163A5F", "#2A5B84", "#3E7CA6", "#4FA3A5", "#6B7280",
+    "#94A3B8", "#CBD5E1", "#E2E8F0", "#2D4F6C", "#7AA6C2"
 ]
 
 CONSULTING_PALETTE = [
@@ -772,7 +776,7 @@ def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
     fig = bar_categorical(
         x_labels=dfp["Store"].tolist(),
         y_values=dfp["Revenue"].tolist(),
-        title="Top Revenue-Generating Stores (Top 5)",
+        title=L("Top Revenue-Generating Stores (Top 5)", "收入最高門店（前 5 名）"),
         y_title="Revenue",
         colors=colors,
         text_fmt=",.0f",
@@ -804,7 +808,7 @@ def store_small_multiples(m: RetailModel) -> Tuple[List[go.Figure], List[str]]:
                 hovertemplate="%{x|%Y-%m-%d}<br>$%{y:,.2f}<extra></extra>",
             )
         )
-        fig = apply_consulting_theme(fig, title=f"Store Trend — {store}", height=260, y_is_currency=True)
+        fig = apply_consulting_theme(fig, title=(f"門店趨勢 — {store}" if LANG=="中文" else f"Store Trend — {store}"), height=260, y_is_currency=True)
         fig.update_layout(showlegend=False)
         fig.update_xaxes(showgrid=False, tickformat="%b %d")
 
@@ -833,7 +837,7 @@ def pricing_effectiveness(m: RetailModel) -> Optional[Tuple[go.Figure, pd.DataFr
     fig = bar_categorical(
         x_labels=dfp["Discount Band"].astype(str).tolist(),
         y_values=dfp["Avg Revenue per Sale"].fillna(0).tolist(),
-        title="Pricing Effectiveness — Avg Revenue per Sale by Discount Level",
+        title=L(L("Pricing Effectiveness — Avg Revenue per Sale by Discount Level", "定價效果 — 不同折扣水平的平均每單收入"), "定價效果 — 不同折扣水平的平均每單收入"),
         y_title="Avg Revenue per Sale",
         colors=[CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)] for i in range(len(dfp))],
         text_fmt=",.0f",
@@ -853,7 +857,7 @@ def revenue_by_category(m: RetailModel, topn: int = 8) -> Optional[Tuple[go.Figu
     fig = bar_categorical(
         x_labels=dfp["Category"].tolist(),
         y_values=dfp["Revenue"].tolist(),
-        title=f"Revenue by Category (Top {len(dfp)})",
+        title=(f"收入按類別（前 {len(dfp)} 名）" if LANG=="中文" else f"Revenue by Category (Top {len(dfp)})"),
         y_title="Revenue",
         colors=colors,
         text_fmt=",.0f",
@@ -874,7 +878,7 @@ def revenue_by_channel(m: RetailModel, topn: int = 8) -> Optional[Tuple[go.Figur
     fig = bar_categorical(
         x_labels=dfp["Channel"].tolist(),
         y_values=dfp["Revenue"].tolist(),
-        title=f"Revenue by Channel (Top {len(dfp)})",
+        title=(f"收入按渠道（前 {len(dfp)} 名）" if LANG=="中文" else f"Revenue by Channel (Top {len(dfp)})"),
         y_title="Revenue",
         colors=colors,
         text_fmt=",.0f",
@@ -961,33 +965,48 @@ def build_business_summary_points(m: RetailModel) -> List[str]:
                 worst_avg = float(agg.loc[worst_band])
 
     points: List[str] = []
-    points.append(f"You have **{days} days** of data with **{len(df):,} transactions** (total revenue **{fmt_currency(total_rev)}**).")
-
-    if not np.isnan(top_store_share):
-        points.append(f"Revenue is concentrated: **{top_store}** contributes **{fmt_currency(top_store_rev)}** (about **{fmt_pct(top_store_share, 0)}** of total).")
-
-    if not np.isnan(top2_share):
-        points.append(f"The **top 2 stores** together generate **{fmt_currency(top2_rev)}** (about **{fmt_pct(top2_share, 0)}**). Small wins in these locations move the whole business.")
-
-    if top_cat is not None and not np.isnan(top_cat_share):
-        points.append(f"By category, **{top_cat}** is your largest driver: **{fmt_currency(top_cat_rev)}** (about **{fmt_pct(top_cat_share, 0)}**).")
-
-    if not np.isnan(growth):
-        if growth > 0.03:
-            points.append(f"Momentum is positive: the second half of the period delivered about **{fmt_pct(growth, 0)}** more revenue than the first half.")
-        elif growth < -0.03:
-            points.append(f"Momentum is softer: the second half of the period delivered about **{fmt_pct(growth, 0)}** less revenue than the first half.")
-        else:
-            points.append("Overall revenue looks broadly stable across the period (no major shift between first vs second half).")
-
-    if most_volatile_store is not None and not np.isnan(most_volatile_score):
-        points.append(f"Day-to-day sales are not equally predictable. **{most_volatile_store}** shows the biggest swings (variability score ≈ **{most_volatile_score:.2f}**).")
-
-    if best_band is not None and worst_band is not None:
-        points.append(f"Discounting: **{best_band}** performs best on average (**{fmt_currency(best_avg)}** per sale). Deep discount **{worst_band}** underperforms (**{fmt_currency(worst_avg)}**).")
-        points.append("Takeaway: moderate discounts tend to work better than aggressive ones — bigger discounts do not automatically lead to better results.")
-
-    points.append("Next focus: protect and improve the top stores first (availability, staffing, promotion discipline), then scale what works.")
+    if LANG == "中文":
+        points.append(f"共有 **{days} 日** 數據，**{len(df):,} 筆交易**，總收入 **{fmt_currency(total_rev)}**。")
+        if not np.isnan(top_store_share):
+            points.append(f"收入集中：**{top_store}** 貢獻 **{fmt_currency(top_store_rev)}**，約佔總收入 **{fmt_pct(top_store_share, 0)}**。")
+        if not np.isnan(top2_share):
+            points.append(f"**前兩大門店** 合共帶來 **{fmt_currency(top2_rev)}**，約佔 **{fmt_pct(top2_share, 0)}**。小幅改善已可帶動整體表現。")
+        if top_cat is not None and not np.isnan(top_cat_share):
+            points.append(f"按類別計，**{top_cat}** 是最大收入來源：**{fmt_currency(top_cat_rev)}**，約佔 **{fmt_pct(top_cat_share, 0)}**。")
+        if not np.isnan(growth):
+            if growth > 0.03:
+                points.append(f"動能向上：後半段收入比前半段高約 **{fmt_pct(growth, 0)}**。")
+            elif growth < -0.03:
+                points.append(f"動能轉弱：後半段收入比前半段低約 **{fmt_pct(abs(growth), 0)}**。")
+            else:
+                points.append("整體收入大致平穩，前後半段沒有明顯變化。")
+        if most_volatile_store is not None and not np.isnan(most_volatile_score):
+            points.append(f"日常銷售波動並不平均。**{most_volatile_store}** 波動最大，變異分數約 **{most_volatile_score:.2f}**。")
+        if best_band is not None and worst_band is not None:
+            points.append(f"折扣方面：**{best_band}** 的平均每單收入表現最好（**{fmt_currency(best_avg)}**）；**{worst_band}** 表現最弱（**{fmt_currency(worst_avg)}**）。")
+            points.append("重點：適度折扣通常比大幅折扣更有效，折扣愈大不代表結果愈好。")
+        points.append("下一步：先保護及改善頭部門店的庫存、排班與推廣執行，再把有效做法複製到其他門店。")
+    else:
+        points.append(f"You have **{days} days** of data with **{len(df):,} transactions** (total revenue **{fmt_currency(total_rev)}**).")
+        if not np.isnan(top_store_share):
+            points.append(f"Revenue is concentrated: **{top_store}** contributes **{fmt_currency(top_store_rev)}** (about **{fmt_pct(top_store_share, 0)}** of total).")
+        if not np.isnan(top2_share):
+            points.append(f"The **top 2 stores** together generate **{fmt_currency(top2_rev)}** (about **{fmt_pct(top2_share, 0)}**). Small wins in these locations move the whole business.")
+        if top_cat is not None and not np.isnan(top_cat_share):
+            points.append(f"By category, **{top_cat}** is your largest driver: **{fmt_currency(top_cat_rev)}** (about **{fmt_pct(top_cat_share, 0)}**).")
+        if not np.isnan(growth):
+            if growth > 0.03:
+                points.append(f"Momentum is positive: the second half of the period delivered about **{fmt_pct(growth, 0)}** more revenue than the first half.")
+            elif growth < -0.03:
+                points.append(f"Momentum is softer: the second half of the period delivered about **{fmt_pct(growth, 0)}** less revenue than the first half.")
+            else:
+                points.append("Overall revenue looks broadly stable across the period (no major shift between first vs second half).")
+        if most_volatile_store is not None and not np.isnan(most_volatile_score):
+            points.append(f"Day-to-day sales are not equally predictable. **{most_volatile_store}** shows the biggest swings (variability score ≈ **{most_volatile_score:.2f}**).")
+        if best_band is not None and worst_band is not None:
+            points.append(f"Discounting: **{best_band}** performs best on average (**{fmt_currency(best_avg)}** per sale). Deep discount **{worst_band}** underperforms (**{fmt_currency(worst_avg)}**).")
+            points.append("Takeaway: moderate discounts tend to work better than aggressive ones — bigger discounts do not automatically lead to better results.")
+        points.append("Next focus: protect and improve the top stores first (availability, staffing, promotion discipline), then scale what works.")
     return points[:12]
 
 
@@ -998,7 +1017,6 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
     store_rev = df.groupby(m.col_store)[m.col_revenue].sum().sort_values(ascending=False)
     top_store = str(store_rev.index[0]) if len(store_rev) else "—"
     top_store_rev = float(store_rev.iloc[0]) if len(store_rev) else np.nan
-
     top2 = store_rev.head(2)
     top2_share = float(top2.sum() / total_rev) if total_rev > 0 and len(top2) else np.nan
 
@@ -1027,8 +1045,8 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
         most_volatile_chan = str(vol_chan.index[0]) if len(vol_chan) else None
         most_volatile_chan_cv = float(vol_chan.iloc[0]["cv"]) if len(vol_chan) else np.nan
 
-    best_band = worst_band = None
-    best_avg = worst_avg = np.nan
+    best_band = None
+    best_avg = np.nan
     if m.col_discount is not None:
         tmp = df.dropna(subset=[m.col_discount]).copy()
         if len(tmp) >= 20:
@@ -1039,43 +1057,58 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
             if agg.notna().sum() >= 2:
                 best_band = str(agg.sort_values(ascending=False).index[0])
                 best_avg = float(agg.loc[best_band])
-                worst_band = str(agg.sort_values(ascending=True).index[0])
-                worst_avg = float(agg.loc[worst_band])
 
     sections: Dict[str, List[str]] = {}
-
-    money_bullets = []
-    money_bullets.append(f"Revenue is driven by a small number of key stores — **{top_store}** is #1 with **{fmt_currency(top_store_rev)}**.")
-    if not np.isnan(top2_share):
-        money_bullets.append(f"The **top 2 stores** contribute about **{fmt_pct(top2_share, 0)}** of total revenue. Improvements here have the biggest impact.")
-    if top_cat is not None:
-        money_bullets.append(f"Top category: **{top_cat}** contributes **{fmt_currency(top_cat_rev)}**.")
-    if top_channel is not None:
-        money_bullets.append(f"Top channel: **{top_channel}** contributes **{fmt_currency(top_channel_rev)}**.")
-    sections["Where the money is made"] = money_bullets
-
-    risk_bullets = []
-    if most_volatile_store is not None:
-        risk_bullets.append(f"Predictability risk: **{most_volatile_store}** has the most uneven day-to-day sales (variability score ≈ **{most_volatile_cv:.2f}**).")
-    if most_volatile_chan is not None:
-        risk_bullets.append(f"Channel stability matters too — **{most_volatile_chan}** is the most volatile channel (variability score ≈ **{most_volatile_chan_cv:.2f}**).")
-    risk_bullets.append("Concentration risk: when most revenue comes from a few stores, execution slips in those locations hit the whole business.")
-    sections["Where risk exists"] = risk_bullets
-
-    improve_bullets = []
-    if best_band is not None and worst_band is not None:
-        improve_bullets.append(f"Discount discipline: **{best_band}** delivers the best average revenue per sale (**{fmt_currency(best_avg)}**). Deep discount **{worst_band}** underperforms (**{fmt_currency(worst_avg)}**).")
-        improve_bullets.append("Takeaway: moderate discounts tend to perform better than aggressive ones — bigger discounts do not automatically lead to better results.")
+    if LANG == "中文":
+        sections["收入來源"] = [
+            f"收入主要由少數門店帶動 — **{top_store}** 排名第一，收入 **{fmt_currency(top_store_rev)}**。",
+            *( [f"**前兩大門店** 合共貢獻約 **{fmt_pct(top2_share, 0)}** 收入，改善這兩間門店最能帶動整體表現。"] if not np.isnan(top2_share) else [] ),
+            *( [f"最大類別：**{top_cat}**，收入 **{fmt_currency(top_cat_rev)}**。"] if top_cat is not None else [] ),
+            *( [f"主要渠道：**{top_channel}**，收入 **{fmt_currency(top_channel_rev)}**。"] if top_channel is not None else [] ),
+        ]
+        risk = []
+        if most_volatile_store is not None:
+            risk.append(f"穩定性風險：**{most_volatile_store}** 日常銷售最不穩定，變異分數約 **{most_volatile_cv:.2f}**。")
+        if most_volatile_chan is not None:
+            risk.append(f"渠道波動亦值得留意 — **{most_volatile_chan}** 是最波動的渠道，變異分數約 **{most_volatile_chan_cv:.2f}**。")
+        risk.append("集中風險：若收入過度依賴少數門店，該等門店一旦執行失準，整體業務都會受影響。")
+        sections["風險所在"] = risk
+        improve = []
+        if best_band is not None:
+            improve.append(f"折扣策略：**{best_band}** 的平均每單收入最好，約 **{fmt_currency(best_avg)}**。")
+            improve.append("重點：適度折扣通常比大幅折扣更有效，折扣愈大未必帶來更好結果。")
+        improve.append("頭部門店應先做好基本功：庫存、排班及推廣執行。")
+        sections["可改善之處"] = improve
+        sections["下一步重點"] = [
+            f"先在頭部門店（尤其 **{top_store}**）建立簡單有效的營運打法，再複製到其他門店。",
+            "先處理波動，再追求增長 — 穩定通常來自營運，而不是更多推廣。",
+        ]
     else:
-        improve_bullets.append("Discounting works best when treated as an experiment (clear target + measure the lift), not a default habit.")
-    improve_bullets.append("In top stores, focus on fundamentals first: inventory, staffing, and promotion discipline.")
-    sections["What can be improved"] = improve_bullets
-
-    next_bullets = []
-    next_bullets.append(f"Run a simple playbook on the top stores (starting with **{top_store}**) and scale what works.")
-    next_bullets.append("Fix volatility before chasing growth — stability usually comes from operations, not more campaigns.")
-    sections["What to focus on next"] = next_bullets
-
+        money = [f"Revenue is driven by a small number of key stores — **{top_store}** is #1 with **{fmt_currency(top_store_rev)}**."]
+        if not np.isnan(top2_share):
+            money.append(f"The **top 2 stores** contribute about **{fmt_pct(top2_share, 0)}** of total revenue. Improvements here have the biggest impact.")
+        if top_cat is not None:
+            money.append(f"Top category: **{top_cat}** contributes **{fmt_currency(top_cat_rev)}**.")
+        if top_channel is not None:
+            money.append(f"Top channel: **{top_channel}** contributes **{fmt_currency(top_channel_rev)}**.")
+        sections["Where the money is made"] = money
+        risk = []
+        if most_volatile_store is not None:
+            risk.append(f"Predictability risk: **{most_volatile_store}** has the most uneven day-to-day sales (variability score ≈ **{most_volatile_cv:.2f}**).")
+        if most_volatile_chan is not None:
+            risk.append(f"Channel stability matters too — **{most_volatile_chan}** is the most volatile channel (variability score ≈ **{most_volatile_chan_cv:.2f}**).")
+        risk.append("Concentration risk: when most revenue comes from a few stores, execution slips in those locations hit the whole business.")
+        sections["Where risk exists"] = risk
+        improve = []
+        if best_band is not None:
+            improve.append(f"Discount discipline: **{best_band}** delivers the best average revenue per sale **{fmt_currency(best_avg)}**.")
+            improve.append("Takeaway: moderate discounts tend to perform better than aggressive ones — bigger discounts do not automatically lead to better results.")
+        improve.append("In top stores, focus on fundamentals first: inventory, staffing, and promotion discipline.")
+        sections["What can be improved"] = improve
+        sections["What to focus on next"] = [
+            f"Run a simple playbook on the top stores starting with **{top_store}** and scale what works.",
+            "Fix volatility before chasing growth — stability usually comes from operations, not more campaigns.",
+        ]
     return sections
 
 
@@ -1596,69 +1629,51 @@ Available columns: {', '.join(map(str, df.columns))}
 def answer_question_with_openai(question: str, context: str) -> str:
     api_key = get_api_key()
     if not api_key:
-        return "OpenAI API key not configured. Add OPENAI_API_KEY in Streamlit secrets."
+        return L("OpenAI API key not configured. Add OPENAI_API_KEY in Streamlit secrets.", "未設定 OpenAI API key，請在 Streamlit secrets 加入 OPENAI_API_KEY。")
     if OpenAI is None:
-        return "OpenAI SDK not installed. Add 'openai' to requirements.txt."
+        return L("OpenAI SDK not installed. Add 'openai' to requirements.txt.", "未安裝 OpenAI SDK，請在 requirements.txt 加入 openai。")
 
     q = (question or "").strip()
     if not q:
-        return "Please enter a question."
+        return L("Please enter a question.", "請先輸入問題。")
 
     q_lower = q.lower()
-    if any(k in q_lower for k in ["how can i improve", "improve my business", "top 3", "three actions", "management action", "management actions", "what should management", "focus on next"]):
-        answer_style = "Use simple business language. Start with one short direct answer. Then show exactly 3 numbered actions. Each action should have one short reason with a real number from the dataset. Keep sentences short and easy to scan. Avoid academic words and avoid the headings Key Insight, Business Meaning, or Recommended Action."
-    elif any(k in q_lower for k in ["why", "explain", "what explains", "driver", "drivers", "underperforming"]):
-        answer_style = "Use simple business language. Start with the direct answer in 1-2 sentences, then add 2-3 bullets with plain-English evidence. Avoid jargon and repetitive template headings."
-    elif any(k in q_lower for k in ["which", "compare", "better", "worse", "largest", "smallest"]):
-        answer_style = "Give the answer first in one sentence, then show the comparison using the most relevant numbers. Keep words short and clear."
+    if LANG == "中文":
+        base_style = "請用繁體中文回答，語氣要簡單、直接、像香港中小企老闆看得明的管理建議。避免學術語氣，避免太多術語。所有答案都要用短句。若適合，先給一句直接答案，再用2至3點重點，最後列出管理層應做的事。務必引用數字。"
+        if any(k in q_lower for k in ["how can i improve", "improve my business", "top 3", "three actions", "management action", "management actions", "what should management", "focus on next"]):
+            answer_style = "先用一句話直接回答，然後列出剛好3個管理行動。每個行動下面只用一句原因，並引用一個實際數字。"
+        elif any(k in q_lower for k in ["why", "explain", "what explains", "driver", "drivers", "underperforming"]):
+            answer_style = "先直接說答案，再用2至3點列出證據。不要用學術語言。"
+        else:
+            answer_style = "用簡單管理語言回答，短句、易讀、可執行。"
     else:
-        answer_style = "Answer in a simple, human, executive tone. Use short sentences, easy words, and up to 3 bullets if helpful. Do not sound academic."
+        base_style = "Answer in simple, clear business English for a non-technical CEO. Use short sentences and real numbers from the dataset."
+        if any(k in q_lower for k in ["how can i improve", "improve my business", "top 3", "three actions", "management action", "management actions", "what should management", "focus on next"]):
+            answer_style = "Use simple business language. Start with one short direct answer. Then show exactly 3 numbered actions. Each action should have one short reason with a real number from the dataset. Keep sentences short and easy to scan. Avoid academic words and avoid the headings Key Insight, Business Meaning, or Recommended Action."
+        elif any(k in q_lower for k in ["why", "explain", "what explains", "driver", "drivers", "underperforming"]):
+            answer_style = "Use simple business language. Start with the direct answer in 1-2 sentences, then add 2-3 bullets with plain-English evidence. Avoid jargon and repetitive template headings."
+        elif any(k in q_lower for k in ["which", "compare", "better", "worse", "largest", "smallest"]):
+            answer_style = "Give the answer first in one sentence, then show the comparison using the most relevant numbers. Keep words short and clear."
+        else:
+            answer_style = "Answer in a simple, human, executive tone. Use short sentences, easy words, and practical management language."
 
     try:
         client = OpenAI(api_key=api_key)
-        user = f"""Question:
-{q}
-
-Instructions:
-- Answer using ONLY the dataset facts in the system context.
-- Always reference actual numbers ($, %, dates) from the context when relevant.
-- Sound like a sharp business adviser, but use simple words that a non-technical CEO can digest quickly.
-- {answer_style}
-- Keep the answer easy to scan.
-- If the context lacks required info, say what is missing.
-- Never invent numbers or drivers not present in the context."""
+        system = (context or "").strip() + "\n\n" + base_style
+        user = f"Question:\n{q}\n\nInstructions:\n- Answer using ONLY the dataset facts in the system context.\n- Always cite numbers ($, %, dates) from the context when relevant.\n- If the context lacks required info, say what is missing (which column/metric).\n- {answer_style}"
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0.2,
             max_tokens=420,
             messages=[
-                {"role": "system", "content": context.strip()},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         )
         response_text = (resp.choices[0].message.content or "").strip()
-        return response_text or "No response."
+        return response_text or L("No response.", "沒有回應。")
     except Exception as e:
         return f"Ask AI error: {e}"
-
-
-def emphasize_ai_answer_markdown(text: str) -> str:
-    if not text:
-        return text or ""
-    text = re.sub(r"(\$[0-9,.]+[KMB]?)", r"**\1**", text)
-    text = re.sub(r"(\d+\.?\d*%)", r"**\1**", text)
-    text = re.sub(r"((HK|SG|JP|CN)-[A-Za-z0-9]+)", r"**\1**", text)
-    text = re.sub(r"(0–2%|2–5%|5–10%|10–20%|20%\+)", r"**\1**", text)
-    text = re.sub(r"^(What we found|What management should do|Short answer)\s*$", r"**\1**", text, flags=re.M)
-    return text
-
-
-def render_structured_ai_answer(answer: str) -> None:
-    st.markdown("<div class='ec-ai-answer'>", unsafe_allow_html=True)
-    cleaned = (answer or "").strip()
-    cleaned = emphasize_ai_answer_markdown(cleaned)
-    st.markdown(cleaned if cleaned else "No answer returned.")
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # =========================================================
@@ -1867,7 +1882,7 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
         return fallback_note if fig is None else normal_note
 
     fig_trend_raw = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
-    fig_trend = apply_consulting_theme(fig_trend_raw, title="Revenue Trend (Daily)", height=320, y_is_currency=True)
+    fig_trend = apply_consulting_theme(fig_trend_raw, title=L("Revenue Trend (Daily)", "收入趨勢（每日）"), height=320, y_is_currency=True)
 
     fig_topstores_raw, df_top = top5_stores_bar(m)
     fig_topstores = apply_consulting_theme(fig_topstores_raw, title="Top Stores (Top 5)", height=320, y_is_currency=True)
@@ -1889,11 +1904,11 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
     with r1[0]:
         with st.container(border=True):
             st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
-            _dash_note("Protect **momentum**; investigate spikes and dips.")
+            _dash_note(L("Protect **momentum**; investigate spikes and dips.", "保護**動能**；留意高低波動。"))
     with r1[1]:
         with st.container(border=True):
             st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
-            _dash_note(f"Revenue is concentrated — prioritise **{top_store}** and top drivers.")
+            _dash_note(L(f"Revenue is concentrated — prioritise **{top_store}** and top drivers.", f"收入集中 — 優先處理 **{top_store}** 及主要收入來源。"))
     with r1[2]:
         with st.container(border=True):
             st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
@@ -1942,7 +1957,7 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
 # =========================================================
 # Main app
 # =========================================================
-st.title("EC-AI Insight")
+st.title(L("EC-AI Insight", "EC-AI 智能分析"))
 st.markdown("<div class='ec-kicker'>Sales performance, explained clearly.</div>", unsafe_allow_html=True)
 st.markdown(
     "<div class='ec-subtle'>Upload your sales data and get a short business briefing — what’s working, what’s risky, and where to focus next.</div>",
@@ -1952,26 +1967,26 @@ st.divider()
 
 with st.sidebar:
     LANG = st.selectbox(T("Language / 語言"), ["English", "中文"], index=0)
-    st.header("Data Source" if LANG == "English" else "資料來源")
+    st.header(L("Data Source", "資料來源"))
     if "use_demo_dataset" not in st.session_state:
         st.session_state.use_demo_dataset = False
 
-    up = st.file_uploader("Upload CSV", type=["csv"])
+    up = st.file_uploader(L("Upload CSV", "上傳 CSV"), type=["csv"])
     if up is not None:
         st.session_state.use_demo_dataset = False
 
-    if st.button("🚀 Try Demo Dataset (Retail Fashion, HK)", use_container_width=True):
+    if st.button(L("🚀 Try Demo Dataset (Retail Fashion, HK)", "🚀 使用示範數據（香港零售時裝）"), use_container_width=True):
         st.session_state.use_demo_dataset = True
 
     if st.session_state.use_demo_dataset:
-        st.caption("Using built-in demo retail dataset.")
+        st.caption(L("Using built-in demo retail dataset.", "正在使用內置零售示範數據。"))
     else:
         st.caption("Tip: first load on Streamlit Cloud may take 30–60 seconds if the app was asleep.")
 
-    st.header("Exports")
-    export_scale = st.slider("Export image scale", min_value=1, max_value=3, value=2, help="Higher = clearer charts, but slower exports.")
+    st.header(L("Exports", "匯出"))
+    export_scale = st.slider(L("Export image scale", "匯出圖像清晰度"), min_value=1, max_value=3, value=2, help=L("Higher = clearer charts, but slower exports.", "數值越高，圖像越清晰，但匯出會較慢。"))
 
-    st.header("Diagnostics")
+    st.header(L("Diagnostics", "診斷資訊"))
     try:
         import plotly
         import importlib.util
@@ -2043,9 +2058,9 @@ st.subheader(T("Charts & Insights"))
 fig_trend = line_trend(df, m.col_date, m.col_revenue, "Revenue Trend (Daily)")
 render_chart_with_commentary(
     fig_trend,
-    what_points=["Overall revenue direction over time (daily total)."],
-    why_points=["Sets the context: growth vs stability.", "Helps spot spikes that may come from promotions or one-off events."],
-    todo_points=["If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully."],
+    what_points=[L("Overall revenue direction over time (daily total).", "顯示每日總收入的整體走勢。")],
+    why_points=[L("Sets the context: growth vs stability.", "幫你判斷是增長還是平穩。"), L("Helps spot spikes that may come from promotions or one-off events.", "有助找出推廣或一次性事件帶來的高低波動。")],
+    todo_points=[L("If the trend is flat, focus on execution and mix. If it’s rising, protect top drivers and scale carefully.", "如果走勢平穩，就先改善執行與產品組合；如果正在上升，就保護主要增長來源並小心擴張。")],
     boxed_commentary=True,
 )
 
@@ -2055,13 +2070,13 @@ top_store_name = df_topstores.iloc[0]["Store"] if len(df_topstores) else "Top st
 render_chart_with_commentary(
     fig_topstores,
     what_points=[f"Revenue is concentrated in a small number of stores, led by **{top_store_name}**."],
-    why_points=["Top stores disproportionately drive outcomes.", "Operational issues in one key store can move the whole month."],
-    todo_points=["Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere."],
+    why_points=[L("Top stores disproportionately drive outcomes.", "頭部門店對整體表現影響最大。"), L("Operational issues in one key store can move the whole month.", "只要一間核心門店出現營運問題，整個月表現都可能受影響。")],
+    todo_points=[L("Prioritise stock availability, staffing, and execution in the top stores before expanding elsewhere.", "在擴張之前，先把頭部門店的庫存、排班及執行做好。")],
     boxed_commentary=True,
 )
 
 # 3) Store stability
-st.markdown("### Store Stability (Top 5)")
+st.markdown(f"### {L('Store Stability (Top 5)', '門店穩定性（前 5 名）')}")
 figs, store_names = store_small_multiples(m)
 cols = st.columns(2)
 for i, fig in enumerate(figs):
@@ -2069,9 +2084,9 @@ for i, fig in enumerate(figs):
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 render_insight_card(
-    what_points=["Some stores are steady while others swing day-to-day."],
-    why_points=["Volatility makes forecasting and inventory planning harder.", "Stability is often execution rather than market demand."],
-    todo_points=["Fix volatility first (availability, staffing, promotion timing). Use stable stores as benchmarks for best practices."],
+    what_points=[L("Some stores are steady while others swing day-to-day.", "有些門店表現穩定，有些則每天波動很大。")],
+    why_points=[L("Volatility makes forecasting and inventory planning harder.", "波動太大會令預測及庫存計劃更困難。"), L("Stability is often execution rather than market demand.", "穩定性通常來自營運執行，而不只是市場需求。")],
+    todo_points=[L("Fix volatility first (availability, staffing, promotion timing). Use stable stores as benchmarks for best practices.", "先處理波動問題（庫存、排班、推廣時點），並以穩定門店作為最佳做法樣板。")],
 )
 
 # 4) Pricing Effectiveness
@@ -2080,13 +2095,13 @@ if pe is not None:
     fig_price, df_price = pe
     render_chart_with_commentary(
         fig_price,
-        what_points=["Moderate discounts often perform better than aggressive discounting."],
-        why_points=["Large discounts can erode revenue quality without improving outcomes.", "Pricing discipline is a repeatable advantage."],
-        todo_points=["Use small discounts as default. Treat deep discounts as experiments with clear goals and limits."],
+        what_points=[L("Moderate discounts often perform better than aggressive discounting.", "適度折扣通常比大幅折扣表現更好。")],
+        why_points=[L("Large discounts can erode revenue quality without improving outcomes.", "大折扣可能拉低收入質素，卻未必改善結果。"), L("Pricing discipline is a repeatable advantage.", "有紀律的定價策略是可複製的優勢。")],
+        todo_points=[L("Use small discounts as default. Treat deep discounts as experiments with clear goals and limits.", "以小折扣作為基本策略；大折扣只應在有清晰目標與限制下測試。")],
         boxed_commentary=True,
     )
 else:
-    st.info("Pricing Effectiveness is unavailable (no usable discount column found).")
+    st.info(L("Pricing Effectiveness is unavailable (no usable discount column found).", "未能顯示定價效果（找不到可用的折扣欄位）。"))
 
 # 5) Revenue by Category
 cat = revenue_by_category(m, topn=8)
@@ -2094,13 +2109,13 @@ if cat is not None:
     fig_cat, _ = cat
     render_chart_with_commentary(
         fig_cat,
-        what_points=["A few categories typically drive most revenue."],
-        why_points=["Category mix often matters more than SKU count.", "Weak categories can drag overall performance."],
-        todo_points=["Double down on winner categories (stock depth, placement). Review whether weak categories need repositioning or removal."],
+        what_points=[L("A few categories typically drive most revenue.", "通常只有少數類別帶動大部分收入。")],
+        why_points=[L("Category mix often matters more than SKU count.", "類別組合往往比 SKU 數量更重要。"), L("Weak categories can drag overall performance.", "弱勢類別會拖慢整體表現。")],
+        todo_points=[L("Double down on winner categories (stock depth, placement). Review whether weak categories need repositioning or removal.", "加強贏家類別的庫存深度與陳列，同時檢視弱勢類別是否需要重新定位或淘汰。")],
         boxed_commentary=True,
     )
 else:
-    st.info("Category Mix is unavailable (no usable category column found).")
+    st.info(L("Category Mix is unavailable (no usable category column found).", "未能顯示類別組合（找不到可用的類別欄位）。"))
 
 # 6) Revenue by Channel
 ch = revenue_by_channel(m, topn=8)
@@ -2108,13 +2123,13 @@ if ch is not None:
     fig_ch, _ = ch
     render_chart_with_commentary(
         fig_ch,
-        what_points=["Channels contribute very differently to revenue."],
-        why_points=["Scaling the right channel can be cheaper than opening new stores.", "Channel concentration adds risk if one channel weakens."],
-        todo_points=["Invest more in high-performing channels. Fix or rethink consistently weak channels."],
+        what_points=[L("Channels contribute very differently to revenue.", "不同渠道對收入的貢獻差異很大。")],
+        why_points=[L("Scaling the right channel can be cheaper than opening new stores.", "把資源放在正確渠道，成本可能比開新店更低。"), L("Channel concentration adds risk if one channel weakens.", "若收入集中於單一渠道，一旦轉弱便會帶來風險。")],
+        todo_points=[L("Invest more in high-performing channels. Fix or rethink consistently weak channels.", "把更多資源投放在高表現渠道；長期弱勢渠道則要改善或重新思考定位。")],
         boxed_commentary=True,
     )
 else:
-    st.info("Channels view is unavailable (no usable channel column found).")
+    st.info(L("Channels view is unavailable (no usable channel column found).", "未能顯示渠道分析（找不到可用的渠道欄位）。"))
 
 st.divider()
 
@@ -2148,8 +2163,8 @@ render_ai_insight_cards(ins_sections)
 st.divider()
 
 # Advanced analytics
-with st.expander("Advanced analytics (optional)", expanded=False):
-    st.caption("Optional deeper diagnostics for power users. Collapsed by default to keep the UI executive-clean.")
+with st.expander(L("Advanced analytics (optional)", "進階分析（可選）"), expanded=False):
+    st.caption(L("Optional deeper diagnostics for power users. Collapsed by default to keep the UI executive-clean.", "提供進一步診斷分析，預設收起以保持版面簡潔。"))
     try:
         num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
         if len(num_cols) >= 2:
@@ -2163,10 +2178,10 @@ with st.expander("Advanced analytics (optional)", expanded=False):
                     .reset_index()
                     .rename(columns={"index": "Metric", m.col_revenue: "Correlation"})
                 )
-                st.markdown("**Top correlations with Revenue (directional)**")
+                st.markdown(f"**{L('Top correlations with Revenue (directional)', '與收入最相關的指標（方向性）')}**")
                 st.dataframe(top_corr, use_container_width=True, hide_index=True)
 
-            st.markdown("**Correlation heatmap (numeric metrics)**")
+            st.markdown(f"**{L('Correlation heatmap (numeric metrics)', '相關系數熱力圖（數值指標）')}**")
             fig_corr = px.imshow(
                 corr.round(2),
                 text_auto=".2f",
@@ -2177,13 +2192,13 @@ with st.expander("Advanced analytics (optional)", expanded=False):
             fig_corr.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=420)
             st.plotly_chart(fig_corr, use_container_width=True, config={"displayModeBar": False})
         else:
-            st.info("Not enough numeric columns to compute correlations.")
+            st.info(L("Not enough numeric columns to compute correlations.", "沒有足夠數值欄位可計算相關性。"))
     except Exception as e:
         st.warning(f"Advanced analytics unavailable: {e}")
 
 # Ask AI
 st.subheader(T("Ask AI (CEO Q&A)"))
-st.caption("Ask questions about your data (for example: Why did revenue soften? Which store should I fix first?)")
+st.caption(L("Ask questions about your data (for example: Why did revenue soften? Which store should I fix first?)", "就你的數據發問（例如：為何收入轉弱？應先改善哪一間門店？）"))
 
 _context_lines: List[str] = []
 try:
@@ -2213,18 +2228,18 @@ if "ask_ai_history" not in st.session_state:
 if "ask_ai_question" not in st.session_state:
     st.session_state.ask_ai_question = ""
 
-st.markdown("**Suggested Questions**")
+st.markdown(f"**{L('Suggested Questions', '建議問題')}**")
 selected_question = None
 sq1, sq2, sq3 = st.columns(3)
 with sq1:
-    if st.button("Which store should I fix first?", use_container_width=True):
-        selected_question = "Which store should I fix first and why?"
+    if st.button(L("Which store should I fix first?", "我應先改善哪一間門店？"), use_container_width=True):
+        selected_question = L("Which store should I fix first and why?", "我應先改善哪一間門店？原因是什麼？")
 with sq2:
-    if st.button("Is discounting helping or hurting?", use_container_width=True):
-        selected_question = "Is discounting helping or hurting revenue quality?"
+    if st.button(L("Is discounting helping or hurting?", "折扣是在幫忙還是在拖累表現？"), use_container_width=True):
+        selected_question = L("Is discounting helping or hurting revenue quality?", "折扣對收入質素是幫助還是傷害？")
 with sq3:
-    if st.button("What should management do next?", use_container_width=True):
-        selected_question = "What should management focus on next based on this dataset?"
+    if st.button(L("What should management do next?", "管理層下一步應做什麼？"), use_container_width=True):
+        selected_question = L("What should management focus on next based on this dataset?", "根據這份數據，管理層下一步應重點做什麼？")
 
 if selected_question:
     st.session_state.ask_ai_question = selected_question
@@ -2232,17 +2247,17 @@ if selected_question:
 q_col, btn_col = st.columns([0.82, 0.18])
 with q_col:
     user_q = st.text_input(
-        "Ask EC-AI…",
+        L("Ask EC-AI…", "向 EC-AI 發問…"),
         value=st.session_state.get("ask_ai_question", ""),
         key="ask_ai_question_input",
-        placeholder="E.g., What should I focus on next week?",
+        placeholder=L("E.g., What should I focus on next week?", "例如：我下星期應重點做什麼？"),
     )
 with btn_col:
-    ask_clicked = st.button("Ask", use_container_width=True)
+    ask_clicked = st.button(L("Ask", "提問"), use_container_width=True)
 
 run_question = selected_question or (user_q.strip() if ask_clicked and user_q.strip() else "")
 if run_question:
-    with st.spinner("Thinking…"):
+    with st.spinner(L("Thinking…", "思考中…")):
         answer = answer_question_with_openai(run_question, context_text)
     st.session_state.ask_ai_question = run_question
     st.session_state.ask_ai_history.insert(0, (run_question, answer))
@@ -2262,13 +2277,13 @@ st.divider()
 
 # Export pack
 st.subheader(T("Export Executive Pack"))
-st.caption("Download a shareable executive-ready brief (PDF) or slide pack (PPTX).")
+st.caption(L("Download a shareable executive-ready brief (PDF) or slide pack (PPTX).", "下載可分享的管理層摘要（PDF）或投影片（PPTX）。"))
 
 chart_items: List[Tuple[str, go.Figure, str]] = []
 
 try:
     chart_items.append((
-        "Revenue Trend (Daily)",
+        L("Revenue Trend (Daily)", "收入趨勢（每日）"),
         fig_trend,
         "Trend line of daily revenue.\nUse this to spot spikes and dips and protect momentum."
     ))
@@ -2277,7 +2292,7 @@ except Exception:
 
 try:
     chart_items.append((
-        "Top Revenue-Generating Stores (Top 5)",
+        L("Top Revenue-Generating Stores (Top 5)", "收入最高門店（前 5 名）"),
         fig_topstores,
         "Revenue concentration by store.\nPrioritise execution in the top stores first."
     ))
@@ -2287,7 +2302,7 @@ except Exception:
 try:
     if pe is not None:
         chart_items.append((
-            "Pricing Effectiveness — Avg Revenue per Sale by Discount Level",
+            L("Pricing Effectiveness — Avg Revenue per Sale by Discount Level", "定價效果 — 不同折扣水平的平均每單收入"),
             fig_price,
             "Compares average revenue per sale across discount levels.\nUse moderate discounts by default; treat deep discounts as controlled tests."
         ))
@@ -2297,7 +2312,7 @@ except Exception:
 try:
     if cat is not None:
         chart_items.append((
-            "Revenue by Category",
+            L("Revenue by Category", "按類別收入"),
             fig_cat,
             "Shows which categories drive revenue.\nDouble down on winners; fix or trim weak categories."
         ))
@@ -2307,7 +2322,7 @@ except Exception:
 try:
     if ch is not None:
         chart_items.append((
-            "Revenue by Channel",
+            L("Revenue by Channel", "按渠道收入"),
             fig_ch,
             "Channel contribution to revenue.\nReallocate effort to channels that consistently perform."
         ))
@@ -2317,18 +2332,18 @@ except Exception:
 c1, c2 = st.columns(2)
 
 with c1:
-    if st.button("Generate PDF Executive Brief", use_container_width=True):
+    if st.button(L("Generate PDF Executive Brief", "產生 PDF 管理摘要"), use_container_width=True):
         try:
             pdf_bytes = build_pdf_exec_brief(
                 title="EC-AI Insight — Executive Brief",
-                subtitle="Sales performance, explained clearly.",
+                subtitle=L("Sales performance, explained clearly.", "把銷售表現講清楚。"),
                 summary_points=summary_points,
                 chart_items=chart_items,
             )
             st.download_button(
-                "Download PDF",
+                L("Download PDF", "下載 PDF"),
                 data=pdf_bytes,
-                file_name="ecai_executive_brief.pdf",
+                file_name=("ecai_executive_brief_zh.pdf" if LANG=="中文" else "ecai_executive_brief.pdf"),
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -2336,18 +2351,18 @@ with c1:
             st.error(f"PDF generation failed: {e}")
 
 with c2:
-    if st.button("Generate Executive Pack (PPTX)", use_container_width=True):
+    if st.button(L("Generate Executive Pack (PPTX)", "產生管理層簡報（PPTX）"), use_container_width=True):
         try:
             pptx_bytes = build_ppt_talking_deck(
-                deck_title="EC-AI Insight — Executive Pack",
+                deck_title=L("EC-AI Insight — Executive Pack", "EC-AI 智能分析 — 管理簡報"),
                 chart_items=chart_items,
                 summary_points=summary_points,
                 exec_cards=exec_cards,
             )
             st.download_button(
-                "Download PPTX",
+                L("Download PPTX", "下載 PPTX"),
                 data=pptx_bytes,
-                file_name="ecai_executive_pack.pptx",
+                file_name=("ecai_executive_pack_zh.pptx" if LANG=="中文" else "ecai_executive_pack.pptx"),
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 use_container_width=True,
             )
