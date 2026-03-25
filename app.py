@@ -65,6 +65,8 @@ try:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
     from reportlab.lib.enums import TA_LEFT
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
     PDF_AVAILABLE = True
 except Exception:
     PDF_AVAILABLE = False
@@ -1004,7 +1006,7 @@ def build_business_summary_points(m: RetailModel) -> List[str]:
         if most_volatile_store is not None and not np.isnan(most_volatile_score):
             points.append(f"**{most_volatile_store}** has the most unstable day-to-day sales pattern, with bigger ups and downs than other stores.")
         if best_band is not None and worst_band is not None:
-            points.append(f"Discounting: **{best_band}** brings the highest revenue per order (**{fmt_currency(best_avg)}**). Deep discount **{worst_band}** performs worst (**{fmt_currency(worst_avg)}**).")
+            points.append(f"The **{best_band}** discount range brings the highest revenue at **{fmt_currency(best_avg)}** per order. Deep discount **{worst_band}** performs worst at **{fmt_currency(worst_avg)}** per order.")
             points.append("Takeaway: moderate discounts tend to work better than aggressive ones — bigger discounts do not automatically lead to better results.")
         points.append("Next focus: protect and improve the top stores first (availability, staffing, promotion discipline), then scale what works.")
     return points[:12]
@@ -1094,14 +1096,14 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
         sections["Where the money is made"] = money
         risk = []
         if most_volatile_store is not None:
-            risk.append(L(f"Predictability risk: **{most_volatile_store}** has the most unstable day-to-day sales pattern.", f"穩定性風險：**{most_volatile_store}** 的日常銷售最不穩定。"))
+            risk.append(L(f"Predictability risk: **{most_volatile_store}** has the least stable day-to-day sales pattern.", f"穩定性風險：**{most_volatile_store}** 的日常銷售最不穩定。"))
         if most_volatile_chan is not None:
             risk.append(L(f"Channel stability matters too — **{most_volatile_chan}** is the least stable channel.", f"渠道穩定性同樣重要 —— **{most_volatile_chan}** 是最不穩定的渠道。"))
         risk.append("Concentration risk: when most revenue comes from a few stores, execution slips in those locations hit the whole business.")
         sections["Where risk exists"] = risk
         improve = []
         if best_band is not None:
-            improve.append(f"Discount discipline: **{best_band}** delivers the best average revenue per sale **{fmt_currency(best_avg)}**.")
+            improve.append(f"The **{best_band}** discount range brings the highest revenue at **{fmt_currency(best_avg)}** per order.")
             improve.append("Takeaway: moderate discounts tend to perform better than aggressive ones — bigger discounts do not automatically lead to better results.")
         improve.append("In top stores, focus on fundamentals first: inventory, staffing, and promotion discipline.")
         sections["What can be improved"] = improve
@@ -1200,8 +1202,8 @@ def detect_insights(m: RetailModel) -> List[Dict[str, object]]:
                 "priority": 3,
                 "headline": f"{store} has unstable sales.",
                 "evidence": [
-                    f"{store} has the highest variability score in the dataset.",
-                    f"Volatility score is about {score:.2f}.",
+                    f"{store} has the least stable day-to-day sales pattern in the dataset.",
+                    f"Sales there move up and down more than other stores.",
                 ],
             })
 
@@ -1713,9 +1715,18 @@ def build_pdf_exec_brief(
         bottomMargin=0.7 * inch,
     )
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="ECBody", parent=styles["BodyText"], fontSize=11, leading=13, textColor="#374151"))
-    styles.add(ParagraphStyle(name="ECTitle", parent=styles["Title"], fontSize=20, leading=22, alignment=TA_LEFT, textColor="#163A5F"))
-    styles.add(ParagraphStyle(name="ECSub", parent=styles["BodyText"], fontSize=12, leading=14, textColor="#4B5563"))
+    cjk_font = None
+    if LANG == "中文":
+        try:
+            pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+            cjk_font = "STSong-Light"
+        except Exception:
+            cjk_font = None
+    body_font = cjk_font or "Helvetica"
+    title_font = cjk_font or "Helvetica-Bold"
+    styles.add(ParagraphStyle(name="ECBody", parent=styles["BodyText"], fontName=body_font, fontSize=11, leading=13, textColor="#374151"))
+    styles.add(ParagraphStyle(name="ECTitle", parent=styles["Title"], fontName=title_font, fontSize=20, leading=22, alignment=TA_LEFT, textColor="#163A5F"))
+    styles.add(ParagraphStyle(name="ECSub", parent=styles["BodyText"], fontName=body_font, fontSize=12, leading=14, textColor="#4B5563"))
 
     story = []
     story.append(Paragraph(title, styles["ECTitle"]))
@@ -1772,6 +1783,10 @@ def _ppt_add_textbox(slide, left, top, width, height, text, font_size=18, bold=F
     p.font.size = Pt(font_size)
     p.font.bold = bold
     p.font.color.rgb = RGBColor(*color)
+    try:
+        p.font.name = "Microsoft JhengHei" if LANG == "中文" else "Aptos"
+    except Exception:
+        pass
     try:
         p.space_after = Pt(2)
         p.space_before = Pt(0)
@@ -1848,27 +1863,27 @@ def build_ppt_talking_deck(
         observation = raw_lines[3] if len(raw_lines) > 3 else "Identify the main driver, any spikes, and the key management lever."
 
         _ppt_add_filled_box(slide, 0.55, 0.82, 12.1, 0.52, (243,244,246), line_rgb=(229,231,235), radius=True)
-        _ppt_add_textbox(slide, 0.72, 0.98, 11.8, 0.2, f"Headline takeaway: {_ppt_clip_text(what, 135)}", font_size=11.5, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 0.72, 0.98, 11.8, 0.2, f"{L("Headline takeaway", "頁面重點")}: {_ppt_clip_text(what, 135)}", font_size=11.5, bold=True, color=(17,24,39))
 
         png = fig_to_png_bytes(fig, scale=2)
         img_stream = io.BytesIO(png)
         slide.shapes.add_picture(img_stream, Inches(0.55), Inches(1.55), width=Inches(7.0), height=Inches(4.5))
 
         _ppt_add_filled_box(slide, 7.85, 1.55, 4.85, 4.75, (255,255,255), line_rgb=(229,231,235), radius=True)
-        _ppt_add_textbox(slide, 8.1, 1.78, 4.3, 0.22, "What this shows", font_size=12, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.1, 1.78, 4.3, 0.22, L("What this shows", "這張圖顯示什麼"), font_size=12, bold=True, color=(17,24,39))
         _ppt_add_textbox(slide, 8.12, 2.02, 4.2, 0.58, u"• " + _ppt_clip_text(what, 145), font_size=10.5, color=(55,65,81))
 
-        _ppt_add_textbox(slide, 8.1, 2.68, 4.3, 0.22, "Why it matters", font_size=12, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.1, 2.68, 4.3, 0.22, L("Why it matters", "為什麼重要"), font_size=12, bold=True, color=(17,24,39))
         _ppt_add_textbox(slide, 8.12, 2.92, 4.2, 0.72, u"• " + _ppt_clip_text(why, 170), font_size=10.5, color=(55,65,81))
 
-        _ppt_add_textbox(slide, 8.1, 3.74, 4.3, 0.22, "What to do", font_size=12, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.1, 3.74, 4.3, 0.22, L("What to do", "應採取什麼行動"), font_size=12, bold=True, color=(17,24,39))
         _ppt_add_textbox(slide, 8.12, 3.98, 4.2, 0.72, u"• " + _ppt_clip_text(action, 170), font_size=10.5, color=(55,65,81))
 
         _ppt_add_filled_box(slide, 8.02, 4.92, 4.55, 1.18, (248,250,252), line_rgb=(229,231,235), radius=True)
-        _ppt_add_textbox(slide, 8.24, 5.14, 4.0, 0.18, "Key observation", font_size=11.5, bold=True, color=(17,24,39))
+        _ppt_add_textbox(slide, 8.24, 5.14, 4.0, 0.18, L("Key observation", "關鍵觀察"), font_size=11.5, bold=True, color=(17,24,39))
         _ppt_add_textbox(slide, 8.24, 5.34, 4.12, 0.62, _ppt_clip_text(observation, 100), font_size=9.2, color=(55,65,81))
 
-        _ppt_add_textbox(slide, 0.58, 6.3, 12.0, 0.24, f"Slide {idx + 2} | EC-AI Insight", font_size=9, color=(107,114,128))
+        _ppt_add_textbox(slide, 0.58, 6.3, 12.0, 0.24, f"{L("Slide", "第")} {idx + 2} {L("| EC-AI Insight", "頁 | EC-AI Insight")}", font_size=9, color=(107,114,128))
 
     out = io.BytesIO()
     prs.save(out)
@@ -1884,7 +1899,7 @@ def _dash_note(md: str) -> None:
 
 
 def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
-    st.markdown("<div class='ec-section-title'>Executive Dashboard</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='ec-section-title'>{L("Executive Dashboard", "管理儀表板")}</div>", unsafe_allow_html=True)
 
     def _as_fig(obj):
         return obj[0] if isinstance(obj, tuple) and len(obj) else obj
@@ -1968,7 +1983,10 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
 # =========================================================
 # Main app
 # =========================================================
-st.title(L("EC-AI Insight", "EC-AI 智能分析"))
+with st.sidebar:
+    LANG = st.selectbox(T("Language / 語言"), ["English", "中文"], index=0)
+
+st.title("EC-AI Insight")
 st.markdown(f"<div class='ec-kicker'>{L('Sales performance, explained clearly.', '把銷售表現講清楚。')}</div>", unsafe_allow_html=True)
 st.markdown(
     f"<div class='ec-subtle'>{L('Upload your sales data and get a short business briefing — what’s working, what’s risky, and where to focus next.', '上傳銷售數據後，即可獲得簡短商業摘要，快速看清哪些做得好、哪些有風險，以及下一步應聚焦什麼。')}</div>",
@@ -1977,7 +1995,6 @@ st.markdown(
 st.divider()
 
 with st.sidebar:
-    LANG = st.selectbox(T("Language / 語言"), ["English", "中文"], index=0)
     st.header(L("Data Source", "資料來源"))
     if "use_demo_dataset" not in st.session_state:
         st.session_state.use_demo_dataset = False
@@ -1992,7 +2009,7 @@ with st.sidebar:
     if st.session_state.use_demo_dataset:
         st.caption(L("Using built-in demo retail dataset.", "正在使用內置零售示範數據。"))
     else:
-        st.caption("Tip: first load on Streamlit Cloud may take 30–60 seconds if the app was asleep.")
+        st.caption(L("Tip: first load on Streamlit Cloud may take 30–60 seconds if the app was asleep.", "提示：若 Streamlit Cloud 之前休眠，首次載入可能需要 30–60 秒。"))
 
     st.header(L("Exports", "匯出"))
     export_scale = st.slider(L("Export image scale", "匯出圖像清晰度"), min_value=1, max_value=3, value=2, help=L("Higher = clearer charts, but slower exports.", "數值越高，圖像越清晰，但匯出會較慢。"))
@@ -2002,12 +2019,12 @@ with st.sidebar:
         import plotly
         import importlib.util
         st.write("Plotly:", plotly.__version__)
-        st.write("Kaleido installed:", importlib.util.find_spec("kaleido") is not None)
-        st.write("OpenAI installed:", OpenAI is not None)
-        st.write("PPT export:", PPT_AVAILABLE)
-        st.write("PDF export:", PDF_AVAILABLE)
+        st.write(L("Kaleido installed:", "已安裝 Kaleido："), importlib.util.find_spec("kaleido") is not None)
+        st.write(L("OpenAI installed:", "已安裝 OpenAI："), OpenAI is not None)
+        st.write(L("PPT export:", "PPT 匯出："), PPT_AVAILABLE)
+        st.write(L("PDF export:", "PDF 匯出："), PDF_AVAILABLE)
     except Exception as e:
-        st.write("Diagnostics unavailable:", e)
+        st.write(L("Diagnostics unavailable:", "無法顯示診斷資訊："), e)
 
 # Load data
 df_raw = None
@@ -2021,14 +2038,14 @@ elif up is not None:
         df_raw = pd.read_csv(up, encoding="latin-1")
 
 if df_raw is None:
-    st.info("Upload a CSV or click 🚀 Try Demo Dataset to begin.")
+    st.info(L("Upload a CSV or click 🚀 Try Demo Dataset to begin.", "請上傳 CSV，或按 🚀 使用示範數據 開始。"))
     st.stop()
 
 # Prep
 try:
     m = prep_retail(df_raw)
 except Exception as e:
-    st.error(f"Data load error: {e}")
+    st.error(f"{L("Data load error", "資料載入錯誤")}: {e}")
     st.stop()
 
 df = m.df
@@ -2047,7 +2064,7 @@ ceo_briefing = build_ceo_briefing(priority_actions, confidence_score)
 try:
     export_figures = render_onepager_dashboard(m, df)
 except Exception as e:
-    st.warning(f"Executive Dashboard unavailable: {e}")
+    st.warning(f"{L("Executive Dashboard unavailable", "無法顯示管理儀表板")}: {e}")
     export_figures = {}
 
 st.divider()
@@ -2296,7 +2313,7 @@ try:
     chart_items.append((
         L("Revenue Trend (Daily)", "收入趨勢（每日）"),
         fig_trend,
-        "Trend line of daily revenue.\nUse this to spot spikes and dips and protect momentum."
+        L("Trend line of daily revenue.\nUse this to spot spikes and dips and protect momentum.", "每日收入趨勢線。\n用來找出高低波動，並保護主要增長動能。")
     ))
 except Exception:
     pass
@@ -2305,7 +2322,7 @@ try:
     chart_items.append((
         L("Top Revenue-Generating Stores (Top 5)", "收入最高門店（前 5 名）"),
         fig_topstores,
-        "Revenue concentration by store.\nPrioritise execution in the top stores first."
+        L("Revenue concentration by store.\nPrioritise execution in the top stores first.", "按門店顯示收入集中情況。\n應先把資源放在頭部門店的執行上。")
     ))
 except Exception:
     pass
@@ -2315,7 +2332,7 @@ try:
         chart_items.append((
             L("Pricing Effectiveness — Avg Revenue per Sale by Discount Level", "定價效果 — 不同折扣水平的平均每單收入"),
             fig_price,
-            "Compares average revenue per sale across discount levels.\nUse moderate discounts by default; treat deep discounts as controlled tests."
+            L("Compares average revenue per sale across discount levels.\nUse moderate discounts by default; treat deep discounts as controlled tests.", "比較不同折扣水平的每張訂單平均收入。\n以適度折扣作基本策略，大折扣只作受控測試。")
         ))
 except Exception:
     pass
@@ -2325,7 +2342,7 @@ try:
         chart_items.append((
             L("Revenue by Category", "按類別收入"),
             fig_cat,
-            "Shows which categories drive revenue.\nDouble down on winners; fix or trim weak categories."
+            L("Shows which categories drive revenue.\nDouble down on winners; fix or trim weak categories.", "顯示哪些類別帶動收入。\n加強贏家類別，並改善或淘汰弱勢類別。")
         ))
 except Exception:
     pass
@@ -2335,7 +2352,7 @@ try:
         chart_items.append((
             L("Revenue by Channel", "按渠道收入"),
             fig_ch,
-            "Channel contribution to revenue.\nReallocate effort to channels that consistently perform."
+            L("Channel contribution to revenue.\nReallocate effort to channels that consistently perform.", "顯示各渠道對收入的貢獻。\n把資源重新分配到長期表現較好的渠道。")
         ))
 except Exception:
     pass
@@ -2346,7 +2363,7 @@ with c1:
     if st.button(L("Generate PDF Executive Brief", "產生 PDF 管理摘要"), use_container_width=True):
         try:
             pdf_bytes = build_pdf_exec_brief(
-                title="EC-AI Insight — Executive Brief",
+                title=L("EC-AI Insight — Executive Brief", "EC-AI 智能分析 — 管理摘要"),
                 subtitle=L("Sales performance, explained clearly.", "把銷售表現講清楚。"),
                 summary_points=summary_points,
                 chart_items=chart_items,
