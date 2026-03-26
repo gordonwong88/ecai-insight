@@ -1252,27 +1252,27 @@ def generate_recommendations(insights: List[Dict[str, object]]) -> List[Dict[str
         if itype == "concentration":
             recs.append({
                 "title": L("Prioritize the top two stores", "優先處理頭兩大門店"),
-                "reason": evidence[1] if len(evidence) > 1 else "A small number of stores drive most revenue.",
+                "reason": evidence[1] if len(evidence) > 1 else L("A small number of stores drive most revenue.", "少數門店帶來大部分收入。"),
             })
         elif itype == "discount":
             recs.append({
                 "title": L("Reduce deep discounting", "減少過深折扣"),
-                "reason": evidence[1] if len(evidence) > 1 else "High discounts are reducing revenue per sale.",
+                "reason": evidence[1] if len(evidence) > 1 else L("High discounts are reducing revenue per sale.", "高折扣正在拉低每單收入。"),
             })
         elif itype == "volatility":
             recs.append({
                 "title": L("Stabilize the weakest store operations", "先穩定最弱門店的營運"),
-                "reason": evidence[0] if evidence else "One store shows unstable day-to-day sales.",
+                "reason": evidence[0] if evidence else L("One store shows unstable day-to-day sales.", "其中一間門店的日常銷售較不穩定。"),
             })
         elif itype == "category":
             recs.append({
                 "title": L("Protect and grow the strongest category", "先守住並擴大最強類別"),
-                "reason": evidence[1] if len(evidence) > 1 else "One category drives a large share of revenue.",
+                "reason": evidence[1] if len(evidence) > 1 else L("One category drives a large share of revenue.", "其中一個類別帶來相當大比例的收入。"),
             })
         elif itype == "momentum":
             recs.append({
                 "title": L("Review recent momentum and correct early", "及早檢視近期走勢並調整"),
-                "reason": evidence[0] if evidence else "Revenue direction has shifted meaningfully.",
+                "reason": evidence[0] if evidence else L("Revenue direction has shifted meaningfully.", "收入走勢已出現明顯變化。"),
             })
 
     deduped: List[Dict[str, str]] = []
@@ -1295,12 +1295,12 @@ def generate_priority_actions(m: RetailModel) -> List[Dict[str, str]]:
             if len(cat_rev):
                 recs.append({
                     "title": L("Protect the strongest category", "保護最強類別"),
-                    "reason": f"{cat_rev.index[0]} contributes about {fmt_pct(float(cat_rev.iloc[0] / total_rev), 0)} of revenue.",
+                    "reason": L(f"{cat_rev.index[0]} contributes about {fmt_pct(float(cat_rev.iloc[0] / total_rev), 0)} of revenue.", f"{cat_rev.index[0]} 約佔整體收入 {fmt_pct(float(cat_rev.iloc[0] / total_rev), 0)}。"),
                 })
         if len(recs) < 3:
             recs.append({
                 "title": L("Keep the top revenue drivers healthy", "先顧好主要收入來源"),
-                "reason": "Focus on stock, staffing, and execution in the best-performing parts of the business.",
+                "reason": L("Focus on stock, staffing, and execution in the best-performing parts of the business.", "先把表現最好的業務部分的庫存、排班和執行做好。"),
             })
     return recs[:3]
 
@@ -1312,6 +1312,26 @@ def build_ceo_briefing(actions: List[Dict[str, str]], confidence: int) -> Dict[s
         "confidence": confidence,
     }
 
+
+
+
+def _localize_reason_text(text: str) -> str:
+    txt = (text or "").strip()
+    if LANG != "中文":
+        return txt
+    repl = [
+        ("That is about ", "約佔"),
+        (" of total revenue.", " 的總收入。"),
+        ("delivers only ", "只帶來每單收入 "),
+        (" per sale.", "。"),
+        (" has the least stable day-to-day sales pattern in the dataset.", " 是整個數據集中日常銷售最不穩定的門店。"),
+        (" contributes about ", " 約佔 "),
+        (" of revenue.", " 的收入。"),
+        ("Focus on stock, staffing, and execution in the best-performing parts of the business.", "先把表現最好的業務部分的庫存、排班和執行做好。"),
+    ]
+    for a,b in repl:
+        txt = txt.replace(a,b)
+    return txt
 
 def render_summary_card(summary_points: List[str]) -> None:
     bullet_html = "".join(
@@ -1334,7 +1354,7 @@ def render_ceo_briefing(briefing: Dict[str, object]) -> None:
     lines = []
     for i, item in enumerate(actions, start=1):
         title = emphasize_exec_keywords_html(clean_display_text(item.get("title", "")))
-        reason = emphasize_exec_keywords_html(clean_display_text(item.get("reason", "")))
+        reason = emphasize_exec_keywords_html(clean_display_text(_localize_reason_text(item.get("reason", ""))))
         lines.append(f"<li><b>{i}. {title}</b><br><span style='color:#4B5563'>{reason}</span></li>")
     actions_html = ''.join(lines)
     st.markdown(f"""
@@ -1693,7 +1713,12 @@ def render_structured_ai_answer(answer: str) -> None:
 # Exports
 # =========================================================
 def fig_to_png_bytes(fig: go.Figure, scale: int = 2) -> bytes:
-    return fig.to_image(format="png", scale=scale)
+    export_fig = go.Figure(fig)
+    try:
+        export_fig.update_layout(title=None, title_text=None, margin=dict(t=20))
+    except Exception:
+        pass
+    return export_fig.to_image(format="png", scale=scale)
 
 
 def build_pdf_exec_brief(
@@ -1859,8 +1884,8 @@ def build_ppt_talking_deck(
         raw_lines = [md_to_plain(l).strip().lstrip("-• ").strip() for l in str(bullets).split("\n") if str(l).strip()]
         what = raw_lines[0] if len(raw_lines) > 0 else "This chart highlights the main commercial pattern in the data."
         why = raw_lines[1] if len(raw_lines) > 1 else "This matters because management attention should follow the areas with the largest commercial impact."
-        action = raw_lines[2] if len(raw_lines) > 2 else "Prioritise the most important driver first, then scale what works."
-        observation = raw_lines[3] if len(raw_lines) > 3 else "Identify the main driver, any spikes, and the key management lever."
+        action = raw_lines[2] if len(raw_lines) > 2 else L("Prioritise the most important driver first, then scale what works.", "先集中處理最重要的驅動因素，再把有效做法擴大。")
+        observation = raw_lines[3] if len(raw_lines) > 3 else L("Identify the main driver, any spikes, and the key management lever.", "先找出主要驅動因素、任何明顯波動，以及最關鍵的管理槓桿。")
 
         _ppt_add_filled_box(slide, 0.55, 0.82, 12.1, 0.52, (243,244,246), line_rgb=(229,231,235), radius=True)
         _ppt_add_textbox(slide, 0.72, 0.98, 11.8, 0.2, f"{L("Headline takeaway", "頁面重點")}: {_ppt_clip_text(what, 135)}", font_size=11.5, bold=True, color=(17,24,39))
