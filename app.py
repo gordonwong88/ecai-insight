@@ -290,6 +290,19 @@ CONSULTING_PALETTE = [
 # =========================================================
 # Basic helpers
 # =========================================================
+
+
+# =========================================================
+# Export-safe chart label helper
+# =========================================================
+def export_safe_axis_title(text_en: str | None = None, text_zh: str | None = None) -> str | None:
+    """Avoid broken Chinese glyphs on Plotly image exports used in PDF/PPT.
+    For Chinese mode, suppress axis titles and rely on chart title + data labels instead.
+    """
+    if LANG == "中文":
+        return None
+    return text_en if text_en is not None else text_zh
+
 def clean_display_text(s: str) -> str:
     if not s:
         return s
@@ -761,7 +774,7 @@ def bar_categorical(
         tickfont=dict(family="Inter SemiBold, Inter, Arial, sans-serif", size=11, color="#111827"),
     )
     fig.update_yaxes(
-        title_text=y_title,
+        title_text=(None if LANG == "中文" else y_title),
         range=[0, ymax + ypad],
         autorange=False,
         rangemode="tozero",
@@ -779,7 +792,7 @@ def top5_stores_bar(m: RetailModel) -> Tuple[go.Figure, pd.DataFrame]:
         x_labels=dfp["Store"].tolist(),
         y_values=dfp["Revenue"].tolist(),
         title=L("Top Revenue-Generating Stores (Top 5)", "收入最高門店（前 5 名）"),
-        y_title=L("Revenue", "收入"),
+        y_title=export_safe_axis_title("Revenue", "收入"),
         colors=colors,
         text_fmt=",.0f",
         label_wrap_width=12,
@@ -840,7 +853,7 @@ def pricing_effectiveness(m: RetailModel) -> Optional[Tuple[go.Figure, pd.DataFr
         x_labels=dfp["Discount Band"].astype(str).tolist(),
         y_values=dfp["Avg Revenue per Sale"].fillna(0).tolist(),
         title=L("Pricing Effectiveness — Avg Revenue per Sale by Discount Level", "定價效果 — 不同折扣水平的平均每張訂單收入"),
-        y_title=L("Avg Revenue per Sale", "平均每張訂單收入"),
+        y_title=export_safe_axis_title("Avg Revenue per Sale", "平均每張訂單收入"),
         colors=[CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)] for i in range(len(dfp))],
         text_fmt=",.0f",
     )
@@ -860,7 +873,7 @@ def revenue_by_category(m: RetailModel, topn: int = 8) -> Optional[Tuple[go.Figu
         x_labels=dfp["Category"].tolist(),
         y_values=dfp["Revenue"].tolist(),
         title=(f"收入按類別（前 {len(dfp)} 名）" if LANG=="中文" else f"Revenue by Category (Top {len(dfp)})"),
-        y_title=L("Revenue", "收入"),
+        y_title=export_safe_axis_title("Revenue", "收入"),
         colors=colors,
         text_fmt=",.0f",
     )
@@ -881,7 +894,7 @@ def revenue_by_channel(m: RetailModel, topn: int = 8) -> Optional[Tuple[go.Figur
         x_labels=dfp["Channel"].tolist(),
         y_values=dfp["Revenue"].tolist(),
         title=(f"收入按渠道（前 {len(dfp)} 名）" if LANG=="中文" else f"Revenue by Channel (Top {len(dfp)})"),
-        y_title=L("Revenue", "收入"),
+        y_title=export_safe_axis_title("Revenue", "收入"),
         colors=colors,
         text_fmt=",.0f",
     )
@@ -908,7 +921,7 @@ def volatility_by_channel(m: RetailModel) -> Optional[Tuple[go.Figure, pd.DataFr
         x_labels=dfp["Channel"].tolist(),
         y_values=dfp["Volatility (relative)"].tolist(),
         title="Channel Stability — Which Channels Swing the Most",
-        y_title=L("Relative Volatility", "相對波動"),
+        y_title=export_safe_axis_title("Relative Volatility", "相對波動"),
         colors=colors,
         text_fmt=",.2f",
         y_is_currency=False,
