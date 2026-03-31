@@ -26,7 +26,7 @@ import plotly.express as px
 LANG = "English"
 
 UI_TEXT = {
-    "Executive Summary": {"English": "Executive Summary", "中文": "執行摘要"},
+    "Executive Summary": {"English": "CEO Decision Summary", "中文": "CEO 決策摘要"},
     "Charts & Insights": {"English": "Charts & Insights", "中文": "圖表與重點"},
     "AI Insights": {"English": "AI Insights", "中文": "AI 分析"},
     "CEO Briefing": {"English": "CEO Briefing", "中文": "CEO 簡報"},
@@ -588,6 +588,28 @@ def build_demo_dataset(n: int = 900) -> pd.DataFrame:
     df["Product"] = df["Category"] + " Item"
 
     return df.sort_values("Date").reset_index(drop=True)
+
+
+
+
+def build_demo_dataset_2() -> pd.DataFrame:
+    rows = [
+        ["2025-01-01", "Central", "Electronics", "Store", 12000, 0.05, 40],
+        ["2025-01-01", "Central", "Clothing", "Online", 8000, 0.20, 60],
+        ["2025-01-01", "Causeway Bay", "Electronics", "Store", 15000, 0.10, 50],
+        ["2025-01-01", "Causeway Bay", "Clothing", "Online", 6000, 0.25, 55],
+        ["2025-01-02", "Central", "Electronics", "Store", 13000, 0.05, 42],
+        ["2025-01-02", "Central", "Clothing", "Online", 7500, 0.20, 58],
+        ["2025-01-02", "Causeway Bay", "Electronics", "Store", 16000, 0.10, 52],
+        ["2025-01-02", "Causeway Bay", "Clothing", "Online", 5800, 0.30, 60],
+        ["2025-01-03", "Central", "Electronics", "Store", 12500, 0.05, 41],
+        ["2025-01-03", "Central", "Clothing", "Online", 7000, 0.25, 65],
+        ["2025-01-03", "Causeway Bay", "Electronics", "Store", 17000, 0.10, 55],
+        ["2025-01-03", "Causeway Bay", "Clothing", "Online", 5500, 0.30, 62],
+    ]
+    df = pd.DataFrame(rows, columns=["Date", "Store", "Category", "Channel", "Revenue", "Discount", "Transactions"])
+    df["Date"] = pd.to_datetime(df["Date"])
+    return df
 
 
 # =========================================================
@@ -1872,7 +1894,7 @@ def build_ppt_talking_deck(
     _ppt_add_textbox(slide, 0.8, 2.8, 11.0, 1.1, L("This pack highlights where revenue is made, where performance is fragile, and what management should do next.", "這份簡報重點說明收入來源、表現脆弱點，以及管理層下一步應做什麼。"), font_size=18, color=(31,41,55))
 
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _ppt_add_textbox(slide, 0.6, 0.35, 12.0, 0.5, L("Executive Summary", "執行摘要"), font_size=24, bold=True, color=(17,24,39))
+    _ppt_add_textbox(slide, 0.6, 0.35, 12.0, 0.5, L("CEO Decision Summary", "CEO 決策摘要"), font_size=24, bold=True, color=(17,24,39))
     _ppt_add_textbox(slide, 0.6, 0.8, 12.0, 0.3, L("Headline messages management can act on immediately", "管理層可立即採取行動的重點信息"), font_size=12, color=(107,114,128))
     card_lefts = [0.6, 4.45, 8.3]
     for i, card in enumerate(exec_cards[:3]):
@@ -2025,9 +2047,9 @@ with st.sidebar:
     LANG = st.selectbox(T("Language / 語言"), ["English", "中文"], index=0)
 
 st.title("EC-AI Insight")
-st.markdown(f"<div class='ec-kicker'>{L('Sales performance, explained clearly.', '把銷售表現講清楚。')}</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='ec-kicker'>{L('Turn your sales data into a clear CEO-level decision summary in seconds.', '將銷售數據轉化為清晰的 CEO 決策摘要（幾秒內完成）。')}</div>", unsafe_allow_html=True)
 st.markdown(
-    f"<div class='ec-subtle'>{L('Upload your sales data and get a short business briefing — what’s working, what’s risky, and where to focus next.', '上傳銷售數據後，即可獲得簡短商業摘要，快速看清哪些做得好、哪些有風險，以及下一步應聚焦什麼。')}</div>",
+    f"<div class='ec-subtle'>{L('No dashboards — just answers. See what’s working, what’s not, and what to fix. Built for business owners, not analysts.', '不需要儀表板，只提供決策答案。一眼看出有效與無效的業務。為管理層設計，而非分析師。')}</div>",
     unsafe_allow_html=True
 )
 st.divider()
@@ -2036,16 +2058,26 @@ with st.sidebar:
     st.header(L("Data Source", "資料來源"))
     if "use_demo_dataset" not in st.session_state:
         st.session_state.use_demo_dataset = False
+    if "demo_dataset_choice" not in st.session_state:
+        st.session_state.demo_dataset_choice = 1
 
     up = st.file_uploader(L("Upload CSV", "上傳 CSV"), type=["csv"])
     if up is not None:
         st.session_state.use_demo_dataset = False
 
-    if st.button(L("🚀 Try Demo Dataset (Retail Fashion, HK)", "🚀 使用示範數據（香港零售時裝）"), use_container_width=True):
+    if st.button(L("🚀 Try Demo Dataset 1 (Retail Fashion, HK)", "🚀 使用示範數據 1（香港零售時裝）"), use_container_width=True):
         st.session_state.use_demo_dataset = True
+        st.session_state.demo_dataset_choice = 1
+
+    if st.button(L("🚀 Try Demo Dataset 2 (Sales & Channel Strategy)", "🚀 使用示範數據 2（銷售與渠道策略）"), use_container_width=True):
+        st.session_state.use_demo_dataset = True
+        st.session_state.demo_dataset_choice = 2
 
     if st.session_state.use_demo_dataset:
-        st.caption(L("Using built-in demo retail dataset.", "正在使用內置零售示範數據。"))
+        if st.session_state.get("demo_dataset_choice", 1) == 2:
+            st.caption(L("Using demo dataset 2: advanced business insights for channel strategy.", "正在使用示範數據 2：較進階的渠道策略商業洞察。"))
+        else:
+            st.caption(L("Using demo dataset 1: built-in retail fashion dataset.", "正在使用示範數據 1：內置零售時裝示範數據。"))
     else:
         st.caption(L("Tip: first load on Streamlit Cloud may take 30–60 seconds if the app was asleep.", "提示：若 Streamlit Cloud 之前休眠，首次載入可能需要 30–60 秒。"))
 
@@ -2067,7 +2099,10 @@ with st.sidebar:
 # Load data
 df_raw = None
 if st.session_state.get("use_demo_dataset", False):
-    df_raw = build_demo_dataset()
+    if st.session_state.get("demo_dataset_choice", 1) == 2:
+        df_raw = build_demo_dataset_2()
+    else:
+        df_raw = build_demo_dataset()
 elif up is not None:
     try:
         df_raw = pd.read_csv(up)
@@ -2076,7 +2111,7 @@ elif up is not None:
         df_raw = pd.read_csv(up, encoding="latin-1")
 
 if df_raw is None:
-    st.info(L("Upload a CSV or click 🚀 Try Demo Dataset to begin.", "請上傳 CSV，或按 🚀 使用示範數據 開始。"))
+    st.info(L("Upload a CSV or click a demo dataset to begin.", "請上傳 CSV，或按示範數據開始。"))
     st.stop()
 
 # Prep
