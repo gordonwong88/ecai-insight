@@ -860,7 +860,7 @@ def pricing_effectiveness(m: RetailModel) -> Optional[Tuple[go.Figure, pd.DataFr
         return None
 
     df = m.df.dropna(subset=[m.col_discount]).copy()
-    if len(df) < 20:
+    if len(df) < 6:
         return None
 
     bins = [-0.000001, 0.02, 0.05, 0.10, 0.20, 1.0]
@@ -954,6 +954,68 @@ def volatility_by_channel(m: RetailModel) -> Optional[Tuple[go.Figure, pd.DataFr
 # =========================================================
 # Insights / summaries
 # =========================================================
+
+def get_pricing_signal(m: RetailModel) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return (signal_label, signal_note, summary_bullet).
+    Prefer channel+discount inefficiency when both are available; otherwise fall back to discount-band insight.
+    """
+    df = m.df.copy()
+    if m.col_discount is None or m.col_discount not in df.columns:
+        return None, None, None
+
+    tmp = df.dropna(subset=[m.col_discount, m.col_revenue]).copy()
+    if len(tmp) < 6:
+        return None, None, None
+
+    # First choice: channel-level pricing efficiency
+    if m.col_channel and m.col_channel in tmp.columns:
+        ch = tmp.groupby(m.col_channel).agg(
+            revenue=(m.col_revenue, 'sum'),
+            avg_discount=(m.col_discount, 'mean'),
+            avg_revenue=(m.col_revenue, 'mean')
+        ).sort_values('revenue', ascending=False)
+        if len(ch) >= 2:
+            high_disc = ch['avg_discount'].idxmax()
+            low_disc = ch['avg_discount'].idxmin()
+            if (
+                ch.loc[high_disc, 'avg_discount'] > ch.loc[low_disc, 'avg_discount'] + 0.03
+                and ch.loc[high_disc, 'revenue'] < ch['revenue'].max()
+            ):
+                label = L('Pricing inefficiency', '定價效率偏弱')
+                note = L(
+                    f"{high_disc} runs the highest average discount ({fmt_pct(float(ch.loc[high_disc, 'avg_discount']), 0)}) but generates less revenue than {ch['revenue'].idxmax()}.",
+                    f"{high_disc} 的平均折扣最高（{fmt_pct(float(ch.loc[high_disc, 'avg_discount']), 0)}），但收入仍低於 {ch['revenue'].idxmax()}。"
+                )
+                bullet = L(
+                    f"{high_disc} shows higher discounting but weaker revenue contribution — indicating pricing inefficiency.",
+                    f"{high_disc} 折扣較高但收入貢獻較弱，顯示定價效率偏低。"
+                )
+                return label, note, bullet
+
+    # Fallback: discount-band view
+    bins = [-0.000001, 0.02, 0.05, 0.10, 0.20, 1.0]
+    labels = ["0–2%", "2–5%", "5–10%", "10–20%", "20%+"]
+    tmp['disc_band'] = pd.cut(tmp[m.col_discount], bins=bins, labels=labels)
+    agg = tmp.groupby('disc_band', observed=False)[m.col_revenue].mean().dropna()
+    if len(agg) >= 2:
+        best_band = str(agg.sort_values(ascending=False).index[0])
+        worst_band = str(agg.sort_values(ascending=True).index[0])
+        best_avg = float(agg.loc[best_band])
+        worst_avg = float(agg.loc[worst_band])
+        if worst_avg < best_avg * 0.9:
+            label = L('Pricing inefficiency', '定價效率偏弱')
+            note = L(
+                f"{worst_band} discounting underperforms at {fmt_currency(worst_avg)} per order versus {best_band} at {fmt_currency(best_avg)}.",
+                f"{worst_band} 折扣水平的每單收入只有 {fmt_currency(worst_avg)}，低於 {best_band} 的 {fmt_currency(best_avg)}。"
+            )
+            bullet = L(
+                f"Higher discount bands are not translating into stronger revenue per order.",
+                f"較高折扣水平未有轉化為更強的每單收入。"
+            )
+            return label, note, bullet
+
+    return None, None, None
+
 def build_business_summary_points(m: RetailModel) -> List[str]:
     df = m.df
     dmin, dmax = df[m.col_date].min(), df[m.col_date].max()
@@ -984,32 +1046,22 @@ def build_business_summary_points(m: RetailModel) -> List[str]:
     vol = daily.groupby(m.col_store)[m.col_revenue].agg(["mean", "std"]).replace(0, np.nan)
     vol["ratio"] = vol["std"] / vol["mean"]
     most_volatile_store = str(vol["ratio"].sort_values(ascending=False).index[0]) if len(vol) else None
-    most_volatile_score = float(vol.loc[most_volatile_store, "ratio"]) if most_volatile_store in vol.index else np.nan
 
-    best_band = worst_band = None
-    best_avg = worst_avg = np.nan
-    if m.col_discount is not None:
-        tmp = df.dropna(subset=[m.col_discount]).copy()
-        if len(tmp) >= 20:
-            bins = [-0.000001, 0.02, 0.05, 0.10, 0.20, 1.0]
-            labels = ["0–2%", "2–5%", "5–10%", "10–20%", "20%+"]
-            tmp["disc_band"] = pd.cut(tmp[m.col_discount], bins=bins, labels=labels)
-            agg = tmp.groupby("disc_band", observed=False)[m.col_revenue].mean()
-            if agg.notna().sum() >= 2:
-                best_band = str(agg.sort_values(ascending=False).index[0])
-                best_avg = float(agg.loc[best_band])
-                worst_band = str(agg.sort_values(ascending=True).index[0])
-                worst_avg = float(agg.loc[worst_band])
+    _, _, pricing_bullet = get_pricing_signal(m)
 
     points: List[str] = []
     if LANG == "中文":
+        if top_cat is not None and not np.isnan(top_cat_share) and not np.isnan(top_store_share):
+            points.append(f"收入高度集中在 **{top_store}** 與 **{top_cat}**，分別佔總收入約 **{fmt_pct(top_store_share, 0)}** 與 **{fmt_pct(top_cat_share, 0)}**。")
         points.append(f"共有 **{days} 日** 數據，**{len(df):,} 筆交易**，總收入 **{fmt_currency(total_rev)}**。")
         if not np.isnan(top_store_share):
             points.append(f"收入集中：**{top_store}** 貢獻 **{fmt_currency(top_store_rev)}**，約佔總收入 **{fmt_pct(top_store_share, 0)}**。")
-        if not np.isnan(top2_share):
+        if not np.isnan(top2_share) and len(store_rev) > 2:
             points.append(f"**前兩大門店** 合共帶來 **{fmt_currency(top2_rev)}**，約佔 **{fmt_pct(top2_share, 0)}**。小幅改善已可帶動整體表現。")
         if top_cat is not None and not np.isnan(top_cat_share):
             points.append(f"按類別計，**{top_cat}** 是最大收入來源：**{fmt_currency(top_cat_rev)}**，約佔 **{fmt_pct(top_cat_share, 0)}**。")
+        if pricing_bullet:
+            points.append(pricing_bullet)
         if not np.isnan(growth):
             if growth > 0.03:
                 points.append(f"動能向上：後半段收入比前半段高約 **{fmt_pct(growth, 0)}**。")
@@ -1017,35 +1069,32 @@ def build_business_summary_points(m: RetailModel) -> List[str]:
                 points.append(f"動能轉弱：後半段收入比前半段低約 **{fmt_pct(abs(growth), 0)}**。")
             else:
                 points.append("整體收入大致平穩，前後半段沒有明顯變化。")
-        if most_volatile_store is not None and not np.isnan(most_volatile_score):
+        if most_volatile_store is not None:
             points.append(f"**{most_volatile_store}** 的日常銷售最不穩定，收入上落比其他門店更明顯。")
-        if best_band is not None and worst_band is not None:
-            points.append(f"折扣方面：**{best_band}** 帶來最高每張訂單收入（**{fmt_currency(best_avg)}**）；**{worst_band}** 最弱（**{fmt_currency(worst_avg)}**）。")
-            points.append("重點：適度折扣通常比大幅折扣更有效，折扣愈大不代表結果愈好。")
         points.append("下一步：先保護及改善頭部門店的庫存、排班與推廣執行，再把有效做法複製到其他門店。")
     else:
+        if top_cat is not None and not np.isnan(top_cat_share) and not np.isnan(top_store_share):
+            points.append(f"Revenue is highly concentrated in **{top_store}** and **{top_cat}**, which drive about **{fmt_pct(top_store_share, 0)}** and **{fmt_pct(top_cat_share, 0)}** of total revenue respectively.")
         points.append(f"You have **{days} days** of data with **{len(df):,} transactions** (total revenue **{fmt_currency(total_rev)}**).")
         if not np.isnan(top_store_share):
             points.append(f"Revenue is concentrated: **{top_store}** contributes **{fmt_currency(top_store_rev)}** (about **{fmt_pct(top_store_share, 0)}** of total).")
-        if not np.isnan(top2_share):
+        if not np.isnan(top2_share) and len(store_rev) > 2:
             points.append(f"The **top 2 stores** together generate **{fmt_currency(top2_rev)}** (about **{fmt_pct(top2_share, 0)}**). Small wins in these locations move the whole business.")
         if top_cat is not None and not np.isnan(top_cat_share):
             points.append(f"By category, **{top_cat}** is your largest driver: **{fmt_currency(top_cat_rev)}** (about **{fmt_pct(top_cat_share, 0)}**).")
+        if pricing_bullet:
+            points.append(pricing_bullet)
         if not np.isnan(growth):
             if growth > 0.03:
                 points.append(f"Momentum is positive: the second half of the period delivered about **{fmt_pct(growth, 0)}** more revenue than the first half.")
             elif growth < -0.03:
-                points.append(f"Momentum is softer: the second half of the period delivered about **{fmt_pct(growth, 0)}** less revenue than the first half.")
+                points.append(f"Momentum is softer: the second half of the period delivered about **{fmt_pct(abs(growth), 0)}** less revenue than the first half.")
             else:
                 points.append("Overall revenue looks broadly stable across the period (no major shift between first vs second half).")
-        if most_volatile_store is not None and not np.isnan(most_volatile_score):
+        if most_volatile_store is not None:
             points.append(f"**{most_volatile_store}** has the most unstable day-to-day sales pattern, with bigger ups and downs than other stores.")
-        if best_band is not None and worst_band is not None:
-            points.append(f"The **{best_band}** discount range brings the highest revenue at **{fmt_currency(best_avg)}** per order. Deep discount **{worst_band}** performs worst at **{fmt_currency(worst_avg)}** per order.")
-            points.append("Takeaway: moderate discounts tend to work better than aggressive ones — bigger discounts do not automatically lead to better results.")
-        points.append("Next focus: protect and improve the top stores first (availability, staffing, promotion discipline), then scale what works.")
+        points.append("Next focus: protect and improve the top stores first availability, staffing, promotion discipline, then scale what works.")
     return points[:12]
-
 
 def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
     df = m.df
@@ -1086,7 +1135,7 @@ def build_business_insights_sections(m: RetailModel) -> Dict[str, List[str]]:
     best_avg = np.nan
     if m.col_discount is not None:
         tmp = df.dropna(subset=[m.col_discount]).copy()
-        if len(tmp) >= 20:
+        if len(tmp) >= 6:
             bins = [-0.000001, 0.02, 0.05, 0.10, 0.20, 1.0]
             labels = ["0–2%", "2–5%", "5–10%", "10–20%", "20%+"]
             tmp["disc_band"] = pd.cut(tmp[m.col_discount], bins=bins, labels=labels)
@@ -1419,25 +1468,14 @@ def build_exec_cards(m: RetailModel) -> List[Dict[str, str]]:
     rev_second = float(df_sorted.loc[df_sorted[m.col_date] > mid, m.col_revenue].sum())
     growth = (rev_second - rev_first) / rev_first if rev_first > 0 else np.nan
 
-    best_band = None
-    best_avg = np.nan
-    if m.col_discount is not None:
-        tmp = df.dropna(subset=[m.col_discount]).copy()
-        if len(tmp) >= 20:
-            bins = [-0.000001, 0.02, 0.05, 0.10, 0.20, 1.0]
-            labels = ["0–2%", "2–5%", "5–10%", "10–20%", "20%+"]
-            tmp["disc_band"] = pd.cut(tmp[m.col_discount], bins=bins, labels=labels)
-            agg = tmp.groupby("disc_band", observed=False)[m.col_revenue].mean()
-            if agg.notna().sum() > 0:
-                best_band = str(agg.sort_values(ascending=False).index[0])
-                best_avg = float(agg.loc[best_band])
-
     growth_label = L("Stable", "平穩")
     if not np.isnan(growth):
         if growth > 0.03:
             growth_label = L("Positive", "向上")
         elif growth < -0.03:
             growth_label = L("Softer", "轉弱")
+
+    pricing_label, pricing_note, _ = get_pricing_signal(m)
 
     cards = [
         {
@@ -1452,12 +1490,11 @@ def build_exec_cards(m: RetailModel) -> List[Dict[str, str]]:
         },
         {
             "title": L("Pricing Signal", "定價訊號"),
-            "value": best_band if best_band is not None else "N/A",
-            "note": L(f"Highest revenue per order: {fmt_currency(best_avg)}.", f"最高每張訂單收入：{fmt_currency(best_avg)}。") if not np.isnan(best_avg) else L("Discount signal unavailable for this dataset.", "這份數據未能判斷折扣訊號。"),
+            "value": pricing_label or "N/A",
+            "note": pricing_note or L("Discount signal unavailable for this dataset.", "這份數據未能判斷折扣訊號。"),
         },
     ]
     return cards
-
 
 def render_parallel_insight_cards(cards: List[Dict[str, str]]) -> None:
     cols = st.columns(3, gap="small")
@@ -1800,7 +1837,7 @@ def build_pdf_exec_brief(
             story.append(Paragraph(f"• {p}", styles["ECBody"]))
         story.append(Spacer(1, 0.10*inch))
         story.append(Paragraph(f"<b>{L('Detailed observations', '詳細觀察')}</b>", styles["ECBody"]))
-    for p in summary_points[:12]:
+    for p in summary_points[3:12]:
         _t = md_to_plain(p)
         _t = clean_display_text(_t)
         if _t:
@@ -2122,6 +2159,11 @@ except Exception as e:
     st.stop()
 
 df = m.df
+
+st.markdown(f"**{L('Sample uploaded data (preview)', '示範數據預覽')}**")
+st.dataframe(df.head(10), use_container_width=True, hide_index=True)
+st.caption(L('This is the kind of raw data the tool transforms into a CEO decision summary.', '這就是工具轉化為 CEO 決策摘要的原始數據類型。'))
+st.divider()
 
 # Summary / cards / insights
 summary_points = build_business_summary_points(m)
