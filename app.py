@@ -2091,6 +2091,40 @@ st.markdown(
 )
 st.divider()
 
+st.markdown(f"<div class='ec-section-title'>{L("What this helps you answer", "這能幫你回答什麼問題")}</div>", unsafe_allow_html=True)
+st.markdown(
+    f"<div class='ec-subtle'>{L('Turn raw data into clear business decisions.', '把原始數據轉化為清晰的商業決策。')}</div>",
+    unsafe_allow_html=True
+)
+usecase_cols = st.columns(3, gap="small")
+use_cases = [
+    {
+        "title": L("Why is my revenue dropping?", "為什麼我的收入下跌？"),
+        "desc": L("Identify the key drivers behind revenue decline across products, channels, or segments.", "快速找出產品、渠道或業務分部導致收入下跌的真正原因。"),
+    },
+    {
+        "title": L("Which channel is actually driving profit?", "哪個渠道真正帶來利潤？"),
+        "desc": L("Understand which channels generate real value vs those diluting performance.", "看清哪些渠道真正創造價值，哪些渠道其實拖低整體表現。"),
+    },
+    {
+        "title": L("Which part of my business is underperforming?", "業務中哪一部分表現落後？"),
+        "desc": L("Quickly pinpoint underperforming stores, categories, or customer segments — and why.", "快速指出表現落後的門店、類別或客戶分群，並說明背後原因。"),
+    },
+]
+for i, item in enumerate(use_cases):
+    with usecase_cols[i]:
+        st.markdown(
+            f"""
+<div class="ec-card">
+  <div class="ec-card-value" style="font-size:22px; margin-bottom:10px;">{item['title']}</div>
+  <div class="ec-card-note">{item['desc']}</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+st.divider()
+
 with st.sidebar:
     st.header(L("Data Source", "資料來源"))
     if "use_demo_dataset" not in st.session_state:
