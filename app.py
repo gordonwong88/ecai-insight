@@ -77,6 +77,12 @@ except Exception:
 # =========================================================
 st.set_page_config(page_title="EC-AI Insight", layout="wide")
 
+MAX_UPLOAD_MB = 5
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+MAX_PREVIEW_ROWS = 10
+MAX_CORR_COLS = 12
+SAFE_EXPORT_DEFAULT = 1
+
 
 # =========================================================
 # Global styling
@@ -411,6 +417,49 @@ def md_to_plain_lines(s: str) -> List[str]:
         if line:
             out.append(line)
     return out
+
+
+def safe_read_csv(uploaded_file):
+    """Read CSV defensively to reduce Streamlit Cloud crashes."""
+    if uploaded_file is None:
+        return None
+    size = getattr(uploaded_file, "size", None)
+    if size is not None and size > MAX_UPLOAD_BYTES:
+        st.error(L(f"File too large. Please upload a CSV under {MAX_UPLOAD_MB}MB.", f"檔案過大，請上傳小於 {MAX_UPLOAD_MB}MB 的 CSV。"))
+        st.stop()
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+    try:
+        return pd.read_csv(uploaded_file, low_memory=False)
+    except Exception:
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
+        return pd.read_csv(uploaded_file, encoding="latin-1", low_memory=False)
+
+
+def safe_plotly_chart(fig: go.Figure, **kwargs) -> None:
+    try:
+        safe_plotly_chart(fig, **kwargs)
+    except Exception as e:
+        st.warning(L(f"Chart rendering issue: {e}", f"圖表顯示出現問題：{e}"))
+
+
+def safe_answer_question_with_openai(question: str, context: str) -> str:
+    try:
+        return answer_question_with_openai(question, context)
+    except Exception as e:
+        return L(f"Ask AI is temporarily unavailable: {e}", f"Ask AI 暫時無法使用：{e}")
+
+
+def safe_download_button(label: str, data: bytes, file_name: str, mime: str, use_container_width: bool = True):
+    if not data:
+        st.warning(L("Export could not be generated for this selection.", "這次匯出未能成功產生。"))
+        return
+    st.download_button(label, data=data, file_name=file_name, mime=mime, use_container_width=use_container_width)
 
 
 # =========================================================
@@ -1576,7 +1625,7 @@ def render_chart_with_commentary(
                 fig.update_layout(height=height)
         except Exception:
             pass
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        safe_plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     with col_r:
         st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
@@ -1790,7 +1839,10 @@ def fig_to_png_bytes(fig: go.Figure, scale: int = 2) -> bytes:
         export_fig.update_layout(title=None, title_text=None, margin=dict(t=20))
     except Exception:
         pass
-    return export_fig.to_image(format="png", scale=scale)
+    try:
+        return export_fig.to_image(format="png", scale=scale)
+    except Exception:
+        return b""
 
 
 def build_pdf_exec_brief(
@@ -1853,11 +1905,15 @@ def build_pdf_exec_brief(
             for line in md_to_plain_lines(commentary):
                 story.append(Paragraph(f"• {line}", styles["ECBody"]))
         story.append(Spacer(1, 0.04 * inch))
-        png = fig_to_png_bytes(fig, scale=2)
-        img_buf = io.BytesIO(png)
-        img = RLImage(img_buf, width=6.7 * inch, height=3.2 * inch)
-        story.append(img)
-        story.append(Spacer(1, 0.10 * inch))
+        png = fig_to_png_bytes(fig, scale=SAFE_EXPORT_DEFAULT)
+        if png:
+            img_buf = io.BytesIO(png)
+            img = RLImage(img_buf, width=6.7 * inch, height=3.2 * inch)
+            story.append(img)
+            story.append(Spacer(1, 0.10 * inch))
+        else:
+            story.append(Paragraph(L("Chart image export unavailable for this chart.", "此圖表暫時無法匯出圖片。"), styles["ECBody"]))
+            story.append(Spacer(1, 0.10 * inch))
 
     doc.build(story)
     return buf.getvalue()
@@ -1962,9 +2018,12 @@ def build_ppt_talking_deck(
         _ppt_add_filled_box(slide, 0.55, 0.82, 12.1, 0.52, (243,244,246), line_rgb=(229,231,235), radius=True)
         _ppt_add_textbox(slide, 0.72, 0.98, 11.8, 0.2, f"{L("Headline takeaway", "頁面重點")}: {_ppt_clip_text(what, 135)}", font_size=11.5, bold=True, color=(17,24,39))
 
-        png = fig_to_png_bytes(fig, scale=2)
-        img_stream = io.BytesIO(png)
-        slide.shapes.add_picture(img_stream, Inches(0.55), Inches(1.55), width=Inches(7.0), height=Inches(4.5))
+        png = fig_to_png_bytes(fig, scale=SAFE_EXPORT_DEFAULT)
+        if png:
+            img_stream = io.BytesIO(png)
+            slide.shapes.add_picture(img_stream, Inches(0.55), Inches(1.55), width=Inches(7.0), height=Inches(4.5))
+        else:
+            _ppt_add_textbox(slide, 0.8, 2.4, 6.5, 0.6, L("Chart image export unavailable.", "圖表圖片暫時無法匯出。"), font_size=16, color=(107,114,128))
 
         _ppt_add_filled_box(slide, 7.85, 1.55, 4.85, 4.75, (255,255,255), line_rgb=(229,231,235), radius=True)
         _ppt_add_textbox(slide, 8.1, 1.78, 4.3, 0.22, L("What this shows", "這張圖顯示什麼"), font_size=12, bold=True, color=(17,24,39))
@@ -2026,15 +2085,15 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
     r1 = st.columns(3, gap="small")
     with r1[0]:
         with st.container(border=True):
-            st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
+            safe_plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
             _dash_note(L("Protect **momentum**; investigate spikes and dips.", "保護**動能**；留意高低波動。"))
     with r1[1]:
         with st.container(border=True):
-            st.plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
+            safe_plotly_chart(fig_topstores, use_container_width=True, config={"displayModeBar": False})
             _dash_note(L(f"Revenue is concentrated — prioritise **{top_store}** and top drivers.", f"收入集中 — 優先處理 **{top_store}** 及主要收入來源。"))
     with r1[2]:
         with st.container(border=True):
-            st.plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
+            safe_plotly_chart(fig_cat, use_container_width=True, config={"displayModeBar": False})
             _dash_note(_note_for_chart(
                 fig_cat_raw,
                 "Double down on **top categories**; fix weak lines.",
@@ -2044,7 +2103,7 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
     r2 = st.columns(3, gap="small")
     with r2[0]:
         with st.container(border=True):
-            st.plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
+            safe_plotly_chart(fig_price, use_container_width=True, config={"displayModeBar": False})
             _dash_note(_note_for_chart(
                 fig_price_raw,
                 "Use **pricing discipline**; moderate discounts can outperform aggressive ones.",
@@ -2052,7 +2111,7 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
             ))
     with r2[1]:
         with st.container(border=True):
-            st.plotly_chart(fig_channel, use_container_width=True, config={"displayModeBar": False})
+            safe_plotly_chart(fig_channel, use_container_width=True, config={"displayModeBar": False})
             _dash_note(_note_for_chart(
                 fig_channel_raw,
                 "Reallocate effort to channels that **convert**; fix weakest channel.",
@@ -2060,7 +2119,7 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
             ))
     with r2[2]:
         with st.container(border=True):
-            st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
+            safe_plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
             _dash_note(_note_for_chart(
                 fig_vol_raw,
                 "Improve stability: focus on channels with the biggest day-to-day swings.",
@@ -2158,11 +2217,7 @@ if st.session_state.get("use_demo_dataset", False):
     else:
         df_raw = build_demo_dataset()
 elif up is not None:
-    try:
-        df_raw = pd.read_csv(up)
-    except Exception:
-        up.seek(0)
-        df_raw = pd.read_csv(up, encoding="latin-1")
+    df_raw = safe_read_csv(up)
 
 if df_raw is None:
     st.info(L("Upload a CSV or click a demo dataset to begin.", "請上傳 CSV，或按示範數據開始。"))
@@ -2181,7 +2236,7 @@ render_questions_this_answers()
 st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
 
 st.markdown(f"**{L('Example input data (preview)', '輸入數據範例（預覽）')}**")
-preview_df = df.head(10).copy()
+preview_df = df.head(MAX_PREVIEW_ROWS).copy()
 
 if m.col_discount and m.col_discount in preview_df.columns:
     preview_df[m.col_discount] = preview_df[m.col_discount].apply(lambda x: f"{x:.0%}" if pd.notna(x) else "")
@@ -2255,7 +2310,7 @@ figs, store_names = store_small_multiples(m)
 cols = st.columns(2)
 for i, fig in enumerate(figs):
     with cols[i % 2]:
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        safe_plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 render_insight_card(
     what_points=[L("Some stores are more stable, while others vary more from day to day.", "有些門店表現較穩定，有些則每天變化較大。")],
@@ -2340,7 +2395,7 @@ st.divider()
 with st.expander(L("Advanced analytics (optional)", "進階分析（可選）"), expanded=False):
     st.caption(L("Optional deeper diagnostics for power users. Collapsed by default to keep the UI executive-clean.", "提供進一步診斷分析，預設收起以保持版面簡潔。"))
     try:
-        num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])][:MAX_CORR_COLS]
         if len(num_cols) >= 2:
             corr = df[num_cols].corr(numeric_only=True)
             if m.col_revenue in corr.columns:
@@ -2364,7 +2419,7 @@ with st.expander(L("Advanced analytics (optional)", "進階分析（可選）"),
             )
             fig_corr.update_traces(textfont=dict(color="white", size=12))
             fig_corr.update_layout(margin=dict(l=10, r=10, t=30, b=10), height=420)
-            st.plotly_chart(fig_corr, use_container_width=True, config={"displayModeBar": False})
+            safe_plotly_chart(fig_corr, use_container_width=True, config={"displayModeBar": False})
         else:
             st.info(L("Not enough numeric columns to compute correlations.", "沒有足夠數值欄位可計算相關性。"))
     except Exception as e:
@@ -2432,7 +2487,7 @@ with btn_col:
 run_question = selected_question or (user_q.strip() if ask_clicked and user_q.strip() else "")
 if run_question:
     with st.spinner(L("Thinking…", "思考中…")):
-        answer = answer_question_with_openai(run_question, context_text)
+        answer = safe_answer_question_with_openai(run_question, context_text)
     st.session_state.ask_ai_question = run_question
     st.session_state.ask_ai_history.insert(0, (run_question, answer))
     deduped = []
@@ -2514,7 +2569,7 @@ with c1:
                 summary_points=summary_points,
                 chart_items=chart_items,
             )
-            st.download_button(
+            safe_download_button(
                 L("Download PDF", "下載 PDF"),
                 data=pdf_bytes,
                 file_name=("ecai_executive_brief_zh.pdf" if LANG=="中文" else "ecai_executive_brief.pdf"),
@@ -2533,7 +2588,7 @@ with c2:
                 summary_points=summary_points,
                 exec_cards=exec_cards,
             )
-            st.download_button(
+            safe_download_button(
                 L("Download PPTX", "下載 PPTX"),
                 data=pptx_bytes,
                 file_name=("ecai_executive_pack_zh.pptx" if LANG=="中文" else "ecai_executive_pack.pptx"),
