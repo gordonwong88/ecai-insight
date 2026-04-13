@@ -936,14 +936,14 @@ def volatility_by_channel(m: RetailModel) -> Optional[Tuple[go.Figure, pd.DataFr
         return None
 
     dfp = agg[["Volatility"]].head(8).reset_index()
-    dfp.columns = ["Channel", "Volatility (relative)"]
+    dfp.columns = ["Channel", "Stability Variation"]
 
     colors = [CONSULTING_PALETTE[i % len(CONSULTING_PALETTE)] for i in range(len(dfp))]
     fig = bar_categorical(
         x_labels=dfp["Channel"].tolist(),
-        y_values=dfp["Volatility (relative)"].tolist(),
-        title="Channel Stability — Which Channels Swing the Most",
-        y_title=export_safe_axis_title("Relative Volatility", "相對波動"),
+        y_values=dfp["Stability Variation"].tolist(),
+        title=L("Sales Stability by Channel", "渠道銷售穩定性"),
+        y_title=export_safe_axis_title("Variation", "變化幅度"),
         colors=colors,
         text_fmt=",.2f",
         y_is_currency=False,
@@ -981,14 +981,14 @@ def get_pricing_signal(m: RetailModel) -> Tuple[Optional[str], Optional[str], Op
                 ch.loc[high_disc, 'avg_discount'] > ch.loc[low_disc, 'avg_discount'] + 0.03
                 and ch.loc[high_disc, 'revenue'] < ch['revenue'].max()
             ):
-                label = L('Pricing inefficiency', '定價效率偏弱')
+                label = L('Potential pricing signal', '潛在定價訊號')
                 note = L(
-                    f"{high_disc} runs the highest average discount ({fmt_pct(float(ch.loc[high_disc, 'avg_discount']), 0)}) but generates less revenue than {ch['revenue'].idxmax()}.",
-                    f"{high_disc} 的平均折扣最高（{fmt_pct(float(ch.loc[high_disc, 'avg_discount']), 0)}），但收入仍低於 {ch['revenue'].idxmax()}。"
+                    f"{high_disc} runs the highest average discount ({fmt_pct(float(ch.loc[high_disc, 'avg_discount']), 0)}) but generates less revenue than {ch['revenue'].idxmax()}. This may reflect pricing, channel mix, or scale differences.",
+                    f"{high_disc} 的平均折扣最高（{fmt_pct(float(ch.loc[high_disc, 'avg_discount']), 0)}），但收入仍低於 {ch['revenue'].idxmax()}。這可能與定價、渠道組合或規模差異有關。"
                 )
                 bullet = L(
-                    f"{high_disc} shows higher discounting but weaker revenue contribution — indicating pricing inefficiency.",
-                    f"{high_disc} 折扣較高但收入貢獻較弱，顯示定價效率偏低。"
+                    f"{high_disc} shows higher discounting but weaker revenue contribution — a potential pricing signal that needs further validation.",
+                    f"{high_disc} 折扣較高但收入貢獻較弱，屬於需要進一步驗證的潛在定價訊號。"
                 )
                 return label, note, bullet
 
@@ -1003,14 +1003,14 @@ def get_pricing_signal(m: RetailModel) -> Tuple[Optional[str], Optional[str], Op
         best_avg = float(agg.loc[best_band])
         worst_avg = float(agg.loc[worst_band])
         if worst_avg < best_avg * 0.9:
-            label = L('Pricing inefficiency', '定價效率偏弱')
+            label = L('Potential pricing signal', '潛在定價訊號')
             note = L(
-                f"{worst_band} discounting underperforms at {fmt_currency(worst_avg)} per order versus {best_band} at {fmt_currency(best_avg)}.",
-                f"{worst_band} 折扣水平的每單收入只有 {fmt_currency(worst_avg)}，低於 {best_band} 的 {fmt_currency(best_avg)}。"
+                f"{worst_band} discounting underperforms at {fmt_currency(worst_avg)} per order versus {best_band} at {fmt_currency(best_avg)}. This is a potential pricing signal and should be validated against category mix and campaign context.",
+                f"{worst_band} 折扣水平的每單收入只有 {fmt_currency(worst_avg)}，低於 {best_band} 的 {fmt_currency(best_avg)}。這屬於潛在定價訊號，仍需結合類別組合及推廣背景作進一步驗證。"
             )
             bullet = L(
-                f"Higher discount bands are not translating into stronger revenue per order.",
-                f"較高折扣水平未有轉化為更強的每單收入。"
+                f"Higher discount bands are not translating into stronger revenue per order — a potential pricing signal that needs further validation.",
+                f"較高折扣水平未有轉化為更強的每單收入，屬於需要進一步驗證的潛在定價訊號。"
             )
             return label, note, bullet
 
@@ -1056,7 +1056,7 @@ def build_business_summary_points(m: RetailModel) -> List[str]:
         points.append(f"共有 **{days} 日** 數據，**{len(df):,} 筆交易**，總收入 **{fmt_currency(total_rev)}**。")
         if not np.isnan(top_store_share):
             points.append(f"收入集中：**{top_store}** 貢獻 **{fmt_currency(top_store_rev)}**，約佔總收入 **{fmt_pct(top_store_share, 0)}**。")
-        if not np.isnan(top2_share) and len(store_rev) > 2:
+        if not np.isnan(top2_share) and len(store_rev) >= 3:
             points.append(f"**前兩大門店** 合共帶來 **{fmt_currency(top2_rev)}**，約佔 **{fmt_pct(top2_share, 0)}**。小幅改善已可帶動整體表現。")
         if top_cat is not None and not np.isnan(top_cat_share):
             points.append(f"按類別計，**{top_cat}** 是最大收入來源：**{fmt_currency(top_cat_rev)}**，約佔 **{fmt_pct(top_cat_share, 0)}**。")
@@ -1078,7 +1078,7 @@ def build_business_summary_points(m: RetailModel) -> List[str]:
         points.append(f"You have **{days} days** of data with **{len(df):,} transactions** (total revenue **{fmt_currency(total_rev)}**).")
         if not np.isnan(top_store_share):
             points.append(f"Revenue is concentrated: **{top_store}** contributes **{fmt_currency(top_store_rev)}** (about **{fmt_pct(top_store_share, 0)}** of total).")
-        if not np.isnan(top2_share) and len(store_rev) > 2:
+        if not np.isnan(top2_share) and len(store_rev) >= 3:
             points.append(f"The **top 2 stores** together generate **{fmt_currency(top2_rev)}** (about **{fmt_pct(top2_share, 0)}**). Small wins in these locations move the whole business.")
         if top_cat is not None and not np.isnan(top_cat_share):
             points.append(f"By category, **{top_cat}** is your largest driver: **{fmt_currency(top_cat_rev)}** (about **{fmt_pct(top_cat_share, 0)}**).")
@@ -2021,7 +2021,7 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
     fig_channel = apply_consulting_theme(fig_channel_raw, title=L("Revenue by Channel (Top 3)", "收入按渠道（前 3 名）"), height=320, y_is_currency=True)
 
     fig_vol_raw = _as_fig(volatility_by_channel(m))
-    fig_vol = apply_consulting_theme(fig_vol_raw, title=L("Volatility by Channel", "渠道波動性"), height=320, y_is_currency=False)
+    fig_vol = apply_consulting_theme(fig_vol_raw, title=L("Sales Stability by Channel", "渠道銷售穩定性"), height=320, y_is_currency=False)
 
     r1 = st.columns(3, gap="small")
     with r1[0]:
@@ -2063,7 +2063,7 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
             st.plotly_chart(fig_vol, use_container_width=True, config={"displayModeBar": False})
             _dash_note(_note_for_chart(
                 fig_vol_raw,
-                "Reduce volatility: stabilise operations where swings are highest.",
+                "Improve stability: focus on channels with the biggest day-to-day swings.",
                 "Volatility-by-channel unavailable — this dataset does not include a usable channel column.",
             ))
 
@@ -2073,8 +2073,25 @@ def render_onepager_dashboard(m: RetailModel, df: pd.DataFrame) -> dict:
         L("Revenue by Category (Top 5)", "收入按類別（前 5 名）"): fig_cat,
         L("Pricing Effectiveness", "定價效果"): fig_price,
         L("Revenue by Channel (Top 3)", "收入按渠道（前 3 名）"): fig_channel,
-        L("Volatility by Channel", "渠道波動性"): fig_vol,
+        L("Sales Stability by Channel", "渠道銷售穩定性"): fig_vol,
     }
+
+
+def render_questions_this_answers():
+    st.markdown(f"### {L('What questions this answers', '這份分析回答什麼問題')}")
+    st.markdown(
+        f"""
+<div class="ec-summary-card">
+  <ul class="ec-summary-list">
+    <li>{L("What’s driving my revenue?", "什麼在帶動我的收入？")}</li>
+    <li>{L("Which part of the business is underperforming?", "哪一部分業務表現較弱？")}</li>
+    <li>{L("Where might I be losing money or efficiency?", "哪裡可能正在流失收入或效率？")}</li>
+    <li>{L("What should I do next?", "下一步應該做什麼？")}</li>
+  </ul>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 
 
 # =========================================================
@@ -2084,9 +2101,9 @@ with st.sidebar:
     LANG = st.selectbox(T("Language / 語言"), ["English", "中文"], index=0)
 
 st.title("EC-AI Insight")
-st.markdown(f"<div class='ec-kicker'>{L('Turn your sales data into a clear CEO-level decision summary in seconds.', '將銷售數據轉化為清晰的 CEO 決策摘要（幾秒內完成）。')}</div>", unsafe_allow_html=True)
+st.markdown(f"<div class='ec-kicker'>{L('Know what’s happening, what’s working, and what to do next — in seconds.', '即時掌握正在發生什麼、哪些做法有效，以及下一步該做什麼。')}</div>", unsafe_allow_html=True)
 st.markdown(
-    f"<div class='ec-subtle'>{L('', '不需要儀表板，只提供決策答案。一眼看出有效與無效的業務。為管理層設計，而非分析師。')}</div>",
+    f"<div class='ec-subtle'>{L('Turn raw business data into clear answers for executives, owners, and decision makers.', '把原始業務數據轉化為管理層、老闆和決策者可直接採用的清晰答案。')}</div>",
     unsafe_allow_html=True
 )
 st.divider()
@@ -2160,9 +2177,23 @@ except Exception as e:
 
 df = m.df
 
-st.markdown(f"**{L('Sample uploaded data (preview)', '示範數據預覽')}**")
-st.dataframe(df.head(10), use_container_width=True, hide_index=True)
-st.caption(L('This is the kind of raw data the tool transforms into a CEO decision summary.', '這就是工具轉化為 CEO 決策摘要的原始數據類型。'))
+render_questions_this_answers()
+st.markdown("<div class='ec-space'></div>", unsafe_allow_html=True)
+
+st.markdown(f"**{L('Example input data (preview)', '輸入數據範例（預覽）')}**")
+preview_df = df.head(10).copy()
+
+if m.col_discount and m.col_discount in preview_df.columns:
+    preview_df[m.col_discount] = preview_df[m.col_discount].apply(lambda x: f"{x:.0%}" if pd.notna(x) else "")
+
+if m.col_revenue and m.col_revenue in preview_df.columns:
+    preview_df[m.col_revenue] = preview_df[m.col_revenue].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
+
+if m.col_date and m.col_date in preview_df.columns:
+    preview_df[m.col_date] = pd.to_datetime(preview_df[m.col_date], errors="coerce").dt.strftime("%Y-%m-%d")
+
+st.dataframe(preview_df, use_container_width=True, hide_index=True)
+st.caption(L('This is the type of business data EC-AI turns into clear decisions.', '這就是 EC-AI 轉化為清晰決策的業務數據類型。'))
 st.divider()
 
 # Summary / cards / insights
@@ -2227,9 +2258,9 @@ for i, fig in enumerate(figs):
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 render_insight_card(
-    what_points=[L("Some stores are steady while others swing day-to-day.", "有些門店表現穩定，有些則每天波動很大。")],
-    why_points=[L("Volatility makes forecasting and inventory planning harder.", "波動太大會令預測及庫存計劃更困難。"), L("Stability is often execution rather than market demand.", "穩定性通常來自營運執行，而不只是市場需求。")],
-    todo_points=[L("Fix volatility first (availability, staffing, promotion timing). Use stable stores as benchmarks for best practices.", "先處理波動問題（庫存、排班、推廣時點），並以穩定門店作為最佳做法樣板。")],
+    what_points=[L("Some stores are more stable, while others vary more from day to day.", "有些門店表現較穩定，有些則每天變化較大。")],
+    why_points=[L("Low stability makes forecasting and inventory planning harder.", "穩定性較低會令預測及庫存計劃更困難。"), L("Day-to-day variation often points to execution issues, not just demand.", "日常波動往往反映執行問題，而不只是需求變化。")],
+    todo_points=[L("Use more stable stores as benchmarks. Review staffing, stock availability, and promotion timing in less stable stores.", "以較穩定門店作為基準，並檢視較不穩定門店的排班、庫存和推廣時點。")],
 )
 
 # 4) Pricing Effectiveness
