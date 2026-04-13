@@ -443,7 +443,7 @@ def safe_read_csv(uploaded_file):
 
 def safe_plotly_chart(fig: go.Figure, **kwargs) -> None:
     try:
-        safe_plotly_chart(fig, **kwargs)
+        st.plotly_chart(fig, **kwargs)
     except Exception as e:
         st.warning(L(f"Chart rendering issue: {e}", f"圖表顯示出現問題：{e}"))
 
