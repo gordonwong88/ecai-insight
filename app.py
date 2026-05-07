@@ -5,148 +5,56 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-# =====================================================
-# EC-AI Banking Engine v0.4.1
-# Executive Banking Intelligence OS
-# Focus: Revenue / NIM / Tx RoE / Exposure / Deposit / Country Portfolio
-# =====================================================
-
-st.set_page_config(
-    page_title="EC-AI Banking Engine v0.4.1",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+st.set_page_config(page_title="EC-AI Banking Engine v0.4.2", layout="wide")
 
 LOW_NIM_THRESHOLD_BPS = 30
-TX_ROE_THRESHOLD = 0.15
-CRITICAL_TX_ROE = 0.05
-WEAK_TX_ROE = 0.10
-DFR_TARGET = 0.55
+TX_ROE_HURDLE = 0.15
 
-NAVY = "#071A2F"
-NAVY_2 = "#0B1F3A"
-BLUE_GREY = "#475569"
-LIGHT_GREY = "#F3F6F9"
-MID_GREY = "#CBD5E1"
+NAVY = "#0B1F3B"
+BLUE_GREY = "#40566B"
+LIGHT_GREY = "#F3F6F8"
+MID_GREY = "#D9E1E8"
 TEXT = "#111827"
-TEAL = "#0F766E"
-GOOD = "#2E7D32"
-LIGHT_GOOD = "#BFE8C5"
-LIGHT_BAD = "#F5B5B5"
-BAD = "#B91C1C"
+RED = "#B91C1C"
+LIGHT_RED = "#FCA5A5"
+LIGHT_GREEN = "#BBF7D0"
+GREEN = "#16A34A"
 
-# -----------------------------
-# CSS / visual identity
-# -----------------------------
 st.markdown(
     f"""
 <style>
-[data-testid="stAppViewContainer"] {{
-    background: #F7F9FC;
+.stApp {{
+    background-color: #F7F9FB;
 }}
 .ec-hero {{
-    background: linear-gradient(120deg, {NAVY} 0%, #0F3B4C 55%, {TEAL} 100%);
-    border-radius: 22px;
-    padding: 28px 34px;
+    background: linear-gradient(135deg, {NAVY} 0%, #12385F 55%, #1F6F73 100%);
+    border-radius: 18px;
+    padding: 28px 32px;
     color: white;
     margin-bottom: 20px;
-    box-shadow: 0 12px 28px rgba(7,26,47,0.22);
 }}
-.ec-hero-title {{
+.ec-hero h1 {{
     font-size: 34px;
-    font-weight: 850;
-    letter-spacing: -0.02em;
     margin-bottom: 6px;
 }}
-.ec-hero-subtitle {{
+.ec-hero p {{
     font-size: 16px;
-    opacity: 0.90;
-}}
-.ec-kicker {{
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.13em;
-    opacity: 0.75;
-    margin-bottom: 6px;
-}}
-.ec-card {{
-    background: white;
-    border: 1px solid #E5E7EB;
-    border-radius: 18px;
-    padding: 16px 18px;
-    box-shadow: 0 4px 14px rgba(15,23,42,0.04);
-}}
-.ec-card-title {{
-    color: {BLUE_GREY};
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 800;
-}}
-.ec-card-value {{
-    color: {NAVY};
-    font-size: 25px;
-    font-weight: 850;
-    margin-top: 5px;
-}}
-.ec-card-note {{
-    color: #64748B;
-    font-size: 12px;
-    margin-top: 2px;
-}}
-.stTabs [data-baseweb="tab-list"] {{
-    gap: 10px;
-    background: white;
-    border: 1px solid #E5E7EB;
-    border-radius: 16px;
-    padding: 8px;
-}}
-.stTabs [data-baseweb="tab"] {{
-    height: 48px;
-    border-radius: 12px;
-    padding: 0px 18px;
-    font-size: 16px;
-    font-weight: 750;
-    color: {NAVY};
-}}
-.stTabs [aria-selected="true"] {{
-    background: {NAVY};
-    color: white;
+    opacity: 0.92;
 }}
 div[data-testid="stMetric"] {{
     background-color: white;
     border: 1px solid #E5E7EB;
-    padding: 15px;
-    border-radius: 16px;
-    box-shadow: 0 4px 14px rgba(15,23,42,0.04);
+    padding: 14px;
+    border-radius: 14px;
 }}
-div[data-testid="stMetricLabel"] {{
-    color: {BLUE_GREY};
-    font-weight: 750;
-}}
-div[data-testid="stMetricValue"] {{
-    color: {NAVY};
-    font-weight: 850;
-}}
-.ec-section-title {{
-    color: {NAVY};
-    font-size: 22px;
-    font-weight: 850;
-    margin-top: 10px;
-    margin-bottom: 6px;
-}}
-.ec-note {{
-    color: #64748B;
-    font-size: 14px;
+button[kind="secondary"] {{
+    border-radius: 12px !important;
 }}
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-# -----------------------------
-# Formatting helpers
-# -----------------------------
 def money(x):
     try:
         x = float(x)
@@ -155,7 +63,7 @@ def money(x):
     sign = "-" if x < 0 else ""
     x = abs(x)
     if x >= 1_000_000_000:
-        return f"{sign}${x/1_000_000_000:,.2f}B"
+        return f"{sign}${x/1_000_000_000:,.1f}B"
     if x >= 1_000_000:
         return f"{sign}${x/1_000_000:,.1f}M"
     if x >= 1_000:
@@ -164,222 +72,59 @@ def money(x):
 
 def pct(x):
     try:
-        if pd.isna(x):
-            return "-"
         return f"{float(x)*100:.1f}%"
-    except Exception:
-        return "-"
-
-def bps(x):
-    try:
-        if pd.isna(x):
-            return "-"
-        return f"{float(x):.1f} bps"
     except Exception:
         return "-"
 
 def safe_div(a, b):
     try:
-        a = float(a)
-        b = float(b)
         if b == 0 or pd.isna(b):
             return np.nan
         return a / b
     except Exception:
         return np.nan
 
-# -----------------------------
-# Data helpers
-# -----------------------------
 def normalize_columns(df):
     df = df.copy()
     df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
     return df
 
-def find_col(df, options):
-    cols_lower = {c.lower(): c for c in df.columns}
-    for o in options:
-        if o.lower() in cols_lower:
-            return cols_lower[o.lower()]
-    return None
-
-def generate_sample_data(n=220, seed=42):
-    rng = np.random.default_rng(seed)
-    countries = ["Hong Kong", "Singapore", "Korea", "Taiwan", "Japan", "Australia", "India", "Indonesia"]
-    rms = ["RM A", "RM B", "RM C", "RM D", "RM E", "RM F"]
-    products = ["Term Loan", "Revolver", "Trade Finance", "Guarantee", "Deposit", "FX", "Bond", "Distribution"]
-    client_types = ["Corporate", "Financial Institution", "Public Sector", "Sponsor / PF", "Commercial Subsidiary"]
-    facility_types = ["Term Loan", "Committed Revolver", "Uncommitted Revolver", "Trade LC", "Guarantee", "Distribution"]
-    deal_types = ["New", "Refinance", "Renewal"]
-    portfolio_classes = ["Strategic Core", "Growth Opportunity", "Watchlist", "Optimize / Exit"]
-    clients = [
-        "Sample Property Group", "Sample Tech Holdings", "Sample Retail Ltd",
-        "Sample Logistics Co", "Sample Energy Corp", "Sample Healthcare Group",
-        "Sample Manufacturing Ltd", "Sample Financial Holdings", "Sample Infrastructure Co",
-        "Sample Consumer Group", "Sample Shipping Ltd", "Sample Telecom Group",
-        "Sample Public Utility", "Sample Sponsor Fund", "Sample Industrial Group"
-    ]
-
-    rows = []
-    for i in range(n):
-        country = rng.choice(countries, p=[.18,.14,.14,.12,.10,.12,.12,.08])
-        product = rng.choice(products, p=[.23,.20,.16,.10,.09,.08,.08,.06])
-        client_type = rng.choice(client_types, p=[.45,.20,.10,.12,.13])
-        drawn = float(rng.uniform(20, 700) * 1_000_000)
-        if product in ["Deposit", "FX"]:
-            drawn *= rng.uniform(.15, .50)
-        rwa = drawn * rng.uniform(.25, 1.05)
-
-        # Balanced demo mix: weak, near hurdle, good, strong
-        tx_bucket = rng.choice(["weak", "near", "good", "strong"], p=[.22,.25,.35,.18])
-        if tx_bucket == "weak":
-            tx_roe = rng.uniform(.03,.10)
-            portfolio_class = rng.choice(["Watchlist", "Optimize / Exit"], p=[.55,.45])
-        elif tx_bucket == "near":
-            tx_roe = rng.uniform(.10,.15)
-            portfolio_class = rng.choice(["Watchlist", "Growth Opportunity"], p=[.45,.55])
-        elif tx_bucket == "good":
-            tx_roe = rng.uniform(.15,.24)
-            portfolio_class = rng.choice(["Strategic Core", "Growth Opportunity"], p=[.65,.35])
-        else:
-            tx_roe = rng.uniform(.24,.45)
-            portfolio_class = rng.choice(["Strategic Core", "Growth Opportunity"], p=[.75,.25])
-
-        niat = rwa * tx_roe
-        revenue = niat / rng.uniform(.22,.48)
-        nim = rng.choice([rng.uniform(12,29), rng.uniform(30,70), rng.uniform(70,130), rng.uniform(130,180)], p=[.23,.38,.29,.10])
-        dep_ratio = rng.choice([rng.uniform(.05,.25), rng.uniform(.25,.65), rng.uniform(.65,1.65)], p=[.35,.45,.20])
-        deposit = drawn * dep_ratio
-        approved_amount = max(drawn * rng.uniform(1.0, 1.8), drawn)
-        hereafter_groe = max(tx_roe + rng.normal(.015, .035), 0)
-        rows.append({
-            "Month": rng.choice(["Oct-25", "Nov-25", "Dec-25", "Jan-26", "Feb-26", "Mar-26"]),
-            "Deal_ID": f"DEAL-{2000+i}",
-            "Client": rng.choice(clients),
-            "Country": country,
-            "RM": rng.choice(rms),
-            "Product": product,
-            "Client_Type": client_type,
-            "Portfolio_Class": portfolio_class,
-            "Facility_Type": rng.choice(facility_types),
-            "Deal_Type": rng.choice(deal_types, p=[.48,.32,.20]),
-            "Committed_Flag": rng.choice(["Committed", "Uncommitted"], p=[.62,.38]),
-            "Lending_Drawn": drawn,
-            "Approved_Amount": approved_amount,
-            "RWA": rwa,
-            "Total_Revenue": revenue,
-            "NIAT": niat,
-            "Deposit_Balance": deposit,
-            "NIM_bps": nim,
-            "Hereafter_GRoE": hereafter_groe,
-            "Distribution_Amount": approved_amount * rng.uniform(.05,.75),
-        })
-    return pd.DataFrame(rows)
-
 def ensure_metrics(df):
     df = normalize_columns(df)
-    colmap = {
-        "Client": find_col(df, ["Client", "Customer", "Customer_Name", "Borrower", "Client_Name", "Relationship_Name"]),
-        "Country": find_col(df, ["Country", "Booking_Country", "Region", "Office", "BP_Country", "GRM_Country"]),
-        "RM": find_col(df, ["RM", "Relationship_Manager", "RM_Name", "Owner"]),
-        "Product": find_col(df, ["Product", "Product_Type"]),
-        "Client_Type": find_col(df, ["Client_Type", "Customer_Type", "Classification", "Client_Classification", "Business_Type"]),
-        "Portfolio_Class": find_col(df, ["Portfolio_Class", "Portfolio_Bucket", "Management_Bucket", "Classification"]),
-        "Facility_Type": find_col(df, ["Facility_Type", "Credit_Facility_Type", "Facility"]),
-        "Deal_Type": find_col(df, ["Deal_Type", "Transaction_Type", "New_Refinance_Renewal"]),
-        "Lending_Drawn": find_col(df, ["Lending_Drawn", "Lending_Outstanding", "Drawn", "Exposure", "Outstanding", "Loan_Drawn_End_Bal"]),
-        "Approved_Amount": find_col(df, ["Approved_Amount", "Amount", "Deal_Size", "Total_Deal_Size"]),
-        "RWA": find_col(df, ["RWA", "Risk_Weighted_Asset", "Risk_Weighted_Assets", "Total_SA_RWA"]),
-        "Total_Revenue": find_col(df, ["Total_Revenue", "Revenue", "Gross_Revenue", "Income", "LTM_Revenue", "GOP"]),
-        "NIAT": find_col(df, ["NIAT", "Net_Income_After_Tax", "Net_Income", "Profit_After_Tax", "NPAT"]),
-        "Deposit_Balance": find_col(df, ["Deposit_Balance", "Deposit", "Deposits", "Deposit_Outstanding", "Depo_Bal_EOP"]),
-        "NIM_bps": find_col(df, ["NIM_bps", "NIM", "NIM_Basis_Points", "Net_Interest_Margin_bps"]),
-        "Net_Interest_Income": find_col(df, ["Net_Interest_Income", "NII"]),
-        "Hereafter_GRoE": find_col(df, ["Hereafter_GRoE", "Hereafter_GROE", "GrROE", "GROE"]),
-        "Distribution_Amount": find_col(df, ["Distribution_Amount", "Distribution_Volume", "Sell_Down_Amount"]),
-        "Committed_Flag": find_col(df, ["Committed_Flag", "Committed", "Commitment_Type"]),
-        "Month": find_col(df, ["Month", "YearMonth", "Date"]),
-        "Deal_ID": find_col(df, ["Deal_ID", "Deal", "Transaction_ID", "Facility_ID", "DS_ID"]),
-    }
-
-    required = ["Client", "Country", "Product", "Lending_Drawn", "RWA", "Total_Revenue", "NIAT"]
-    missing = [k for k in required if colmap[k] is None]
+    required = ["Client", "Country", "RM", "Product", "Lending_Drawn", "RWA", "Total_Revenue", "NIAT"]
+    missing = [c for c in required if c not in df.columns]
     if missing:
-        st.error("Missing required banking columns: " + ", ".join(missing) + ". Required core fields are Client, Country, Product, Lending Drawn, RWA, Total Revenue and NIAT.")
+        st.error(f"Missing required columns: {missing}")
         st.stop()
 
-    rename = {v: k for k, v in colmap.items() if v is not None and v != k}
-    df = df.rename(columns=rename)
-
-    if "Client_Type" not in df.columns:
-        df["Client_Type"] = "Corporate"
-    if "Portfolio_Class" not in df.columns:
-        df["Portfolio_Class"] = "Core"
-    if "Facility_Type" not in df.columns:
-        df["Facility_Type"] = df["Product"]
-    if "Deal_Type" not in df.columns:
-        df["Deal_Type"] = "Unknown"
-    if "Deposit_Balance" not in df.columns:
-        df["Deposit_Balance"] = 0
-    if "Approved_Amount" not in df.columns:
-        df["Approved_Amount"] = df["Lending_Drawn"]
-    if "Distribution_Amount" not in df.columns:
-        df["Distribution_Amount"] = 0
-    if "Committed_Flag" not in df.columns:
-        df["Committed_Flag"] = "Unknown"
-    if "Month" not in df.columns:
-        df["Month"] = "Current"
-    if "Deal_ID" not in df.columns:
-        df["Deal_ID"] = [f"DEAL-{i+1:04d}" for i in range(len(df))]
-
-    numeric_cols = ["Lending_Drawn", "Approved_Amount", "RWA", "Total_Revenue", "NIAT", "Deposit_Balance", "NIM_bps", "Net_Interest_Income", "Hereafter_GRoE", "Distribution_Amount"]
-    for c in numeric_cols:
+    for c in ["Limit", "Lending_Drawn", "RWA", "Total_Revenue", "NIAT", "Deposit_Balance", "NIM_bps", "Net_Interest_Income"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-    if "NIM_bps" not in df.columns or df["NIM_bps"].isna().all() or df["NIM_bps"].sum() == 0:
+    if "NIM_bps" not in df.columns:
         if "Net_Interest_Income" in df.columns:
             df["NIM_bps"] = df.apply(lambda r: safe_div(r["Net_Interest_Income"], r["Lending_Drawn"]) * 10000, axis=1)
         else:
             df["NIM_bps"] = np.nan
 
-    if "Hereafter_GRoE" not in df.columns or df["Hereafter_GRoE"].sum() == 0:
-        df["Hereafter_GRoE"] = df.apply(lambda r: safe_div(r["NIAT"], r["RWA"]), axis=1) + 0.015
+    if "Deposit_Balance" not in df.columns:
+        df["Deposit_Balance"] = 0
 
     df["Tx_RoE"] = df.apply(lambda r: safe_div(r["NIAT"], r["RWA"]), axis=1)
     df["Revenue_per_RWA"] = df.apply(lambda r: safe_div(r["Total_Revenue"], r["RWA"]), axis=1)
-    df["Deposit_to_Lending"] = df.apply(lambda r: safe_div(r["Deposit_Balance"], r["Lending_Drawn"]), axis=1)
-    df["Distribution_Ratio"] = df.apply(lambda r: safe_div(r["Distribution_Amount"], r["Approved_Amount"]), axis=1)
     df["Low_NIM_Flag"] = df["NIM_bps"] < LOW_NIM_THRESHOLD_BPS
-    df["Low_Tx_RoE_Flag"] = df["Tx_RoE"] < TX_ROE_THRESHOLD
-    df["Above_Hurdle_Flag"] = df["Tx_RoE"] >= TX_ROE_THRESHOLD
-    df["GRoE_Above_Hurdle_Flag"] = df["Hereafter_GRoE"] >= TX_ROE_THRESHOLD
+    df["Below_Hurdle_Flag"] = df["Tx_RoE"] < TX_ROE_HURDLE
 
-    def classify(row):
-        if row["Low_NIM_Flag"] and row["Low_Tx_RoE_Flag"]:
-            return "Critical: Low NIM + Low Tx RoE"
+    def status(row):
+        if row["Low_NIM_Flag"] and row["Below_Hurdle_Flag"]:
+            return "Critical: Low NIM + Below Hurdle"
         if row["Low_NIM_Flag"]:
-            return "Low NIM: Reprice / Sell-down"
-        if row["Low_Tx_RoE_Flag"]:
-            return "Low Tx RoE: Improve return"
-        if row["Deposit_Balance"] > row["Lending_Drawn"] and row["Total_Revenue"] > 0:
-            return "Deposit rich / Cross-sell"
-        return "Value creator"
+            return "Low NIM: Review / Sell-down"
+        if row["Below_Hurdle_Flag"]:
+            return "Below Tx RoE Hurdle"
+        return "Above Hurdle"
 
-    def watch_flag(row):
-        tx = row["Tx_RoE"]
-        if pd.isna(tx):
-            return "Review"
-        if tx < CRITICAL_TX_ROE:
-            return "Critical"
-        if tx < WEAK_TX_ROE:
-            return "Weak"
-        if tx < TX_ROE_THRESHOLD:
-            return "Monitor"
-        return "Healthy"
-
-    df["Status"] = df.apply(classify, axis=1)
-    df["Watchlist_Flag"] = df.apply(watch_flag, axis=1)
+    df["Status"] = df.apply(status, axis=1)
     return df
 
 def grouped_view(df, group_cols):
@@ -390,358 +135,286 @@ def grouped_view(df, group_cols):
         "RWA": "sum",
         "NIAT": "sum",
         "Low_NIM_Flag": "sum",
-        "Above_Hurdle_Flag": "mean",
-        "GRoE_Above_Hurdle_Flag": "mean",
-        "Distribution_Amount": "sum",
-        "Approved_Amount": "sum",
+        "Below_Hurdle_Flag": "sum"
     }).reset_index()
 
-    nim_rows = []
+    nim = []
     for _, x in df.groupby(group_cols, dropna=False):
-        nim_rows.append(safe_div((x["NIM_bps"] * x["Lending_Drawn"]).sum(), x["Lending_Drawn"].sum()))
-    g["NIM_bps"] = nim_rows
+        nim.append(safe_div((x["NIM_bps"] * x["Lending_Drawn"]).sum(), x["Lending_Drawn"].sum()))
+    g["NIM_bps"] = nim
     g["Tx_RoE"] = g.apply(lambda r: safe_div(r["NIAT"], r["RWA"]), axis=1)
     g["Revenue_per_RWA"] = g.apply(lambda r: safe_div(r["Total_Revenue"], r["RWA"]), axis=1)
-    g["Deposit_to_Lending"] = g.apply(lambda r: safe_div(r["Deposit_Balance"], r["Lending_Drawn"]), axis=1)
-    g["Distribution_Ratio"] = g.apply(lambda r: safe_div(r["Distribution_Amount"], r["Approved_Amount"]), axis=1)
     return g.sort_values("Total_Revenue", ascending=False)
 
-def display_table(df):
-    show = df.copy()
-    for c in ["Total_Revenue", "Lending_Drawn", "Deposit_Balance", "RWA", "NIAT", "Approved_Amount", "Distribution_Amount"]:
-        if c in show.columns:
-            show[c] = show[c].apply(money)
-    for c in ["Tx_RoE", "Revenue_per_RWA", "Deposit_to_Lending", "Distribution_Ratio", "Above_Hurdle_Flag", "GRoE_Above_Hurdle_Flag", "Hereafter_GRoE"]:
-        if c in show.columns:
-            show[c] = show[c].apply(pct)
-    if "NIM_bps" in show.columns:
-        show["NIM_bps"] = show["NIM_bps"].apply(bps)
-    st.dataframe(show, use_container_width=True, hide_index=True)
+def add_bar_labels(df, y_col):
+    return [money(v) for v in df[y_col]]
 
-def portfolio_summary(df):
+def bar_chart(df, x, y, title):
+    chart_df = df.copy()
+    chart_df["Label"] = chart_df[y].apply(money)
+    fig = px.bar(
+        chart_df,
+        x=x,
+        y=y,
+        text="Label",
+        title=title,
+        color_discrete_sequence=[NAVY],
+    )
+    fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_layout(
+        height=390,
+        margin=dict(l=30, r=25, t=55, b=45),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(color=TEXT),
+        title=dict(font=dict(size=18, color=NAVY)),
+        yaxis=dict(
+            tickvals=[0, 1_000_000_000, 2_000_000_000, 3_000_000_000, 4_000_000_000, 5_000_000_000],
+            ticktext=["0", "1.0B", "2.0B", "3.0B", "4.0B", "5.0B"],
+            gridcolor="#E5E7EB"
+        ),
+        xaxis=dict(tickangle=-25),
+    )
+    return fig
+
+def tx_roe_color(v):
+    # User requested: 0-10% red, 10-15% light red, 15-20% light green, >20% moderate green
+    if pd.isna(v):
+        return "#E5E7EB"
+    if v < 0.10:
+        return RED
+    if v < 0.15:
+        return LIGHT_RED
+    if v < 0.20:
+        return LIGHT_GREEN
+    return GREEN
+
+def tx_roe_status_label(v):
+    if pd.isna(v):
+        return "N/A"
+    if v < 0.10:
+        return "Critical"
+    if v < 0.15:
+        return "Below Hurdle"
+    if v < 0.20:
+        return "Acceptable"
+    return "Strong"
+
+def tx_roe_heatmap_table(df, group_col):
+    g = grouped_view(df, [group_col]).copy()
+    g["Tx RoE"] = g["Tx_RoE"].apply(pct)
+    g["Revenue"] = g["Total_Revenue"].apply(money)
+    g["Lending Drawn"] = g["Lending_Drawn"].apply(money)
+    g["RWA"] = g["RWA"].apply(money)
+    g["NIM"] = g["NIM_bps"].round(1).astype(str) + " bps"
+    g["Status"] = g["Tx_RoE"].apply(tx_roe_status_label)
+    show = g[[group_col, "Revenue", "Lending Drawn", "RWA", "NIM", "Tx RoE", "Status"]].copy()
+
+    def style_row(row):
+        raw = g.loc[row.name, "Tx_RoE"]
+        color = tx_roe_color(raw)
+        text_color = "white" if color in [RED, GREEN] else "#111827"
+        return [""] * (len(row)-2) + [f"background-color:{color}; color:{text_color}; font-weight:700;", f"background-color:{color}; color:{text_color}; font-weight:700;"]
+
+    st.dataframe(show.style.apply(style_row, axis=1), use_container_width=True, hide_index=True)
+
+def executive_summary(df):
     total_rev = df["Total_Revenue"].sum()
     total_drawn = df["Lending_Drawn"].sum()
     total_rwa = df["RWA"].sum()
     total_niat = df["NIAT"].sum()
     tx_roe = safe_div(total_niat, total_rwa)
     low_nim_exposure = df.loc[df["Low_NIM_Flag"], "Lending_Drawn"].sum()
-    low_nim_share = safe_div(low_nim_exposure, total_drawn)
-    hurdle_pass = df["Above_Hurdle_Flag"].mean()
-    top_country = grouped_view(df, ["Country"]).iloc[0]["Country"]
-    weakest_country_df = grouped_view(df, ["Country"]).sort_values("Tx_RoE", ascending=True)
-    weakest_country = weakest_country_df.iloc[0]["Country"] if len(weakest_country_df) else "-"
-    return {
-        "total_rev": total_rev,
-        "total_drawn": total_drawn,
-        "total_rwa": total_rwa,
-        "total_niat": total_niat,
-        "tx_roe": tx_roe,
-        "low_nim_exposure": low_nim_exposure,
-        "low_nim_share": low_nim_share,
-        "hurdle_pass": hurdle_pass,
-        "top_country": top_country,
-        "weakest_country": weakest_country,
-    }
+    below_hurdle_exposure = df.loc[df["Below_Hurdle_Flag"], "Lending_Drawn"].sum()
 
-def management_summary(df):
-    s = portfolio_summary(df)
-    country = grouped_view(df, ["Country"])
-    product = grouped_view(df, ["Product"])
+    top_country = grouped_view(df, ["Country"]).iloc[0]["Country"]
+    top_product = grouped_view(df, ["Product"]).iloc[0]["Product"]
+
     lines = [
-        f"Portfolio revenue is {money(s['total_rev'])}, supported by lending drawn of {money(s['total_drawn'])} and RWA of {money(s['total_rwa'])}.",
-        f"Portfolio Tx RoE is {pct(s['tx_roe'])}; hurdle pass ratio is {pct(s['hurdle_pass'])} against the 15.0% favourable threshold.",
-        f"Low-NIM exposure is {money(s['low_nim_exposure'])}, representing {pct(s['low_nim_share'])} of total lending drawn.",
-        f"Top revenue country is {s['top_country']}; weakest Tx RoE country is {s['weakest_country']}."
+        f"Total revenue is {money(total_rev)}, with lending drawn of {money(total_drawn)} and RWA of {money(total_rwa)}.",
+        f"Portfolio Tx RoE is {pct(tx_roe)} against the 15.0% favourable hurdle.",
+        f"Low-NIM exposure is {money(low_nim_exposure)}. Below-hurdle exposure is {money(below_hurdle_exposure)}.",
+        f"Top revenue contribution comes from {top_country} and {top_product}.",
     ]
-    actions = []
-    if s["low_nim_share"] and s["low_nim_share"] > 0.10:
-        actions.append("Prioritize low-NIM reviews: reprice, restructure or sell down exposures below 30bps.")
-    if s["tx_roe"] and s["tx_roe"] < TX_ROE_THRESHOLD:
-        actions.append("Improve portfolio mix by reducing capital-heavy low-return exposure and focusing new origination on above-hurdle relationships.")
-    actions.append("Use the Country Portfolio tab to identify which markets require management intervention this month.")
+
+    actions = [
+        "Prioritize below-hurdle relationships with large lending drawn and weak NIM.",
+        "Review low-NIM deals below 30bps for repricing, restructuring, or sell-down.",
+        "Reallocate management attention toward countries/products with strong Tx RoE and scalable revenue contribution.",
+    ]
     return lines, actions
 
-def kpi_card(title, value, note=""):
-    st.markdown(
-        f"""
-<div class="ec-card">
-    <div class="ec-card-title">{title}</div>
-    <div class="ec-card-value">{value}</div>
-    <div class="ec-card-note">{note}</div>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
-
-def fig_layout(fig, title=None, height=420):
-    fig.update_layout(
-        template="plotly_white",
-        height=height,
-        title=dict(text=title or "", x=0.01, xanchor="left", font=dict(size=18, color=NAVY)),
-        font=dict(color=TEXT, size=12),
-        paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF",
-        margin=dict(l=40, r=30, t=60, b=60),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
-    )
-    fig.update_xaxes(showline=True, linewidth=1, linecolor=MID_GREY, gridcolor="#E5E7EB")
-    fig.update_yaxes(showline=True, linewidth=1, linecolor=MID_GREY, gridcolor="#E5E7EB")
-    return fig
-
-def roe_heatmap(country_product):
-    z = country_product.values
-    fig = go.Figure(data=go.Heatmap(
-        z=z,
-        x=country_product.columns,
-        y=country_product.index,
-        zmin=0,
-        zmax=1,
-        colorscale=[
-            [0.0, BAD],
-            [0.20, BAD],
-            [0.40, LIGHT_BAD],
-            [0.60, LIGHT_GOOD],
-            [0.80, "#7BCB84"],
-            [1.0, GOOD],
-        ],
-        colorbar=dict(title="Tx RoE", tickformat=".0%"),
-        text=np.vectorize(lambda v: "" if pd.isna(v) else f"{v*100:.0f}%")(z),
-        texttemplate="%{text}",
-        hovertemplate="Country: %{y}<br>Product: %{x}<br>Tx RoE: %{z:.1%}<extra></extra>",
-    ))
-    fig_layout(fig, "Country × Product Tx RoE Heatmap", height=460)
-    return fig
-
-# -----------------------------
-# Sidebar
-# -----------------------------
-with st.sidebar:
-    st.markdown("### EC-AI Banking Engine")
-    st.caption("v0.4.1")
-    use_sample = st.toggle("Use sample banking dataset", value=True)
-    uploaded = st.file_uploader("Upload banking data", type=["csv", "xlsx"])
-    st.markdown("---")
-    st.markdown("**Thresholds**")
-    low_nim = st.number_input("Low NIM threshold (bps)", value=LOW_NIM_THRESHOLD_BPS)
-    roe_threshold = st.number_input("Tx RoE hurdle (%)", value=15.0) / 100
-
-LOW_NIM_THRESHOLD_BPS = low_nim
-TX_ROE_THRESHOLD = roe_threshold
-
-# -----------------------------
-# Load data
-# -----------------------------
-if uploaded is not None:
-    if uploaded.name.lower().endswith(".xlsx"):
-        raw = pd.read_excel(uploaded)
-    else:
-        raw = pd.read_csv(uploaded)
-elif use_sample:
-    raw = generate_sample_data()
-else:
-    raw = None
-
-# -----------------------------
-# Hero
-# -----------------------------
 st.markdown(
     """
 <div class="ec-hero">
-    <div class="ec-kicker">EC-AI Banking Engine v0.4.1</div>
-    <div class="ec-hero-title">Executive Banking Intelligence OS</div>
-    <div class="ec-hero-subtitle">Revenue · NIM · Tx RoE · Capital Efficiency · Country Portfolio · Balance Sheet Intelligence</div>
+  <h1>EC-AI Banking Engine v0.4.2</h1>
+  <p>Tx RoE / NIM / Revenue Decision Intelligence for executive banking management.</p>
 </div>
 """,
     unsafe_allow_html=True,
 )
 
-if raw is None:
-    st.info("Upload banking data or switch on the sample dataset in the sidebar.")
+with st.sidebar:
+    st.markdown("## EC-AI Banking Engine")
+    uploaded = st.file_uploader("Upload banking performance file", type=["csv", "xlsx"])
+    st.caption("Required: Client, Country, RM, Product, Lending_Drawn, RWA, Total_Revenue, NIAT")
+    st.markdown("---")
+    st.markdown("**Thresholds**")
+    st.write("Tx RoE hurdle: 15%")
+    st.write("Low NIM: <30bps")
+
+if uploaded is None:
+    st.info("Upload sample banking data to begin.")
     st.stop()
 
+if uploaded.name.lower().endswith(".xlsx"):
+    raw = pd.read_excel(uploaded)
+else:
+    raw = pd.read_csv(uploaded)
+
 df = ensure_metrics(raw)
-summary = portfolio_summary(df)
 
-# -----------------------------
-# Executive snapshot
-# -----------------------------
-st.markdown('<div class="ec-section-title">Executive Snapshot</div>', unsafe_allow_html=True)
-k1, k2, k3, k4, k5 = st.columns(5)
-with k1:
-    kpi_card("Total Revenue", money(summary["total_rev"]), "Portfolio income")
-with k2:
-    kpi_card("Lending Drawn", money(summary["total_drawn"]), "Balance sheet deployed")
-with k3:
-    kpi_card("Tx RoE", pct(summary["tx_roe"]), "NIAT / RWA")
-with k4:
-    kpi_card("Hurdle Pass", pct(summary["hurdle_pass"]), "Deals ≥ hurdle")
-with k5:
-    kpi_card("Low NIM Exposure", money(summary["low_nim_exposure"]), "< 30bps exposure")
+st.subheader("Executive Snapshot")
+total_revenue = df["Total_Revenue"].sum()
+total_drawn = df["Lending_Drawn"].sum()
+total_deposit = df["Deposit_Balance"].sum()
+total_rwa = df["RWA"].sum()
+total_niat = df["NIAT"].sum()
+portfolio_tx_roe = safe_div(total_niat, total_rwa)
+low_nim_exposure = df.loc[df["Low_NIM_Flag"], "Lending_Drawn"].sum()
 
-st.markdown("<br>", unsafe_allow_html=True)
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Total Revenue", money(total_revenue))
+c2.metric("Lending Drawn", money(total_drawn))
+c3.metric("Deposit Balance", money(total_deposit))
+c4.metric("Tx RoE", pct(portfolio_tx_roe))
+c5.metric("Low NIM Exposure", money(low_nim_exposure))
 
-tabs = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "CEO Dashboard",
     "Revenue Engine",
     "Pricing & NIM Risk",
     "Capital Efficiency",
     "Country Portfolio",
-    "Balance Sheet",
-    "Portfolio Data",
+    "Portfolio Data"
 ])
 
-# -----------------------------
-# CEO Dashboard
-# -----------------------------
-with tabs[0]:
-    left, right = st.columns([1.25, 1])
+with tab1:
+    st.subheader("CEO Dashboard")
+    lines, actions = executive_summary(df)
+    left, right = st.columns([1.1, 0.9])
     with left:
-        st.markdown('<div class="ec-section-title">Management Diagnosis</div>', unsafe_allow_html=True)
-        lines, actions = management_summary(df)
-        st.markdown("**What matters now**")
+        st.markdown("### Management Summary")
         for line in lines:
             st.markdown(f"- {line}")
-        st.markdown("**Recommended management actions**")
+        st.markdown("### Recommended Actions")
         for action in actions:
             st.markdown(f"- {action}")
     with right:
-        st.markdown('<div class="ec-section-title">Portfolio Health Mix</div>', unsafe_allow_html=True)
-        health = df["Watchlist_Flag"].value_counts().reset_index()
-        health.columns = ["Flag", "Count"]
-        fig = px.bar(health, x="Flag", y="Count", color="Flag",
-                     color_discrete_map={"Healthy": GOOD, "Monitor": "#F59E0B", "Weak": "#EA580C", "Critical": BAD, "Review": BLUE_GREY})
-        fig_layout(fig, "Deal Health Classification", height=360)
-        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("### Tx RoE Heatmap by Country")
+        tx_roe_heatmap_table(df, "Country")
 
-    st.markdown('<div class="ec-section-title">Country × Product Performance Heatmap</div>', unsafe_allow_html=True)
-    cp = df.pivot_table(index="Country", columns="Product", values="Tx_RoE", aggfunc="mean")
-    st.plotly_chart(roe_heatmap(cp), use_container_width=True)
+    st.markdown("### Revenue by Country")
+    country = grouped_view(df, ["Country"]).head(8)
+    st.plotly_chart(bar_chart(country, "Country", "Total_Revenue", "Revenue by Country"), use_container_width=True)
 
-# -----------------------------
-# Revenue Engine
-# -----------------------------
-with tabs[1]:
+with tab2:
+    st.subheader("Revenue Engine")
     c1, c2 = st.columns(2)
-    country = grouped_view(df, ["Country"]).head(12)
-    product = grouped_view(df, ["Product"]).head(12)
-
     with c1:
-        fig = px.bar(country, x="Country", y="Total_Revenue", color_discrete_sequence=[NAVY])
-        fig_layout(fig, "Revenue by Country", height=380)
-        fig.update_yaxes(tickformat=",.2s", title=None)
-        st.plotly_chart(fig, use_container_width=True)
+        country = grouped_view(df, ["Country"]).head(8)
+        st.plotly_chart(bar_chart(country, "Country", "Total_Revenue", "Revenue by Country"), use_container_width=True)
     with c2:
-        fig = px.bar(product, x="Product", y="Total_Revenue", color_discrete_sequence=[BLUE_GREY])
-        fig_layout(fig, "Revenue by Product", height=380)
-        fig.update_yaxes(tickformat=",.2s", title=None)
-        st.plotly_chart(fig, use_container_width=True)
+        product = grouped_view(df, ["Product"]).head(8)
+        st.plotly_chart(bar_chart(product, "Product", "Total_Revenue", "Revenue by Product Type"), use_container_width=True)
 
-    st.markdown('<div class="ec-section-title">Top Revenue Contributors</div>', unsafe_allow_html=True)
+    st.markdown("### Top Revenue Relationships")
     client = grouped_view(df, ["Client"]).head(15)
-    display_table(client[["Client", "Total_Revenue", "Lending_Drawn", "RWA", "NIAT", "Tx_RoE", "NIM_bps"]])
+    view = client.copy()
+    view["Revenue"] = view["Total_Revenue"].apply(money)
+    view["Lending Drawn"] = view["Lending_Drawn"].apply(money)
+    view["Tx RoE"] = view["Tx_RoE"].apply(pct)
+    view["NIM"] = view["NIM_bps"].round(1).astype(str) + " bps"
+    st.dataframe(view[["Client", "Revenue", "Lending Drawn", "NIM", "Tx RoE"]], use_container_width=True, hide_index=True)
 
-# -----------------------------
-# Pricing & NIM Risk
-# -----------------------------
-with tabs[2]:
-    st.markdown('<div class="ec-section-title">Low NIM Watchlist</div>', unsafe_allow_html=True)
-    low = df[df["Low_NIM_Flag"]].sort_values(["Lending_Drawn", "NIM_bps"], ascending=[False, True]).head(25)
-    display_table(low[["Deal_ID", "Client", "Country", "Product", "Lending_Drawn", "Total_Revenue", "NIM_bps", "Tx_RoE", "Status"]])
+with tab3:
+    st.subheader("Pricing & NIM Risk")
+    low = df[df["Low_NIM_Flag"]].copy()
+    st.metric("Low NIM Deal Count", len(low))
+    if len(low):
+        low["Lending Drawn"] = low["Lending_Drawn"].apply(money)
+        low["Revenue"] = low["Total_Revenue"].apply(money)
+        low["Tx RoE"] = low["Tx_RoE"].apply(pct)
+        low["NIM"] = low["NIM_bps"].round(1).astype(str) + " bps"
+        st.dataframe(low[["Deal_ID", "Client", "Country", "Product", "Lending Drawn", "Revenue", "NIM", "Tx RoE", "Status"]], use_container_width=True, hide_index=True)
+    else:
+        st.success("No low-NIM deals detected.")
 
-    c1, c2 = st.columns(2)
-    with c1:
-        nim_country = grouped_view(df, ["Country"]).sort_values("NIM_bps")
-        fig = px.bar(nim_country, x="Country", y="NIM_bps", color_discrete_sequence=[NAVY])
-        fig.add_hline(y=LOW_NIM_THRESHOLD_BPS, line_dash="dash", line_color=BAD, annotation_text="Low NIM threshold")
-        fig_layout(fig, "Weighted NIM by Country", height=380)
-        fig.update_yaxes(title="NIM (bps)")
-        st.plotly_chart(fig, use_container_width=True)
-    with c2:
-        nim_prod = grouped_view(df, ["Product"]).sort_values("NIM_bps")
-        fig = px.bar(nim_prod, x="Product", y="NIM_bps", color_discrete_sequence=[BLUE_GREY])
-        fig.add_hline(y=LOW_NIM_THRESHOLD_BPS, line_dash="dash", line_color=BAD, annotation_text="Low NIM threshold")
-        fig_layout(fig, "Weighted NIM by Product", height=380)
-        fig.update_yaxes(title="NIM (bps)")
-        st.plotly_chart(fig, use_container_width=True)
+with tab4:
+    st.subheader("Capital Efficiency")
+    st.markdown("### Capital Efficiency Watchlist")
+    watch = df[(df["Below_Hurdle_Flag"]) | (df["Low_NIM_Flag"])].copy()
+    watch = watch.sort_values(["Below_Hurdle_Flag", "Lending_Drawn"], ascending=[False, False]).head(20)
+    watch["Lending Drawn"] = watch["Lending_Drawn"].apply(money)
+    watch["RWA Display"] = watch["RWA"].apply(money)
+    watch["Revenue"] = watch["Total_Revenue"].apply(money)
+    watch["Tx RoE"] = watch["Tx_RoE"].apply(pct)
+    watch["NIM"] = watch["NIM_bps"].round(1).astype(str) + " bps"
+    st.dataframe(watch[["Client", "Country", "Product", "Lending Drawn", "RWA Display", "Revenue", "NIM", "Tx RoE", "Status"]], use_container_width=True, hide_index=True)
 
-# -----------------------------
-# Capital Efficiency
-# -----------------------------
-with tabs[3]:
-    st.markdown('<div class="ec-section-title">Capital Allocation Quadrant</div>', unsafe_allow_html=True)
-    scatter = df.copy()
-    scatter["Revenue_Size"] = scatter["Total_Revenue"].clip(lower=1)
-    fig = px.scatter(
-        scatter,
-        x="Lending_Drawn",
-        y="Tx_RoE",
-        size="Revenue_Size",
-        color="Country",
-        hover_name="Client",
-        hover_data=["Product", "NIM_bps", "RWA", "Total_Revenue", "Status"],
-        color_discrete_sequence=[NAVY, TEAL, BLUE_GREY, "#2563EB", "#64748B", "#0891B2", "#334155", "#0E7490"],
+    st.markdown("### Exposure vs Tx RoE Ranking")
+    ranked = grouped_view(df, ["Client"]).sort_values("Lending_Drawn", ascending=False).head(15)
+    ranked["Tx RoE %"] = ranked["Tx_RoE"] * 100
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=ranked["Client"],
+        y=ranked["Lending_Drawn"],
+        name="Lending Drawn",
+        marker_color=NAVY,
+        yaxis="y1",
+        text=[money(v) for v in ranked["Lending_Drawn"]],
+        textposition="outside"
+    ))
+    fig.add_trace(go.Scatter(
+        x=ranked["Client"],
+        y=ranked["Tx RoE %"],
+        name="Tx RoE %",
+        mode="lines+markers+text",
+        marker_color=GREEN,
+        line=dict(color=GREEN, width=3),
+        yaxis="y2",
+        text=[f"{v:.1f}%" for v in ranked["Tx RoE %"]],
+        textposition="top center"
+    ))
+    fig.update_layout(
+        title="Top Exposure Relationships: Lending Drawn vs Tx RoE",
+        height=480,
+        xaxis=dict(tickangle=-35),
+        yaxis=dict(title="Lending Drawn", tickvals=[0,1e9,2e9,3e9,4e9,5e9], ticktext=["0","1.0B","2.0B","3.0B","4.0B","5.0B"]),
+        yaxis2=dict(title="Tx RoE %", overlaying="y", side="right", ticksuffix="%"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend=dict(orientation="h", y=1.1)
     )
-    fig.add_hline(y=TX_ROE_THRESHOLD, line_dash="dash", line_color=BAD, annotation_text="15% Tx RoE hurdle")
-    fig.add_vline(x=df["Lending_Drawn"].median(), line_dash="dot", line_color=BLUE_GREY, annotation_text="Median exposure")
-    fig_layout(fig, "Tx RoE vs Exposure Allocation", height=500)
-    fig.update_yaxes(tickformat=".0%", title="Tx RoE")
-    fig.update_xaxes(tickformat=",.2s", title="Lending Drawn")
     st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown('<div class="ec-section-title">Management Watchlist</div>', unsafe_allow_html=True)
-    watch = df[(df["Tx_RoE"] < TX_ROE_THRESHOLD) | (df["Low_NIM_Flag"])].sort_values(["Watchlist_Flag", "Lending_Drawn"], ascending=[True, False]).head(30)
-    display_table(watch[["Watchlist_Flag", "Deal_ID", "Client", "Country", "Product", "Lending_Drawn", "RWA", "Total_Revenue", "NIAT", "Tx_RoE", "NIM_bps", "Status"]])
+with tab5:
+    st.subheader("Country Portfolio")
+    st.markdown("### Country-Level Portfolio Quality")
+    tx_roe_heatmap_table(df, "Country")
 
-# -----------------------------
-# Country Portfolio
-# -----------------------------
-with tabs[4]:
-    st.markdown('<div class="ec-section-title">Country Portfolio Cockpit</div>', unsafe_allow_html=True)
-    country = grouped_view(df, ["Country"])
-    display_table(country[["Country", "Total_Revenue", "Lending_Drawn", "Deposit_Balance", "RWA", "NIAT", "Tx_RoE", "NIM_bps", "Above_Hurdle_Flag", "Low_NIM_Flag", "Deposit_to_Lending"]])
+    st.markdown("### Country Portfolio Table")
+    country = grouped_view(df, ["Country"]).copy()
+    country["Revenue"] = country["Total_Revenue"].apply(money)
+    country["Lending Drawn"] = country["Lending_Drawn"].apply(money)
+    country["Deposits"] = country["Deposit_Balance"].apply(money)
+    country["RWA Display"] = country["RWA"].apply(money)
+    country["Tx RoE"] = country["Tx_RoE"].apply(pct)
+    country["NIM"] = country["NIM_bps"].round(1).astype(str) + " bps"
+    st.dataframe(country[["Country", "Revenue", "Lending Drawn", "Deposits", "RWA Display", "NIM", "Tx RoE", "Low_NIM_Flag", "Below_Hurdle_Flag"]], use_container_width=True, hide_index=True)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        fig = px.bar(country.sort_values("Tx_RoE"), x="Country", y="Tx_RoE", color_discrete_sequence=[NAVY])
-        fig.add_hline(y=TX_ROE_THRESHOLD, line_dash="dash", line_color=BAD, annotation_text="Hurdle")
-        fig_layout(fig, "Tx RoE by Country", height=400)
-        fig.update_yaxes(tickformat=".0%", title="Tx RoE")
-        st.plotly_chart(fig, use_container_width=True)
-    with c2:
-        fig = px.scatter(country, x="Lending_Drawn", y="Total_Revenue", size="RWA", color="Country",
-                         color_discrete_sequence=[NAVY, TEAL, BLUE_GREY, "#2563EB", "#64748B", "#0891B2", "#334155", "#0E7490"])
-        fig_layout(fig, "Country Revenue vs Lending", height=400)
-        fig.update_xaxes(tickformat=",.2s")
-        fig.update_yaxes(tickformat=",.2s")
-        st.plotly_chart(fig, use_container_width=True)
-
-# -----------------------------
-# Balance Sheet
-# -----------------------------
-with tabs[5]:
-    st.markdown('<div class="ec-section-title">Balance Sheet & Deposit Support</div>', unsafe_allow_html=True)
-    country = grouped_view(df, ["Country"])
-    c1, c2 = st.columns(2)
-    with c1:
-        fig = px.bar(country, x="Country", y=["Lending_Drawn", "Deposit_Balance"], barmode="group",
-                     color_discrete_sequence=[NAVY, TEAL])
-        fig_layout(fig, "Lending vs Deposit Balance by Country", height=420)
-        fig.update_yaxes(tickformat=",.2s")
-        st.plotly_chart(fig, use_container_width=True)
-    with c2:
-        fig = px.bar(country.sort_values("Deposit_to_Lending"), x="Country", y="Deposit_to_Lending",
-                     color_discrete_sequence=[BLUE_GREY])
-        fig.add_hline(y=DFR_TARGET, line_dash="dash", line_color=BAD, annotation_text="DFR reference")
-        fig_layout(fig, "Deposit-to-Lending Ratio by Country", height=420)
-        fig.update_yaxes(tickformat=".0%")
-        st.plotly_chart(fig, use_container_width=True)
-
-    display_table(country[["Country", "Lending_Drawn", "Deposit_Balance", "Deposit_to_Lending", "Total_Revenue", "Tx_RoE"]])
-
-# -----------------------------
-# Portfolio Data
-# -----------------------------
-with tabs[6]:
-    st.markdown('<div class="ec-section-title">Portfolio Data</div>', unsafe_allow_html=True)
-    st.caption("Raw data with EC-AI derived fields. Use this to validate flags and calculations.")
-    display_table(df)
+with tab6:
+    st.subheader("Portfolio Data")
+    show = df.copy()
+    show["Tx RoE"] = show["Tx_RoE"].apply(pct)
+    st.dataframe(show, use_container_width=True)
