@@ -246,13 +246,13 @@ with tab1:
     watch = executive_watchlist(df)
     st.success("No below-hurdle or low-NIM relationships detected.") if watch.empty else st.dataframe(watch, use_container_width=True, hide_index=True)
     st.markdown("### Revenue by Country")
-    st.plotly_chart(bar_chart(grouped_view(df,["Country"]).head(8), "Country", "Total_Revenue", "Revenue by Country"), use_container_width=True)
+    st.plotly_chart(bar_chart(grouped_view(df,["Country"]).head(8), "Country", "Total_Revenue", "CEO Dashboard — Revenue by Country"), use_container_width=True, key="plot_ceo_revenue_country_v044")
 
 with tab2:
     st.markdown('<div class="ec-section-title">Revenue Engine</div>', unsafe_allow_html=True)
     a,b = st.columns(2, gap="large")
-    with a: st.plotly_chart(bar_chart(grouped_view(df,["Country"]).head(8), "Country", "Total_Revenue", "Revenue by Country"), use_container_width=True)
-    with b: st.plotly_chart(bar_chart(grouped_view(df,["Product"]).head(8), "Product", "Total_Revenue", "Revenue by Product Type", BLUE_GREY), use_container_width=True)
+    with a: st.plotly_chart(bar_chart(grouped_view(df,["Country"]).head(8), "Country", "Total_Revenue", "Revenue Engine — Revenue by Country"), use_container_width=True, key="plot_revenue_country_v044")
+    with b: st.plotly_chart(bar_chart(grouped_view(df,["Product"]).head(8), "Product", "Total_Revenue", "Revenue by Product Type", BLUE_GREY), use_container_width=True, key="plot_revenue_product_v044")
     st.markdown("### Top Revenue Relationships")
     client = grouped_view(df,["Client"]).head(15); view = client.copy(); view["Revenue"] = view["Total_Revenue"].apply(money); view["Lending Drawn"] = view["Lending_Drawn"].apply(money); view["Tx RoE"] = view["Tx_RoE"].apply(pct); view["NIM"] = view["NIM_bps"].round(1).astype(str)+" bps"
     st.dataframe(view[["Client","Revenue","Lending Drawn","NIM","Tx RoE"]], use_container_width=True, hide_index=True)
@@ -267,7 +267,7 @@ with tab3:
 
 with tab4:
     st.markdown('<div class="ec-section-title">Capital Efficiency</div>', unsafe_allow_html=True)
-    st.plotly_chart(combo_exposure_txroe(df), use_container_width=True)
+    st.plotly_chart(combo_exposure_txroe(df), use_container_width=True, key="plot_capital_exposure_txroe_v044")
     st.markdown("### Capital Efficiency Watchlist")
     watch = executive_watchlist(df); st.success("No watchlist relationships detected.") if watch.empty else st.dataframe(watch, use_container_width=True, hide_index=True)
 
