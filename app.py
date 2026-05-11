@@ -4,31 +4,34 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="EC-AI Banking Engine v0.4.5", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="EC-AI Banking Engine v0.5", layout="wide", initial_sidebar_state="expanded")
 
+# Demo thresholds only. Keep these configurable for client pilots.
 PRICING_FLOOR_BPS = 30
-RELATIONSHIP_ROE_FLOOR = 0.15
+RELATIONSHIP_ROE_FLOOR = 0.12
 
-NAVY = "#071E3D"
-NAVY_2 = "#0B2F55"
-TEAL = "#1C7C7D"
-BLUE_GREY = "#415A6B"
-LIGHT_BG = "#F5F7FA"
-CARD_BORDER = "#D9E2EC"
+# EC-AI Banking Visual Language v0.1 — dark navy / blue grey / steel palette
+NAVY = "#0B1F33"
+NAVY_2 = "#12395B"
+EXEC_BLUE = "#1F4E79"
+STEEL = "#5B6770"
+BLUE_GREY = "#6F8293"
+LIGHT_STEEL = "#D9E1E8"
+LIGHT_BG = "#F4F6F8"
+CARD_BORDER = "#D7DEE6"
 TEXT = "#111827"
-MUTED = "#6B7280"
-RED = "#B91C1C"
-LIGHT_RED = "#FCA5A5"
-LIGHT_GREEN = "#BBF7D0"
-GREEN = "#16A34A"
-SLATE = "#64748B"
-STEEL = "#334155"
-CHART_PALETTE = [NAVY, BLUE_GREY, STEEL, SLATE, TEAL, "#94A3B8", "#CBD5E1"]
+MUTED = "#667085"
+RED = "#A63D40"
+LIGHT_RED = "#F2C7C9"
+LIGHT_GREEN = "#CFE8D8"
+GREEN = "#3E7B5A"
+WARNING = "#C97A2B"
+CHART_PALETTE = [NAVY, EXEC_BLUE, STEEL, BLUE_GREY, "#8A98A6", "#B8C2CC", LIGHT_STEEL]
 
 st.markdown(f"""
 <style>
 .stApp {{ background-color: {LIGHT_BG}; color: {TEXT}; font-family: Inter, Arial, sans-serif; }}
-.ec-hero {{ background: linear-gradient(135deg, {NAVY} 0%, {NAVY_2} 55%, {TEAL} 100%); border-radius: 20px; padding: 28px 34px; color: white; margin-bottom: 18px; box-shadow: 0 8px 22px rgba(7, 30, 61, 0.16); }}
+.ec-hero {{ background: linear-gradient(135deg, {NAVY} 0%, {NAVY_2} 62%, {EXEC_BLUE} 100%); border-radius: 20px; padding: 28px 34px; color: white; margin-bottom: 18px; box-shadow: 0 12px 26px rgba(11, 31, 51, 0.18); }}
 .ec-hero h1 {{ font-size: 36px; line-height: 1.15; margin: 0 0 8px 0; font-weight: 800; letter-spacing: -0.02em; }}
 .ec-hero p {{ font-size: 16px; line-height: 1.45; opacity: 0.92; margin: 0; }}
 .ec-section-title {{ font-size: 22px; font-weight: 800; color: {NAVY}; margin: 8px 0 10px 0; }}
@@ -37,7 +40,7 @@ div[data-testid="stMetric"] {{ background-color: white; border: 1px solid {CARD_
 div[data-testid="stMetricLabel"] {{ font-size: 13px; color: {MUTED}; }}
 div[data-testid="stMetricValue"] {{ font-size: 24px; font-weight: 800; color: {NAVY}; }}
 button[data-baseweb="tab"] {{ font-size: 16px !important; font-weight: 750 !important; padding: 12px 18px !important; margin-right: 4px !important; border-radius: 12px 12px 0 0 !important; }}
-button[data-baseweb="tab"][aria-selected="true"] {{ color: {NAVY} !important; background-color: #FFFFFF !important; border-bottom: 3px solid {TEAL} !important; }}
+button[data-baseweb="tab"][aria-selected="true"] {{ color: {NAVY} !important; background-color: #FFFFFF !important; border-bottom: 3px solid {EXEC_BLUE} !important; }}
 button[data-baseweb="tab"][aria-selected="false"] {{ color: {BLUE_GREY} !important; }}
 .ec-card {{ background: white; border: 1px solid {CARD_BORDER}; border-radius: 16px; padding: 16px 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); }}
 .ec-alert-title {{ font-weight: 800; color: {NAVY}; font-size: 16px; margin-bottom: 6px; }}
@@ -154,14 +157,39 @@ def grouped_view(df, group_cols):
     g["Revenue_per_RWA"] = g.apply(lambda r: safe_div(r["Total_Revenue"], r["RWA"]), axis=1)
     return g.sort_values("Total_Revenue", ascending=False)
 
+def rank_colors(n):
+    """Premium rank-based colours: top item dark navy, next blue, others steel/grey."""
+    base = [NAVY, EXEC_BLUE, STEEL, BLUE_GREY, "#8A98A6", "#AAB4BE", LIGHT_STEEL, "#E6EBF0"]
+    return [base[min(i, len(base)-1)] for i in range(n)]
+
 def bar_chart(df, x, y, title, color=NAVY):
-    chart_df = df.copy(); chart_df["Label"] = chart_df[y].apply(money)
-    fig = px.bar(chart_df, x=x, y=y, text="Label", title=title, color_discrete_sequence=CHART_PALETTE)
+    chart_df = df.copy().sort_values(y, ascending=False)
+    chart_df["Label"] = chart_df[y].apply(money)
+    fig = px.bar(chart_df, x=x, y=y, text="Label", title=title)
+    fig.update_traces(
+        marker_color=rank_colors(len(chart_df)),
+        marker_line_width=0,
+        textposition="outside",
+        textfont=dict(size=12, color=NAVY),
+        cliponaxis=False,
+    )
     max_y = chart_df[y].max() if len(chart_df) else 0
-    step = 1_000_000_000; tick_max = max(step, np.ceil(max_y/step)*step)
-    ticks = list(np.arange(0, tick_max+step, step)); labels = ["0"] + [f"{v/1_000_000_000:.1f}B" for v in ticks[1:]]
-    fig.update_traces(textposition="outside", cliponaxis=False)
-    fig.update_layout(height=390, margin=dict(l=35,r=25,t=55,b=55), plot_bgcolor="white", paper_bgcolor="white", font=dict(color=TEXT, family="Inter, Arial, sans-serif"), title=dict(font=dict(size=18, color=NAVY)), yaxis=dict(tickvals=ticks, ticktext=labels, gridcolor="#E5E7EB"), xaxis=dict(tickangle=0, tickfont=dict(size=11)))
+    step = 1_000_000_000
+    tick_max = max(step, np.ceil(max_y/step)*step)
+    ticks = list(np.arange(0, tick_max+step, step))
+    labels = ["0"] + [f"{v/1_000_000_000:.1f}B" for v in ticks[1:]]
+    fig.update_layout(
+        height=410,
+        margin=dict(l=35, r=25, t=60, b=70),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font=dict(color=TEXT, family="Inter, Arial, sans-serif"),
+        title=dict(font=dict(size=18, color=NAVY, family="Inter, Arial, sans-serif")),
+        yaxis=dict(tickvals=ticks, ticktext=labels, gridcolor="#E9EEF3", zeroline=False),
+        xaxis=dict(tickangle=0, tickfont=dict(size=11, color=TEXT)),
+        bargap=0.34,
+        showlegend=False,
+    )
     return fig
 
 def combo_exposure_txroe(df):
@@ -169,7 +197,7 @@ def combo_exposure_txroe(df):
     ranked["LTM Group RoE %"] = ranked["LTM_Group_RoE"] * 100
     fig = go.Figure()
     fig.add_trace(go.Bar(x=ranked["Client"], y=ranked["Lending_Drawn"], name="Lending Drawn", marker_color=NAVY, yaxis="y1", text=[money(v) for v in ranked["Lending_Drawn"]], textposition="outside", cliponaxis=False))
-    fig.add_trace(go.Scatter(x=ranked["Client"], y=ranked["LTM Group RoE %"], name="LTM Group RoE %", mode="lines+markers+text", marker=dict(color=TEAL, size=9), line=dict(color=TEAL, width=3), yaxis="y2", text=[f"{v:.1f}%" for v in ranked["LTM Group RoE %"]], textposition="top center"))
+    fig.add_trace(go.Scatter(x=ranked["Client"], y=ranked["LTM Group RoE %"], name="LTM Group RoE %", mode="lines+markers+text", marker=dict(color=EXEC_BLUE, size=9), line=dict(color=EXEC_BLUE, width=3), yaxis="y2", text=[f"{v:.1f}%" for v in ranked["LTM Group RoE %"]], textposition="top center"))
     max_y = ranked["Lending_Drawn"].max() if len(ranked) else 0
     step = 1_000_000_000; tick_max = max(step, np.ceil(max_y/step)*step)
     ticks = list(np.arange(0, tick_max+step, step)); labels = ["0"] + [f"{v/1_000_000_000:.1f}B" for v in ticks[1:]]
@@ -202,7 +230,7 @@ def executive_summary(df):
     actions = ["Prioritize relationships with high exposure, profitability pressure and pricing review for repricing or sell-down review.", "Protect strong-return countries/products with strong LTM Group RoE and revenue contribution is scalable.", "Use the watchlist as the management discussion queue for monthly portfolio review."]
     return lines, actions
 
-st.markdown('<div class="ec-hero"><h1>EC-AI Banking Engine v0.4.5</h1><p>Portfolio profitability / pricing / revenue decision intelligence for banking management.</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="ec-hero"><h1>EC-AI Banking Engine v0.5</h1><p>Portfolio profitability / pricing / revenue decision intelligence for banking management.</p></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("## EC-AI Banking Engine")
@@ -214,11 +242,11 @@ with st.sidebar:
         st.caption("Required: Client, Country, RM, Product, Lending_Drawn, RWA, Total_Revenue, NIAT")
     st.markdown("---")
     st.markdown("### Thresholds")
-    st.caption("Demo thresholds only — configurable for each client / bank policy.")
+    st.caption("Demo thresholds only — not copied from any bank. Adjust for each client / pilot.")
     roe_floor = st.slider("Relationship profitability floor", 0.05, 0.30, RELATIONSHIP_ROE_FLOOR, 0.01, format="%.2f")
     pricing_floor = st.slider("Pricing / margin floor (bps)", 0, 150, PRICING_FLOOR_BPS, 5)
     st.markdown("---")
-    st.caption("v0.4.5: generic demo logic + safer wording + no bank-specific thresholds")
+    st.caption("v0.5: premium visual refresh + generic demo logic + configurable thresholds")
 
 if data_mode == "Use Built-in Demo Data": raw = make_demo_data()
 else:
