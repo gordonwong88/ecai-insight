@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="EC-AI Banking Engine v0.5", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="EC-AI Banking Engine v0.6", layout="wide", initial_sidebar_state="expanded")
 
 # Demo thresholds only. Keep these configurable for client pilots.
 PRICING_FLOOR_BPS = 30
@@ -148,13 +148,14 @@ def ensure_metrics(df):
     return df
 
 def grouped_view(df, group_cols):
-    g = df.groupby(group_cols, dropna=False).agg({"Total_Revenue":"sum","Lending_Drawn":"sum","Deposit_Balance":"sum","RWA":"sum","NIAT":"sum","Pricing_Floor_Flag":"sum","Below_Relationship_RoE_Flag":"sum"}).reset_index()
+    g = df.groupby(group_cols, dropna=False).agg({"Total_Revenue":"sum","Limit":"sum","Lending_Drawn":"sum","Deposit_Balance":"sum","RWA":"sum","NIAT":"sum","Pricing_Floor_Flag":"sum","Below_Relationship_RoE_Flag":"sum"}).reset_index()
     nim = []
     for _, x in df.groupby(group_cols, dropna=False):
         nim.append(safe_div((x["NIM_bps"]*x["Lending_Drawn"]).sum(), x["Lending_Drawn"].sum()))
     g["NIM_bps"] = nim
     g["LTM_Group_RoE"] = g.apply(lambda r: safe_div(r["NIAT"], r["RWA"]), axis=1)
     g["Revenue_per_RWA"] = g.apply(lambda r: safe_div(r["Total_Revenue"], r["RWA"]), axis=1)
+    g["Utilization"] = g.apply(lambda r: safe_div(r["Lending_Drawn"], r["Limit"]), axis=1) if "Limit" in g.columns else np.nan
     return g.sort_values("Total_Revenue", ascending=False)
 
 def rank_colors(n):
@@ -230,7 +231,7 @@ def executive_summary(df):
     actions = ["Prioritize relationships with high exposure, profitability pressure and pricing review for repricing or sell-down review.", "Protect strong-return countries/products with strong LTM Group RoE and revenue contribution is scalable.", "Use the watchlist as the management discussion queue for monthly portfolio review."]
     return lines, actions
 
-st.markdown('<div class="ec-hero"><h1>EC-AI Banking Engine v0.5</h1><p>Portfolio profitability / pricing / revenue decision intelligence for banking management.</p></div>', unsafe_allow_html=True)
+st.markdown('<div class="ec-hero"><h1>EC-AI Banking Engine v0.6</h1><p>Portfolio profitability / pricing / revenue decision intelligence for banking management.</p></div>', unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("## EC-AI Banking Engine")
@@ -246,7 +247,7 @@ with st.sidebar:
     roe_floor = st.slider("Relationship profitability floor", 0.05, 0.30, RELATIONSHIP_ROE_FLOOR, 0.01, format="%.2f")
     pricing_floor = st.slider("Pricing / margin floor (bps)", 0, 150, PRICING_FLOOR_BPS, 5)
     st.markdown("---")
-    st.caption("v0.5: premium visual refresh + generic demo logic + configurable thresholds")
+    st.caption("v0.6: v0.5 visual base + Relationship 360 + configurable thresholds")
 
 if data_mode == "Use Built-in Demo Data": raw = make_demo_data()
 else:
@@ -268,7 +269,7 @@ total_revenue = df["Total_Revenue"].sum(); total_drawn = df["Lending_Drawn"].sum
 c1,c2,c3,c4,c5 = st.columns(5)
 c1.metric("Total Revenue", money(total_revenue)); c2.metric("Lending Drawn", money(total_drawn)); c3.metric("Deposit Balance", money(total_deposit)); c4.metric("LTM Group RoE", pct(portfolio_tx_roe)); c5.metric("Pricing Review Exposure", money(low_nim_exposure))
 
-tab1,tab2,tab3,tab4,tab5,tab6 = st.tabs(["CEO Dashboard","Revenue Engine","Pricing & NIM Risk","Capital Efficiency","Country Portfolio","Portfolio Data"])
+tab1,tab2,tab3,tab4,tab5,tab6,tab7 = st.tabs(["CEO Dashboard","Revenue Engine","Relationship 360","Pricing & NIM Risk","Capital Efficiency","Country Portfolio","Portfolio Data"])
 
 with tab1:
     st.markdown('<div class="ec-section-title">CEO Dashboard</div>', unsafe_allow_html=True)
@@ -299,10 +300,97 @@ with tab2:
     with a: st.plotly_chart(bar_chart(grouped_view(df,["Country"]).head(8), "Country", "Total_Revenue", "Revenue Engine — Revenue by Country"), use_container_width=True, key="plot_revenue_country_v044")
     with b: st.plotly_chart(bar_chart(grouped_view(df,["Product"]).head(8), "Product", "Total_Revenue", "Revenue by Product Type", BLUE_GREY), use_container_width=True, key="plot_revenue_product_v044")
     st.markdown('<div class="ec-section-title">Top Revenue Relationships</div>', unsafe_allow_html=True)
-    client = grouped_view(df,["Client"]).head(15); view = client.copy(); view["Revenue"] = view["Total_Revenue"].apply(money); view["Lending Drawn"] = view["Lending_Drawn"].apply(money); view["LTM Group RoE"] = view["LTM_Group_RoE"].apply(pct); view["NIM"] = view["NIM_bps"].round(1).astype(str)+" bps"
-    st.dataframe(view[["Client","Revenue","Lending Drawn","NIM","LTM Group RoE"]], use_container_width=True, hide_index=True)
+    client = grouped_view(df,["Client"]).head(15); view = client.copy(); view["Revenue"] = view["Total_Revenue"].apply(money); view["Facility Limit"] = view["Limit"].apply(money); view["Lending Drawn"] = view["Lending_Drawn"].apply(money); view["Utilization"] = view["Utilization"].apply(pct); view["LTM Group RoE"] = view["LTM_Group_RoE"].apply(pct); view["NIM"] = view["NIM_bps"].round(1).astype(str)+" bps"
+    st.dataframe(view[["Client","Revenue","Facility Limit","Lending Drawn","Utilization","NIM","LTM Group RoE"]], use_container_width=True, hide_index=True)
 
 with tab3:
+    st.markdown('<div class="ec-section-title">Relationship 360</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ec-subtitle">Single-client relationship view: limits, utilisation, revenue, deposits, profitability and product penetration.</div>', unsafe_allow_html=True)
+
+    client_list = sorted(df["Client"].dropna().unique())
+    selected_client = st.selectbox("Select Relationship", client_list, key="relationship_360_client_selector")
+    client_df = df[df["Client"] == selected_client].copy()
+
+    rel_country = client_df["Country"].mode().iloc[0] if not client_df["Country"].mode().empty else "-"
+    rel_tier = client_df["Client_Tier"].mode().iloc[0] if "Client_Tier" in client_df.columns and not client_df["Client_Tier"].mode().empty else "Core"
+    rel_sector = client_df["Sector"].mode().iloc[0] if "Sector" in client_df.columns and not client_df["Sector"].mode().empty else "General"
+
+    total_limit = client_df["Limit"].sum()
+    total_drawn = client_df["Lending_Drawn"].sum()
+    total_revenue = client_df["Total_Revenue"].sum()
+    total_deposit = client_df["Deposit_Balance"].sum()
+    total_rwa = client_df["RWA"].sum()
+    total_niat = client_df["NIAT"].sum()
+    rel_groe = safe_div(total_niat, total_rwa)
+    rel_util = safe_div(total_drawn, total_limit)
+
+    st.markdown(f"""
+    <div class="ec-card">
+      <div class="ec-alert-title">{selected_client}</div>
+      <div class="ec-alert-text">Country: <b>{rel_country}</b> &nbsp; | &nbsp; Sector: <b>{rel_sector}</b> &nbsp; | &nbsp; Tier: <b>{rel_tier}</b></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    r1,r2,r3,r4,r5 = st.columns(5)
+    r1.metric("Facility Limit", money(total_limit))
+    r2.metric("Lending Drawn", money(total_drawn))
+    r3.metric("Utilization", pct(rel_util))
+    r4.metric("Revenue", money(total_revenue))
+    r5.metric("LTM Group RoE", pct(rel_groe))
+
+    r6,r7,r8 = st.columns(3)
+    r6.metric("Deposit Balance", money(total_deposit))
+    r7.metric("RWA", money(total_rwa))
+    r8.metric("Product Count", str(client_df["Product"].nunique()))
+
+    left, right = st.columns([1.05,0.95], gap="large")
+
+    with left:
+        st.markdown("### Product Penetration")
+        product_view = client_df.groupby("Product", as_index=False).agg({"Total_Revenue":"sum", "Limit":"sum", "Lending_Drawn":"sum"}).sort_values("Total_Revenue", ascending=False)
+        product_view["Label"] = product_view["Total_Revenue"].apply(money)
+        fig_rel = px.bar(product_view, x="Product", y="Total_Revenue", text="Label", title="Revenue by Product")
+        fig_rel.update_traces(marker_color=rank_colors(len(product_view)), textposition="outside", cliponaxis=False)
+        fig_rel.update_layout(height=410, plot_bgcolor="white", paper_bgcolor="white", xaxis_tickangle=0, showlegend=False, yaxis=dict(gridcolor="#E9EEF3"), title=dict(font=dict(size=18, color=NAVY)))
+        st.plotly_chart(fig_rel, use_container_width=True, key="relationship_360_product_penetration")
+
+    with right:
+        st.markdown("### Banker Commentary")
+        comments = []
+        if rel_groe >= roe_floor + 0.08:
+            comments.append("Relationship demonstrates strong profitability and strategic value relative to the configured floor.")
+        elif rel_groe >= roe_floor:
+            comments.append("Relationship profitability is acceptable, with selective growth opportunities.")
+        else:
+            comments.append("Relationship profitability requires management review and optimisation.")
+
+        if rel_util < 0.40:
+            comments.append("Low utilisation suggests wallet expansion, activation or cross-sell opportunity.")
+        elif rel_util > 0.80:
+            comments.append("High utilisation indicates deep lending engagement; monitor limit headroom and concentration.")
+
+        if total_deposit < total_drawn * 0.20:
+            comments.append("Deposit penetration appears relatively weak versus lending exposure.")
+        else:
+            comments.append("Deposit contribution provides balance sheet support to the relationship.")
+
+        if client_df["Product"].nunique() <= 2:
+            comments.append("Product penetration is narrow; consider trade, FX, cash or markets cross-sell where relevant.")
+
+        st.markdown('<div class="ec-card">', unsafe_allow_html=True)
+        for c in comments:
+            st.markdown(f'<div class="ec-alert-text">• {c}</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("### Relationship Product Table")
+    table = product_view.copy()
+    table["Facility Limit"] = table["Limit"].apply(money)
+    table["Lending Drawn"] = table["Lending_Drawn"].apply(money)
+    table["Revenue"] = table["Total_Revenue"].apply(money)
+    table["Utilization"] = table.apply(lambda r: pct(safe_div(r["Lending_Drawn"], r["Limit"])), axis=1)
+    st.dataframe(table[["Product", "Facility Limit", "Lending Drawn", "Utilization", "Revenue"]], use_container_width=True, hide_index=True)
+
+with tab4:
     st.markdown('<div class="ec-section-title">Pricing & NIM Risk</div>', unsafe_allow_html=True)
     low = df[df["Pricing_Floor_Flag"]].copy(); a,b,c = st.columns(3); a.metric("Pricing Review Deals", len(low)); b.metric("Pricing Review Exposure", money(low["Lending_Drawn"].sum() if len(low) else 0)); c.metric("Configurable Floor", f"{pricing_floor} bps")
     if len(low):
@@ -310,7 +398,7 @@ with tab3:
         st.dataframe(low[["Deal_ID","Client","Country","Product","Lending Drawn","Revenue","NIM","LTM Group RoE","Status"]], use_container_width=True, hide_index=True)
     else: st.success("No pricing review deals detected.")
 
-with tab4:
+with tab5:
     st.markdown('<div class="ec-section-title">Capital Efficiency</div>', unsafe_allow_html=True)
     st.plotly_chart(combo_exposure_txroe(df), use_container_width=True, key="plot_capital_exposure_txroe_v044")
     st.markdown("### Capital Efficiency Watchlist")
@@ -320,7 +408,7 @@ with tab4:
     else:
         st.dataframe(watch, use_container_width=True, hide_index=True)
 
-with tab5:
+with tab6:
     st.markdown('<div class="ec-section-title">Country Portfolio</div>', unsafe_allow_html=True)
     st.markdown("### Country-Level Portfolio Quality")
     tx_roe_heatmap_table(df, "Country")
@@ -328,7 +416,7 @@ with tab5:
     country = grouped_view(df,["Country"]).copy(); country["Revenue"] = country["Total_Revenue"].apply(money); country["Lending Drawn"] = country["Lending_Drawn"].apply(money); country["Deposits"] = country["Deposit_Balance"].apply(money); country["RWA"] = country["RWA"].apply(money); country["LTM Group RoE"] = country["LTM_Group_RoE"].apply(pct); country["NIM"] = country["NIM_bps"].round(1).astype(str)+" bps"
     st.dataframe(country[["Country","Revenue","Lending Drawn","Deposits","RWA","NIM","LTM Group RoE","Pricing_Floor_Flag","Below_Relationship_RoE_Flag"]], use_container_width=True, hide_index=True)
 
-with tab6:
+with tab7:
     st.markdown('<div class="ec-section-title">Portfolio Data</div>', unsafe_allow_html=True)
     show = df.copy(); show["LTM Group RoE"] = show["LTM_Group_RoE"].apply(pct)
     st.dataframe(show, use_container_width=True)
