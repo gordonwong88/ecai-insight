@@ -1,821 +1,817 @@
+# EC-AI Banking Engine v0.8.3
+# Relationship Intelligence Prototype for Corporate & Investment Banking
+# Streamlit single-file app
 
-import streamlit as st
-import pandas as pd
+import math
+import io
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple
+
 import numpy as np
-import plotly.express as px
+import pandas as pd
+import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="EC-AI Banking Engine v0.8.2", layout="wide", initial_sidebar_state="expanded")
+# -----------------------------
+# Page config
+# -----------------------------
+st.set_page_config(
+    page_title="EC-AI Banking Engine v0.8.3",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# =========================================================
-# CONFIGURABLE DEMO THRESHOLDS
-# =========================================================
-DEFAULT_PRICING_FLOOR_BPS = 50
-DEFAULT_RELATIONSHIP_ROE_FLOOR = 0.18
+# -----------------------------
+# Design system
+# -----------------------------
+NAVY = "#0B2545"
+NAVY_2 = "#123C69"
+BLUE = "#2F5D8C"
+SLATE = "#6F7F8C"
+SLATE_2 = "#8A99A6"
+LIGHT = "#F4F7FA"
+BORDER = "#D8E0E8"
+GREEN = "#007A3D"
+RED = "#B42318"
+AMBER = "#B7791F"
+PALETTE = [NAVY, BLUE, SLATE, SLATE_2, "#A8B3BD", "#CBD3DA"]
 
-# =========================================================
-# EC-AI BANKING VISUAL LANGUAGE
-# =========================================================
-NAVY = "#08264A"
-NAVY_2 = "#173A5E"
-EXEC_BLUE = "#325B8C"
-STEEL = "#6E7B87"
-BLUE_GREY = "#7E8B97"
-LIGHT_STEEL = "#D9DEE3"
-LIGHT_BG = "#F4F6F8"
-CARD_BORDER = "#D7DEE6"
-TEXT = "#111827"
-MUTED = "#667085"
-RED = "#A63D40"
-LIGHT_RED = "#F2C7C9"
-LIGHT_GREEN = "#CFE8D8"
-GREEN = "#3E7B5A"
-WARNING = "#C97A2B"
-
-st.markdown(f"""
+st.markdown(
+    f"""
 <style>
-.stApp {{
-    background-color: {LIGHT_BG};
-    color: {TEXT};
-    font-family: Inter, Arial, sans-serif;
-}}
-
-.ec-hero {{
-    background: linear-gradient(135deg, {NAVY} 0%, {NAVY_2} 62%, {EXEC_BLUE} 100%);
-    border-radius: 20px;
-    padding: 28px 34px;
-    color: white;
-    margin-bottom: 18px;
-    box-shadow: 0 12px 26px rgba(11, 31, 51, 0.18);
-}}
-
-.ec-hero h1 {{
-    font-size: 36px;
-    line-height: 1.15;
-    margin: 0 0 8px 0;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-}}
-
-.ec-hero p {{
-    font-size: 16px;
-    line-height: 1.45;
-    opacity: 0.92;
-    margin: 0;
-}}
-
-.ec-section-title {{
-    font-size: 22px;
-    font-weight: 800;
-    color: {NAVY};
-    margin: 8px 0 10px 0;
-}}
-
-.ec-subtitle {{
-    color: {MUTED};
-    font-size: 14px;
-    margin-top: -4px;
-    margin-bottom: 16px;
-}}
-
-div[data-testid="stMetric"] {{
-    background-color: white;
-    border: 1px solid {CARD_BORDER};
-    padding: 14px 14px;
-    border-radius: 16px;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-}}
-
-div[data-testid="stMetricLabel"] {{
-    font-size: 13px;
-    color: {MUTED};
-}}
-
-div[data-testid="stMetricValue"] {{
-    font-size: 24px;
-    font-weight: 800;
-    color: {NAVY};
-}}
-
-button[data-baseweb="tab"] {{
-    font-size: 16px !important;
-    font-weight: 750 !important;
-    padding: 12px 18px !important;
-    margin-right: 4px !important;
-    border-radius: 12px 12px 0 0 !important;
-}}
-
-button[data-baseweb="tab"][aria-selected="true"] {{
-    color: {NAVY} !important;
-    background-color: #FFFFFF !important;
-    border-bottom: 3px solid {EXEC_BLUE} !important;
-}}
-
-button[data-baseweb="tab"][aria-selected="false"] {{
-    color: {BLUE_GREY} !important;
-}}
-
-.ec-card {{
-    background: white;
-    border: 1px solid {CARD_BORDER};
-    border-radius: 16px;
-    padding: 12px 16px;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-}}
-
-.ec-alert-title {{
-    font-weight: 800;
-    color: {NAVY};
-    font-size: 16px;
-    margin-bottom: 6px;
-}}
-
-.ec-alert-text {{
-    color: {TEXT};
-    font-size: 13px;
-    line-height: 1.35;
-}}
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    html, body, [class*="css"] {{ font-family: Inter, Arial, sans-serif; }}
+    .stApp {{ background: {LIGHT}; }}
+    section[data-testid="stSidebar"] {{ background: linear-gradient(180deg, #061B33 0%, #0B2545 100%); }}
+    section[data-testid="stSidebar"] * {{ color: white !important; }}
+    section[data-testid="stSidebar"] .stRadio label {{ font-size: 13px !important; }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] label {{ background: rgba(255,255,255,0.06); border-radius: 8px; padding: 4px 8px; margin: 2px 0; }}
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {{ background: rgba(255,255,255,0.12); }}
+    .main .block-container {{ padding-top: 1.4rem; max-width: 1420px; }}
+    h1 {{ color: #061B33; font-size: 28px !important; font-weight: 800 !important; margin-bottom: 0.15rem !important; }}
+    h2 {{ color: #061B33; font-size: 22px !important; font-weight: 800 !important; margin-top: 1.2rem !important; }}
+    h3 {{ color: #061B33; font-size: 16px !important; font-weight: 800 !important; }}
+    .subtitle {{ color:#526173; font-size:13px; margin-bottom: 12px; }}
+    .top-filter {{ background:white; border:1px solid {BORDER}; border-radius:14px; padding:14px 18px; margin-bottom:18px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
+    .filter-label {{ font-size:10px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.04em; }}
+    .filter-value {{ font-size:14px; color:#061B33; margin-left:10px; font-weight:600; }}
+    .metric-card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:18px 18px 14px 18px; min-height:105px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
+    .metric-label {{ font-size:11px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.04em; }}
+    .metric-value {{ color:#061B33; font-size:25px; font-weight:800; margin-top:10px; }}
+    .metric-note {{ color:{GREEN}; font-size:12px; font-weight:700; margin-top:8px; }}
+    .card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:14px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
+    .small-card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:14px; min-height:180px; }}
+    .section-gap {{ height: 8px; }}
+    .insight-box {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:14px 18px; font-size:13px; color:#061B33; }}
+    .sidebar-brand {{ font-size:30px; font-weight:800; margin-top:10px; }}
+    .sidebar-sub {{ font-size:14px; font-weight:700; opacity:.95; }}
+    .sidebar-ver {{ font-size:12px; opacity:.85; margin-bottom:28px; }}
+    .sidebar-section {{ font-size:12px; font-weight:800; opacity:.72; margin:24px 0 8px; letter-spacing:.04em; }}
+    .footer {{ color:#526173; font-size:12px; margin-top:20px; }}
+    div[data-testid="stDataFrame"] {{ border:1px solid {BORDER}; border-radius:12px; }}
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-
-# =========================================================
-# HELPERS
-# =========================================================
-def money(x):
+# -----------------------------
+# Formatting helpers
+# -----------------------------
+def fmt_b(x: float, digits: int = 1) -> str:
     try:
-        x = float(x)
-    except Exception:
-        return "-"
-    sign = "-" if x < 0 else ""
-    x = abs(x)
-    if x >= 1_000_000_000:
-        return f"{sign}${x/1_000_000_000:,.1f}B"
-    if x >= 1_000_000:
-        return f"{sign}${x/1_000_000:,.1f}M"
-    if x >= 1_000:
-        return f"{sign}${x/1_000:,.1f}K"
-    return f"{sign}${x:,.0f}"
-
-
-def pct(x):
-    try:
-        return f"{float(x)*100:.1f}%"
+        return f"${float(x):,.{digits}f}B"
     except Exception:
         return "-"
 
 
-def safe_div(a, b):
+def fmt_m(x: float, digits: int = 1) -> str:
     try:
-        if b == 0 or pd.isna(b):
-            return np.nan
-        return a / b
+        return f"${float(x):,.{digits}f}M"
     except Exception:
-        return np.nan
+        return "-"
 
 
-def roe_color(v):
-    if pd.isna(v):
-        return "#E5E7EB"
-    if v < 0.10:
-        return RED
-    if v < 0.15:
-        return LIGHT_RED
-    if v < 0.20:
-        return LIGHT_GREEN
-    return GREEN
+def fmt_pct(x: float, digits: int = 1) -> str:
+    try:
+        return f"{float(x)*100:.{digits}f}%"
+    except Exception:
+        return "-"
 
 
-def roe_status_label(v):
-    if pd.isna(v):
-        return "N/A"
-    if v < 0.10:
-        return "Critical"
-    if v < 0.15:
-        return "Below Profit Floor"
-    if v < 0.20:
-        return "Acceptable"
-    return "Strong"
+def clean_number(v, default=0.0):
+    try:
+        if pd.isna(v):
+            return default
+        return float(v)
+    except Exception:
+        return default
 
-
-def rank_colors(n):
-    base = [NAVY, EXEC_BLUE, STEEL, BLUE_GREY, "#8A98A6", "#AAB4BE", LIGHT_STEEL, "#E6EBF0"]
-    return [base[min(i, len(base)-1)] for i in range(n)]
-
-
-# =========================================================
-# DEMO DATA WITH DEPOSITS + WALLET SHARE PROTOTYPE
-# =========================================================
-@st.cache_data
-def make_demo_data(n=200, seed=7):
+# -----------------------------
+# Demo data
+# -----------------------------
+@st.cache_data(show_spinner=False)
+def make_demo_data(seed: int = 83) -> Dict[str, pd.DataFrame]:
     rng = np.random.default_rng(seed)
+    countries = ["Hong Kong", "Korea", "Japan", "Australia", "Singapore", "Taiwan"]
+    country_rev = np.array([315.8, 277.6, 226.5, 214.3, 194.8, 119.2])
+    country_exp = np.array([25.1, 20.6, 18.7, 15.4, 13.2, 9.4])
+    country_dep = np.array([47.6, 39.4, 34.0, 29.1, 27.7, 17.1])
+    roe = np.array([0.201, 0.186, 0.178, 0.169, 0.162, 0.148])
 
-    countries = ["Hong Kong", "Singapore", "Japan", "Korea", "Taiwan", "Australia"]
-    products = [
-        "Term Loan", "Revolver", "Project Finance", "Fund Finance",
-        "Structured Finance", "Trade LC", "AR Financing", "Supply Chain Finance",
-        "FX / Markets", "Hedging", "Cash Management", "Deposits",
-        "DCM", "ECM", "Syndication", "Securitization", "Advisory", "Guarantee"
+    rel_names = [
+        "North Asia Energy", "Harbour Retail Corp", "Strategic Infrastructure Co", "CB Pacific Property",
+        "Sample Financial Holdings", "Sample Shipping Ltd", "Summit Telecom Group", "Asia Healthcare Group",
+        "Sample Industrials Ltd", "Eastern Logistics Holdings", "Sample Trading Co", "Global Manufacturing Ltd",
+        "Example Infrastructure Co", "Sakura Tech Holdings", "Pacific Consumer Group", "Metro Real Estate Ltd",
+        "Apex Fund Partners", "Green Mobility Group", "Orion Semiconductor", "Blue Ocean Shipping"
     ]
-    rms = ["RM - David", "RM - Michael", "RM - Sarah", "RM - Jason", "RM - Emily", "RM - Chris"]
-    sectors = [
-        "Property", "Infrastructure", "Healthcare", "Technology",
-        "Shipping", "Energy", "Consumer", "Industrial", "Financial Institutions"
-    ]
-    clients = [
-        "Pacific Property Group", "Eastern Logistics Holdings", "Global Manufacturing Ltd",
-        "Summit Telecom Group", "Harbour Retail Corp", "North Asia Energy",
-        "Strategic Infrastructure Co", "Asia Healthcare Group", "Sample Financial Holdings",
-        "Sample Infrastructure Co", "Sample Shipping Ltd", "Sample Trading Co",
-        "Sample Industrials Ltd", "Sample Telecom Group"
-    ]
+    sectors = ["Energy", "Retail", "Infrastructure", "Real Estate", "Financial Institutions", "Shipping", "Telecom", "Healthcare", "Industrials", "Logistics"]
     tiers = ["Strategic", "Core", "Emerging", "Flow"]
-    deposit_types = ["CASA", "Operational", "Time Deposit"]
+    products = [
+        "Term Loan", "Revolver", "Trade LC", "Trade Finance", "Cash Management", "FX / Markets",
+        "DCM", "Securitization", "Fund Finance", "Project Finance", "CMG / LAF", "Investment Banking"
+    ]
+    deposit_types = ["CASA", "Operational", "Time Deposit", "Others"]
+    competitors = ["HSBC", "MUFG", "JP Morgan", "Goldman Sachs", "Citi", "DBS", "Standard Chartered", "BNP Paribas"]
 
-    rows = []
-    for i in range(n):
-        country = rng.choice(countries, p=[0.20, 0.17, 0.17, 0.16, 0.15, 0.15])
-        product = rng.choice(
-            products,
-            p=[0.12, 0.09, 0.06, 0.055, 0.045, 0.06, 0.045, 0.045,
-               0.07, 0.035, 0.07, 0.06, 0.045, 0.025, 0.035, 0.025, 0.025, 0.09]
-        )
-        client = rng.choice(clients)
-        sector = rng.choice(sectors)
-        rm = rng.choice(rms)
+    rel_rows = []
+    for i, name in enumerate(rel_names):
+        c = countries[i % len(countries)]
+        sector = sectors[i % len(sectors)]
         tier = rng.choice(tiers, p=[0.25, 0.35, 0.25, 0.15])
-
-        facility_limit = int(rng.integers(80, 1800)) * 1_000_000
-        utilization = rng.uniform(0.15, 0.92)
-        lending_drawn = facility_limit * utilization
-
-        if product == "Revolver":
-            nim_bps = rng.choice([18, 24, 28, 36, 48, 65], p=[0.18, 0.22, 0.18, 0.20, 0.14, 0.08])
-        elif product == "Term Loan":
-            nim_bps = rng.choice([25, 35, 55, 80, 110, 140], p=[0.10, 0.18, 0.26, 0.22, 0.16, 0.08])
-        elif product in ["Trade Finance", "Trade LC", "AR Financing", "Supply Chain Finance"]:
-            nim_bps = rng.choice([35, 60, 90, 120, 160], p=[0.15, 0.25, 0.25, 0.22, 0.13])
-        elif product in ["FX / Markets", "Hedging", "DCM", "ECM", "Syndication", "Securitization", "Advisory", "Fund Finance", "Project Finance", "Structured Finance"]:
-            nim_bps = rng.choice([45, 75, 110, 150, 210], p=[0.12, 0.24, 0.28, 0.23, 0.13])
-        elif product in ["Cash Management", "Deposits"]:
-            nim_bps = rng.choice([20, 40, 70, 100], p=[0.20, 0.30, 0.30, 0.20])
-        else:
-            nim_bps = rng.choice([30, 55, 85, 120, 180], p=[0.15, 0.25, 0.25, 0.22, 0.13])
-
-        rwa_density = rng.choice([0.35, 0.50, 0.65, 0.85, 1.00, 1.20], p=[0.15, 0.18, 0.22, 0.22, 0.15, 0.08])
-        rwa = lending_drawn * rwa_density
-
-        nii = lending_drawn * float(nim_bps) / 10000
-        fee = int(rng.integers(0, 14)) * 400_000
-        revenue = nii + fee
-
-        ltm_group_roe_target = rng.choice([0.06, 0.11, 0.14, 0.17, 0.22, 0.28], p=[0.15, 0.18, 0.17, 0.22, 0.18, 0.10])
-        niat = rwa * ltm_group_roe_target * rng.uniform(0.85, 1.15)
-
-        deposit_balance = int(rng.integers(50, 1800)) * 1_000_000
-        if product in ["Deposits", "Cash Management"]:
-            deposit_balance = int(rng.integers(300, 2800)) * 1_000_000
-
-        deposit_type = rng.choice(deposit_types, p=[0.45, 0.35, 0.20])
-        operational_flag = rng.choice(["Yes", "No"], p=[0.70, 0.30])
-        deposit_growth = rng.uniform(-0.08, 0.25)
-
-        ltm_group_roe = safe_div(niat, rwa)
-        three_year_avg_groe = max(0.01, ltm_group_roe * rng.uniform(0.80, 1.20))
-
-        wallet_estimate = max(revenue * rng.uniform(2.0, 5.0), revenue + 1)
-        wallet_share = safe_div(revenue, wallet_estimate)
-        wallet_gap = max(wallet_estimate - revenue, 0)
-
-        maturity_days = int(rng.choice([30, 60, 90, 180, 365, 730], p=[0.20, 0.20, 0.22, 0.18, 0.14, 0.06]))
-        deposit_maturity_date = (pd.Timestamp("2026-04-30") + pd.Timedelta(days=maturity_days)).date().isoformat()
-        liquidity_profile = rng.choice(["Sticky", "Stable", "Rate Sensitive", "Short-Term"], p=[0.25, 0.35, 0.25, 0.15])
-        deposit_revenue = deposit_balance * rng.uniform(0.0015, 0.0080)
-
-        rows.append({
-            "Month": "2026-04",
-            "Client": client,
-            "Client_Tier": tier,
-            "Country": country,
-            "RM": rm,
-            "Relationship_Owner": rm,
+        exp = float(rng.uniform(2.0, 12.5))
+        facility = exp * float(rng.uniform(1.15, 1.9))
+        dep = float(rng.uniform(2.0, 20.0))
+        revenue = exp * float(rng.uniform(8.5, 18.5)) + dep * float(rng.uniform(1.2, 3.2))
+        nii = revenue * float(rng.uniform(0.48, 0.72))
+        rwa = exp * float(rng.uniform(0.50, 0.90))
+        el = exp * float(rng.uniform(0.004, 0.018))
+        lp = exp * float(rng.uniform(0.006, 0.020))
+        r = float(rng.uniform(0.125, 0.215))
+        wallet = revenue / float(rng.uniform(0.18, 0.55))
+        current_share = revenue / wallet
+        rel_rows.append({
+            "Relationship_Name": name,
+            "Country": c,
             "Sector": sector,
-            "Product": product,
-            "Facility_ID": f"FAC-{1000+i}",
-            "Deal_ID": f"DEAL-{2000+i}",
-            "Limit": round(facility_limit, 0),
-            "Facility_Limit": round(facility_limit, 0),
-            "Lending_Drawn": round(lending_drawn, 0),
-            "RWA": round(rwa, 0),
-            "NIM_bps": round(float(nim_bps), 1),
-            "Net_Interest_Income": round(nii, 0),
-            "Fee_Income": round(fee, 0),
-            "Total_Revenue": round(revenue, 0),
-            "Revenue": round(revenue, 0),
-            "NIAT": round(niat, 0),
-            "LTM_Group_RoE": round(ltm_group_roe, 4),
-            "ThreeY_Avg_GRoE": round(three_year_avg_groe, 4),
-            "Deposit_Balance": round(deposit_balance, 0),
-            "Deposit_Revenue": round(deposit_revenue, 0),
-            "Deposit_Maturity_Date": deposit_maturity_date,
-            "Liquidity_Profile": liquidity_profile,
-            "Deposit_Type": deposit_type,
-            "Operational_Deposit_Flag": operational_flag,
-            "Deposit_Growth": round(deposit_growth, 4),
-            "Wallet_Estimate": round(wallet_estimate, 0),
-            "Wallet_Share": round(wallet_share, 4),
-            "Wallet_Gap": round(wallet_gap, 0)
+            "Client_Tier": tier,
+            "Total_Revenue": revenue,
+            "NII": nii,
+            "Operating_Income": revenue * float(rng.uniform(0.72, 0.90)),
+            "Lending_Drawn": exp,
+            "Facility_Limit": facility,
+            "RWA": rwa,
+            "EL": el,
+            "LP": lp,
+            "Deposit_Balance": dep,
+            "LTM_Group_RoE": r,
+            "ThreeYr_Avg_GRoE": r + float(rng.normal(0, 0.01)),
+            "Estimated_Wallet": wallet,
+            "Current_Share": current_share,
+            "Wallet_Gap": wallet - revenue,
+            "Wallet_Penetration": current_share,
+            "Primary_Banker": rng.choice(["RM A", "RM B", "RM C", "RM D"]),
         })
+    relationships = pd.DataFrame(rel_rows)
 
-    return pd.DataFrame(rows)
+    # Scale to target headline figures roughly
+    relationships["Total_Revenue"] *= 1348.7 / relationships["Total_Revenue"].sum()
+    relationships["NII"] *= 852.2 / relationships["NII"].sum()
+    relationships["Operating_Income"] *= 1032.4 / relationships["Operating_Income"].sum()
+    relationships["Lending_Drawn"] *= 102.4 / relationships["Lending_Drawn"].sum()
+    relationships["Facility_Limit"] *= 154.0 / relationships["Facility_Limit"].sum()
+    relationships["Deposit_Balance"] *= 195.1 / relationships["Deposit_Balance"].sum()
+    relationships["RWA"] *= 72.3 / relationships["RWA"].sum()
+    relationships["Estimated_Wallet"] = relationships["Total_Revenue"] / np.maximum(relationships["Current_Share"], 0.12)
+    relationships["Wallet_Gap"] = relationships["Estimated_Wallet"] - relationships["Total_Revenue"]
+    relationships["Wallet_Penetration"] = relationships["Total_Revenue"] / relationships["Estimated_Wallet"]
 
+    # Country summary fixed to the blueprint
+    country = pd.DataFrame({
+        "Country": countries,
+        "Total_Revenue": country_rev,
+        "Lending_Drawn": country_exp,
+        "Deposit_Balance": country_dep,
+        "LTM_Group_RoE": roe,
+    })
 
-# =========================================================
-# DATA PREP
-# =========================================================
-def normalize_columns(df):
-    df = df.copy()
-    df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
-    return df
+    product_rows = []
+    for p in products:
+        exposure = float(rng.uniform(2.0, 16.0))
+        if p == "Term Loan": exposure *= 1.8
+        if p in ["DCM", "Investment Banking", "FX / Markets"]:
+            exposure *= 0.55
+        revenue = exposure * float(rng.uniform(7, 18))
+        deposit = float(rng.uniform(2.0, 20.0)) if p in ["Cash Management", "Trade Finance", "Trade LC", "FX / Markets"] else float(rng.uniform(0.2, 5.0))
+        product_rows.append({"Product_Type": p, "Exposure": exposure, "Revenue": revenue, "Deposit_Balance": deposit})
+    product = pd.DataFrame(product_rows)
+    product["Exposure"] *= 102.4 / product["Exposure"].sum()
+    product["Revenue"] *= 1348.7 / product["Revenue"].sum()
 
+    deposit = pd.DataFrame({
+        "Deposit_Type": ["CASA", "Operational", "Time Deposit", "Others"],
+        "Liquidity_Class": ["Liquid", "Operational", "Term", "Other"],
+        "Deposit_Balance": [96.0, 62.3, 36.7, 0.1],
+        "Deposit_Revenue": [85.2, 44.9, 25.6, 1.0],
+        "Maturity_Bucket": ["On Demand", "<= 3M", "3M – 12M", "> 2Y"],
+    })
+    maturity = pd.DataFrame({
+        "Maturity_Bucket": ["On Demand", "<= 3M", "3M – 12M", "1Y – 2Y", "2Y – 5Y", "> 5Y"],
+        "Deposit_Balance": [96.0, 42.6, 46.8, 34.2, 24.0, 14.6],
+    })
 
-def ensure_metrics(df):
-    df = normalize_columns(df)
-    required = ["Client", "Country", "RM", "Product", "Lending_Drawn", "RWA", "Total_Revenue", "NIAT"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        st.error(f"Missing required columns: {missing}")
-        st.stop()
+    wallet_rows = []
+    for _, rel in relationships.iterrows():
+        for p in ["Lending", "Transaction Banking", "Markets", "DCM", "Securitization", "Fund Finance", "Project Finance", "Investment Banking"]:
+            estimated = float(rng.uniform(8, 80))
+            current = estimated * float(rng.uniform(0.05, 0.48))
+            main_bank = rng.choice(competitors, p=[0.22, 0.18, 0.15, 0.08, 0.12, 0.10, 0.10, 0.05])
+            wallet_rows.append({
+                "Relationship_Name": rel["Relationship_Name"],
+                "Country": rel["Country"],
+                "Product_Family": p,
+                "Estimated_Wallet": estimated,
+                "Current_Revenue": current,
+                "Wallet_Gap": estimated - current,
+                "Wallet_Penetration": current / estimated,
+                "Lead_Competitor": main_bank,
+            })
+    wallet = pd.DataFrame(wallet_rows)
 
-    for c in [
-        "Limit", "Facility_Limit", "Lending_Drawn", "RWA", "Total_Revenue", "Revenue",
-        "NIAT", "Deposit_Balance", "NIM_bps", "Net_Interest_Income",
-        "Wallet_Estimate", "Wallet_Share", "Wallet_Gap", "Deposit_Growth", "Deposit_Revenue"
-    ]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    dsc_rows = []
+    for ds_id in range(1001, 1071):
+        rel = relationships.sample(1, random_state=int(ds_id)).iloc[0]
+        prod = rng.choice(products, p=np.array([0.16,0.12,0.11,0.10,0.09,0.07,0.07,0.06,0.08,0.08,0.04,0.02]))
+        facility = float(rng.uniform(80, 1200))
+        util = float(rng.uniform(0.20, 0.90))
+        spread = float(rng.uniform(0.55, 2.80))
+        lp_bps = float(rng.uniform(5, 55))
+        bac_bps = float(rng.uniform(8, 38))
+        el_bps = float(rng.uniform(3, 28))
+        nim_bps = max(5, spread * 100 - lp_bps - bac_bps - el_bps)
+        tx_roe = float(rng.uniform(0.08, 0.28))
+        screen_date = datetime(2024, 1, 1) + timedelta(days=int(rng.integers(0, 360)))
+        expected_draw = facility * util / 1000.0
+        lag_month = int(rng.choice([2,3,4,5], p=[0.18,0.35,0.32,0.15]))
+        dsc_rows.append({
+            "DS_ID": ds_id,
+            "Relationship_Name": rel["Relationship_Name"],
+            "Country": rel["Country"],
+            "Product_Type": prod,
+            "Facility_Limit_M": facility,
+            "Expected_Utilization": util,
+            "Expected_Draw_B": expected_draw,
+            "Renewal_Type": rng.choice(["New", "Renewal", "Refinance"], p=[0.42,0.34,0.24]),
+            "Committed_Flag": rng.choice(["Committed", "Uncommitted"], p=[0.56,0.44]),
+            "Cross_Sell": rng.choice(["None", "Trade", "Markets", "TB + Markets", "IB"], p=[0.28,0.24,0.20,0.18,0.10]),
+            "Base_Rate": rng.choice(["SOFR 3M", "SOFR 6M", "HIBOR", "TONA", "BBSW"]),
+            "Spread_bps": spread * 100,
+            "LP_bps": lp_bps,
+            "BAC_bps": bac_bps,
+            "EL_bps": el_bps,
+            "NIM_bps": nim_bps,
+            "Tx_RoE": tx_roe,
+            "DSC_Quality_Index": float(rng.uniform(70, 112)),
+            "Screen_Date": screen_date,
+            "Expected_Drawdown_Date": screen_date + pd.DateOffset(months=lag_month),
+            "Status": rng.choice(["Approved", "Pipeline", "Lost", "Deferred"], p=[0.62,0.20,0.10,0.08]),
+        })
+    dsc = pd.DataFrame(dsc_rows)
 
-    if "Facility_Limit" not in df.columns:
-        df["Facility_Limit"] = df["Limit"] if "Limit" in df.columns else df["Lending_Drawn"]
+    months = pd.date_range("2023-04-01", periods=24, freq="MS")
+    hist_rows = []
+    for _, rel in relationships.iterrows():
+        base_rev = rel["Total_Revenue"] / 12
+        base_exp = rel["Lending_Drawn"]
+        base_dep = rel["Deposit_Balance"]
+        for mth in months:
+            hist_rows.append({
+                "Month": mth,
+                "Relationship_Name": rel["Relationship_Name"],
+                "Country": rel["Country"],
+                "Revenue": max(0, base_rev * rng.normal(1, 0.14)),
+                "NII": max(0, (rel["NII"] / 12) * rng.normal(1, 0.12)),
+                "Lending_Drawn": max(0, base_exp * rng.normal(1, 0.07)),
+                "Deposit_Balance": max(0, base_dep * rng.normal(1, 0.12)),
+                "RWA": max(0, rel["RWA"] * rng.normal(1, 0.08)),
+                "LTM_Group_RoE": max(0.03, rel["LTM_Group_RoE"] + rng.normal(0, 0.015)),
+            })
+    historical = pd.DataFrame(hist_rows)
 
-    if "Revenue" not in df.columns:
-        df["Revenue"] = df["Total_Revenue"]
+    return {
+        "relationships": relationships,
+        "country": country,
+        "product": product,
+        "deposit": deposit,
+        "maturity": maturity,
+        "wallet": wallet,
+        "dsc": dsc,
+        "historical": historical,
+    }
 
-    if "NIM_bps" not in df.columns:
-        df["NIM_bps"] = df.apply(lambda r: safe_div(r.get("Net_Interest_Income", 0), r["Lending_Drawn"]) * 10000, axis=1)
+# -----------------------------
+# Upload handling
+# -----------------------------
+def read_uploaded_excel(file) -> Dict[str, pd.DataFrame]:
+    if file is None:
+        return make_demo_data()
+    try:
+        xls = pd.ExcelFile(file)
+        out = {}
+        for sheet in xls.sheet_names:
+            out[sheet.lower().replace(" ", "_")] = pd.read_excel(xls, sheet_name=sheet)
+        demo = make_demo_data()
+        # Map common sheet names, fallback to demo if missing.
+        mapped = {
+            "relationships": out.get("relationships", out.get("portfolio_data", demo["relationships"])),
+            "country": out.get("country", demo["country"]),
+            "product": out.get("product", out.get("products", demo["product"])),
+            "deposit": out.get("deposit", out.get("deposits", demo["deposit"])),
+            "maturity": out.get("maturity", demo["maturity"]),
+            "wallet": out.get("wallet", demo["wallet"]),
+            "dsc": out.get("dsc", out.get("deal_screening", demo["dsc"])),
+            "historical": out.get("historical", demo["historical"]),
+        }
+        return mapped
+    except Exception:
+        return make_demo_data()
 
-    if "Deposit_Balance" not in df.columns:
-        df["Deposit_Balance"] = 0
-
-    if "Sector" not in df.columns:
-        df["Sector"] = "General"
-
-    if "Client_Tier" not in df.columns:
-        df["Client_Tier"] = "Core"
-
-    if "Relationship_Owner" not in df.columns:
-        df["Relationship_Owner"] = df["RM"]
-
-    if "Deposit_Type" not in df.columns:
-        df["Deposit_Type"] = "CASA"
-
-    if "Operational_Deposit_Flag" not in df.columns:
-        df["Operational_Deposit_Flag"] = "Yes"
-
-    if "Deal_ID" not in df.columns:
-        df["Deal_ID"] = [f"DEAL-{i+1}" for i in range(len(df))]
-
-    if "LTM_Group_RoE" not in df.columns:
-        df["LTM_Group_RoE"] = df.apply(lambda r: safe_div(r["NIAT"], r["RWA"]), axis=1)
-
-    if "ThreeY_Avg_GRoE" not in df.columns:
-        df["ThreeY_Avg_GRoE"] = df["LTM_Group_RoE"]
-
-    # Deal-screening profitability is transaction-level RoE; relationship screens use LTM / 3Y Group RoE.
-    if "Tx_RoE" not in df.columns:
-        product_factor = df["Product"].astype(str).map({
-            "Project Finance": 1.08, "Fund Finance": 1.05, "Structured Finance": 1.08,
-            "Securitization": 1.12, "DCM": 1.10, "ECM": 1.10, "Syndication": 1.06,
-            "Term Loan": 0.98, "Revolver": 0.95, "Trade LC": 1.02, "AR Financing": 1.03,
-            "Supply Chain Finance": 1.03, "FX / Markets": 1.10, "Hedging": 1.08
-        }).fillna(1.0)
-        df["Tx_RoE"] = (df["LTM_Group_RoE"] * product_factor).clip(lower=0.02, upper=0.45)
-    else:
-        df["Tx_RoE"] = pd.to_numeric(df["Tx_RoE"], errors="coerce").fillna(df["LTM_Group_RoE"])
-
-    if "Renewal_Type" not in df.columns:
-        df["Renewal_Type"] = np.resize(np.array(["New", "Renewal", "Refinance"]), len(df))
-    if "Commitment_Type" not in df.columns:
-        df["Commitment_Type"] = np.where(df["Product"].astype(str).str.contains("Revolver|LC|Guarantee", case=False, regex=True), "Committed", "Uncommitted")
-
-    if "Wallet_Estimate" not in df.columns:
-        df["Wallet_Estimate"] = df["Total_Revenue"] * 3.0
-
-    if "Wallet_Share" not in df.columns:
-        df["Wallet_Share"] = df.apply(lambda r: safe_div(r["Total_Revenue"], r["Wallet_Estimate"]), axis=1)
-
-    if "Wallet_Gap" not in df.columns:
-        df["Wallet_Gap"] = (df["Wallet_Estimate"] - df["Total_Revenue"]).clip(lower=0)
-
-    if "Deposit_Growth" not in df.columns:
-        df["Deposit_Growth"] = 0.0
-    if "Deposit_Revenue" not in df.columns:
-        df["Deposit_Revenue"] = 0.0
-    if "Deposit_Maturity_Date" not in df.columns:
-        df["Deposit_Maturity_Date"] = "N/A"
-    if "Liquidity_Profile" not in df.columns:
-        df["Liquidity_Profile"] = "Stable"
-
-    df["Revenue_per_RWA"] = df.apply(lambda r: safe_div(r["Total_Revenue"], r["RWA"]), axis=1)
-    return df
-
-
-def grouped_view(df, group_cols):
-    g = df.groupby(group_cols, dropna=False).agg({
-        "Total_Revenue": "sum",
-        "Facility_Limit": "sum",
-        "Lending_Drawn": "sum",
-        "Deposit_Balance": "sum",
-        "RWA": "sum",
-        "NIAT": "sum",
-        "Wallet_Estimate": "sum",
-        "Wallet_Gap": "sum"
-    }).reset_index()
-
-    nim = []
-    for _, x in df.groupby(group_cols, dropna=False):
-        nim.append(safe_div((x["NIM_bps"] * x["Lending_Drawn"]).sum(), x["Lending_Drawn"].sum()))
-
-    g["NIM_bps"] = nim
-    g["LTM_Group_RoE"] = g.apply(lambda r: safe_div(r["NIAT"], r["RWA"]), axis=1)
-    g["Wallet_Share"] = g.apply(lambda r: safe_div(r["Total_Revenue"], r["Wallet_Estimate"]), axis=1)
-    return g.sort_values("Total_Revenue", ascending=False)
-
-
-# =========================================================
-# CHARTS
-# =========================================================
-def axis_ticks(max_y, target_ticks=5):
-    """Clean executive-scale axis ticks. Avoid dense unreadable tick marks."""
-    max_y = float(max_y or 0)
-    if max_y <= 0:
-        return [0, 1], ["0", "1"]
-    raw_step = max_y / target_ticks
-    magnitude = 10 ** np.floor(np.log10(raw_step))
-    step = np.ceil(raw_step / magnitude) * magnitude
-    tick_max = np.ceil(max_y / step) * step
-    ticks = list(np.arange(0, tick_max + step * 0.5, step))
-    labels = ["0" if v == 0 else (f"{v/1_000_000_000:.1f}B" if v >= 1_000_000_000 else f"{v/1_000_000:.0f}M") for v in ticks]
-    return ticks, labels
-
-
-def bar_chart(df, x, y, title, height=320, max_items=None):
-    chart_df = df.copy().sort_values(y, ascending=False)
-    if max_items:
-        chart_df = chart_df.head(max_items)
-    chart_df["Label"] = chart_df[y].apply(money)
-    fig = px.bar(chart_df, x=x, y=y, text="Label", title=title)
-    fig.update_traces(
-        marker_color=rank_colors(len(chart_df)),
-        marker_line_width=0,
-        textposition="outside",
-        textfont=dict(size=11, color=NAVY),
-        cliponaxis=False,
-    )
-    ticks, labels = axis_ticks(chart_df[y].max() if len(chart_df) else 0, target_ticks=5)
+# -----------------------------
+# Chart helpers
+# -----------------------------
+def chart_layout(fig: go.Figure, height: int = 260, show_legend: bool = False) -> go.Figure:
     fig.update_layout(
+        template="plotly_white",
         height=height,
-        margin=dict(l=30, r=22, t=48, b=54),
-        plot_bgcolor="white",
+        margin=dict(l=42, r=24, t=32, b=42),
         paper_bgcolor="white",
-        font=dict(color=TEXT, family="Inter, Arial, sans-serif", size=11),
-        title=dict(font=dict(size=16, color=NAVY, family="Inter, Arial, sans-serif")),
-        yaxis=dict(tickvals=ticks, ticktext=labels, showgrid=False, zeroline=False, nticks=5),
-        xaxis=dict(tickangle=0, tickfont=dict(size=10, color=TEXT), automargin=True),
-        bargap=0.55,
-        showlegend=False,
+        plot_bgcolor="white",
+        font=dict(family="Inter, Arial", size=11, color=NAVY),
+        showlegend=show_legend,
     )
+    fig.update_xaxes(showgrid=False, showline=False, zeroline=False, tickfont=dict(size=10, color=NAVY))
+    fig.update_yaxes(showgrid=False, showline=False, zeroline=False, tickfont=dict(size=10, color="#50627A"))
     return fig
 
 
-def dsc_combo_chart(df, group_col, value_col, rate_col, title, floor_value, rate_suffix="%", height=310):
-    g = df.groupby(group_col, as_index=False).agg({value_col: "sum", rate_col: "mean"}).sort_values(value_col, ascending=False).head(8)
-    if rate_col in ["Tx_RoE", "LTM_Group_RoE"]:
-        g["Rate"] = g[rate_col] * 100
-        floor_line = floor_value * 100
-    else:
-        g["Rate"] = g[rate_col]
-        floor_line = floor_value
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=g[group_col], y=g[value_col], marker_color=rank_colors(len(g)), name="Approved / Facility Amount",
-                         text=[money(v) for v in g[value_col]], textposition="outside", cliponaxis=False))
-    fig.add_trace(go.Scatter(x=g[group_col], y=g["Rate"], yaxis="y2", mode="lines+markers+text", name=rate_col.replace("_", " "),
-                             line=dict(color=EXEC_BLUE, width=2.5), marker=dict(size=8, color=EXEC_BLUE),
-                             text=[f"{v:.1f}{rate_suffix}" for v in g["Rate"]], textposition="top center"))
-    ticks, labels = axis_ticks(g[value_col].max(), 5)
-    fig.update_layout(
-        title=title, height=height, margin=dict(l=35, r=35, t=50, b=65),
-        plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Inter, Arial, sans-serif", color=TEXT, size=11),
-        xaxis=dict(tickangle=0, automargin=True, tickfont=dict(size=10)),
-        yaxis=dict(title="Amount", tickvals=ticks, ticktext=labels, showgrid=False, zeroline=False),
-        yaxis2=dict(title=rate_col.replace("_", " "), overlaying="y", side="right", showgrid=False, ticksuffix=rate_suffix, range=[0, max(30, g["Rate"].max()*1.25, floor_line*1.25)]),
-        shapes=[dict(type="line", xref="paper", x0=0, x1=1, yref="y2", y0=floor_line, y1=floor_line, line=dict(color=RED, width=1.5, dash="dash"))],
-        legend=dict(orientation="h", y=1.12), bargap=0.55
-    )
-    return fig
-
-def combo_exposure_roe(df):
-    ranked = grouped_view(df, ["Client"]).sort_values("Lending_Drawn", ascending=False).head(15)
-    ranked["LTM Group RoE %"] = ranked["LTM_Group_RoE"] * 100
-
+def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.34) -> go.Figure:
+    d = df.sort_values(y, ascending=False).copy()
+    colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
+    suffix = "B" if unit == "B" else "M"
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=ranked["Client"],
-        y=ranked["Lending_Drawn"],
-        name="Lending Drawn",
-        marker_color=NAVY,
-        yaxis="y1",
-        text=[money(v) for v in ranked["Lending_Drawn"]],
-        textposition="outside",
-        cliponaxis=False
+        x=d[x], y=d[y], marker_color=colors, width=width,
+        text=[f"${v:.1f}{suffix}" for v in d[y]], textposition="outside",
+        textfont=dict(size=10, color=NAVY),
+        hovertemplate=f"%{{x}}<br>%{{y:.1f}} {suffix}<extra></extra>",
+    ))
+    fig.update_layout(title=dict(text=title, x=0.0, font=dict(size=14, color=NAVY)))
+    fig = chart_layout(fig, height=height)
+    fig.update_yaxes(title_text="USD billion" if unit == "B" else "USD million")
+    return fig
+
+
+def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
+    d = rel.sort_values("Lending_Drawn", ascending=False).head(14).copy()
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=d["Relationship_Name"], y=d["Lending_Drawn"], name="Lending Exposure",
+        marker_color=NAVY, width=0.38,
+        text=[f"${v:.1f}B" for v in d["Lending_Drawn"]], textposition="outside",
+        textfont=dict(size=9, color=NAVY), yaxis="y1",
     ))
     fig.add_trace(go.Scatter(
-        x=ranked["Client"],
-        y=ranked["LTM Group RoE %"],
-        name="LTM Group RoE %",
-        mode="lines+markers",
-        marker=dict(color=EXEC_BLUE, size=9),
-        line=dict(color=EXEC_BLUE, width=3),
-        yaxis="y2"
+        x=d["Relationship_Name"], y=d["LTM_Group_RoE"]*100, name="LTM Group RoE %",
+        mode="lines+markers", marker=dict(size=6, color=BLUE), line=dict(width=2.2, color=BLUE), yaxis="y2",
     ))
-
-    max_y = ranked["Lending_Drawn"].max() if len(ranked) else 0
-    step = 1_000_000_000
-    tick_max = max(step, np.ceil(max_y / step) * step)
-    ticks = list(np.arange(0, tick_max + step, step))
-    labels = ["0"] + [f"{v/1_000_000_000:.1f}B" for v in ticks[1:]]
-
+    fig.add_hline(y=roe_floor*100, line_dash="dot", line_color=AMBER, annotation_text="RoE floor", annotation_position="top left", secondary_y=False if False else None)
     fig.update_layout(
-        title="Capital Efficiency: Exposure vs LTM Group RoE",
-        height=360,
-        margin=dict(l=35, r=35, t=58, b=70),
-        xaxis=dict(tickangle=0, tickfont=dict(size=10), automargin=True),
-        yaxis=dict(title="Lending Exposure (USD)", tickvals=ticks, ticktext=labels, showgrid=False, zeroline=False),
-        yaxis2=dict(title="LTM Group RoE %", overlaying="y", side="right", ticksuffix="%", showgrid=False),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        legend=dict(orientation="h", y=1.10),
-        font=dict(family="Inter, Arial, sans-serif", color=TEXT)
+        title=dict(text="Capital Efficiency: Exposure vs LTM Group RoE", x=0, font=dict(size=14, color=NAVY)),
+        template="plotly_white", height=330, margin=dict(l=45, r=55, t=44, b=88),
+        paper_bgcolor="white", plot_bgcolor="white", font=dict(family="Inter, Arial", size=10, color=NAVY),
+        legend=dict(orientation="h", y=1.08, x=0),
+        yaxis=dict(title="Lending Exposure (USD b)", showgrid=False, zeroline=False),
+        yaxis2=dict(title="RoE %", overlaying="y", side="right", showgrid=False, zeroline=False, range=[10, 22]),
+        xaxis=dict(tickangle=0, tickfont=dict(size=8), showgrid=False),
     )
     return fig
 
 
-def heatmap_table(df, group_col):
-    g = grouped_view(df, [group_col]).copy()
-    g["Revenue"] = g["Total_Revenue"].apply(money)
-    g["Lending Drawn"] = g["Lending_Drawn"].apply(money)
-    g["RWA Display"] = g["RWA"].apply(money)
-    g["NIM"] = g["NIM_bps"].round(1).astype(str) + " bps"
-    g["LTM Group RoE"] = g["LTM_Group_RoE"].apply(pct)
-    g["Status"] = g["LTM_Group_RoE"].apply(roe_status_label)
-    show = g[[group_col, "Revenue", "Lending Drawn", "RWA Display", "NIM", "LTM Group RoE", "Status"]].copy()
+def roe_heatmap(country: pd.DataFrame, roe_floor: float) -> str:
+    d = country.sort_values("LTM_Group_RoE", ascending=False).copy()
+    min_r = min(0.12, float(d["LTM_Group_RoE"].min()))
+    max_r = max(0.22, float(d["LTM_Group_RoE"].max()))
+    cells = []
+    for _, r in d.iterrows():
+        val = float(r["LTM_Group_RoE"])
+        pct = (val - min_r) / max(max_r - min_r, 0.001)
+        # interpolate navy to light grey
+        if val >= roe_floor:
+            bg = NAVY if pct > 0.75 else BLUE if pct > 0.45 else SLATE
+            color = "white"
+        else:
+            bg = "#D9DEE5"
+            color = NAVY
+        cells.append(f"<div style='background:{bg};color:{color};padding:20px 10px;text-align:center;border-right:1px solid white;min-height:78px;'><div style='font-size:13px'>{r['Country']}</div><div style='font-size:20px;font-weight:800;margin-top:8px'>{val*100:.1f}%</div></div>")
+    return f"""
+    <div class='card'>
+      <div style='font-weight:800;color:{NAVY};font-size:14px;margin-bottom:12px;'>LTM Group RoE Heatmap by Country</div>
+      <div style='display:flex;align-items:center;gap:10px;margin-bottom:8px;color:{NAVY};font-size:12px;'><span>12%</span><div style='height:10px;background:linear-gradient(90deg,#D9DEE5,{BLUE},{NAVY});border-radius:8px;flex:1;max-width:300px;'></div><span>22%</span></div>
+      <div style='display:grid;grid-template-columns:repeat({len(cells)},1fr);border-radius:8px;overflow:hidden;border:1px solid {BORDER};'>{''.join(cells)}</div>
+    </div>
+    """
 
-    def style_row(row):
-        raw = g.loc[row.name, "LTM_Group_RoE"]
-        color = roe_color(raw)
-        text_color = "white" if color in [RED, GREEN] else "#111827"
-        styles = [""] * len(row)
-        styles[-2] = f"background-color:{color}; color:{text_color}; font-weight:800;"
-        styles[-1] = f"background-color:{color}; color:{text_color}; font-weight:800;"
-        return styles
 
-    st.dataframe(show.style.apply(style_row, axis=1), use_container_width=True, hide_index=True)
+def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
+    d = deposit.copy()
+    fig = go.Figure(data=[go.Pie(
+        labels=d["Deposit_Type"], values=d["Deposit_Balance"], hole=0.58,
+        marker=dict(colors=[NAVY, BLUE, SLATE, "#CBD3DA"]),
+        textinfo="none",
+        hovertemplate="%{label}<br>$%{value:.1f}B (%{percent})<extra></extra>",
+    )])
+    total = d["Deposit_Balance"].sum()
+    fig.update_layout(
+        annotations=[dict(text=f"${total:.1f}B<br><span style='font-size:11px'>Total</span>", x=0.5, y=0.5, showarrow=False, font=dict(size=16, color=NAVY, family="Inter"))],
+        legend=dict(x=0.78, y=0.55, font=dict(size=11)),
+        title=dict(text="Deposits by Type (USD b)", x=0.0, font=dict(size=14, color=NAVY)),
+    )
+    return chart_layout(fig, height=260, show_legend=True)
 
 
-def executive_watchlist(df, roe_floor, pricing_floor):
-    watch = df[(df["LTM_Group_RoE"] < roe_floor) | (df["NIM_bps"] < pricing_floor)].copy()
-    if watch.empty:
-        return pd.DataFrame()
+def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
+    d = maturity.copy().sort_values("Deposit_Balance", ascending=True)
+    fig = go.Figure(go.Bar(
+        x=d["Deposit_Balance"], y=d["Maturity_Bucket"], orientation="h",
+        marker_color=["#8BB2E8", "#6D9BD6", "#4B7FC1", "#386BAB", "#28578F", NAVY],
+        text=[f"{v:.1f}" for v in d["Deposit_Balance"]], textposition="outside",
+        textfont=dict(size=10, color=NAVY), width=0.45,
+    ))
+    fig.update_layout(title=dict(text="Maturity Ladder (USD b)", x=0, font=dict(size=14, color=NAVY)))
+    fig = chart_layout(fig, height=260)
+    fig.update_xaxes(title_text="USD billion")
+    return fig
 
-    watch["Severity"] = np.select(
-        [
-            (watch["LTM_Group_RoE"] < 0.10) & (watch["NIM_bps"] < pricing_floor),
-            (watch["LTM_Group_RoE"] < 0.10),
-            (watch["NIM_bps"] < pricing_floor),
-            (watch["LTM_Group_RoE"] < roe_floor)
-        ],
-        ["🔴 Critical", "🔴 Low LTM Group RoE", "🟠 Pricing Review", "🟡 Below Profit Floor"],
-        default="🟡 Monitor"
+
+def metric_card(label: str, value: str, note: str) -> str:
+    return f"""
+    <div class='metric-card'>
+        <div class='metric-label'>{label}</div>
+        <div class='metric-value'>{value}</div>
+        <div class='metric-note'>{note}</div>
+    </div>
+    """
+
+
+def top_filter_bar() -> None:
+    st.markdown(
+        """
+        <div class='top-filter'>
+          <span class='filter-label'>Business Unit</span><span class='filter-value'>GCIB</span>
+          <span style='display:inline-block;width:28px'></span>
+          <span class='filter-label'>Country Cluster</span><span class='filter-value'>Asia</span>
+          <span style='display:inline-block;width:28px'></span>
+          <span class='filter-label'>Currency</span><span class='filter-value'>USD</span>
+          <span style='display:inline-block;width:28px'></span>
+          <span class='filter-label'>Time Period</span><span class='filter-value'>LTM / Demo</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    watch = watch.sort_values(["LTM_Group_RoE", "Lending_Drawn"], ascending=[True, False]).head(15)
-    out = watch[["Severity", "Client", "Country", "Product", "Lending_Drawn", "RWA", "Total_Revenue", "NIM_bps", "LTM_Group_RoE"]].copy()
-    out["Lending Drawn"] = out["Lending_Drawn"].apply(money)
-    out["RWA"] = out["RWA"].apply(money)
-    out["Revenue"] = out["Total_Revenue"].apply(money)
-    out["NIM"] = out["NIM_bps"].round(1).astype(str) + " bps"
-    out["LTM Group RoE"] = out["LTM_Group_RoE"].apply(pct)
-    return out[["Severity", "Client", "Country", "Product", "Lending Drawn", "RWA", "Revenue", "NIM", "LTM Group RoE"]]
+# -----------------------------
+# Export sample Excel
+# -----------------------------
+def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for name, df in data.items():
+            df.to_excel(writer, index=False, sheet_name=name[:31])
+    return output.getvalue()
 
-
-# =========================================================
-# V0.8.2 BLUEPRINT LAYOUT HELPERS
-# =========================================================
-def section_header(title, subtitle=None):
-    st.markdown(f'<div class="ec-section-title">{title}</div>', unsafe_allow_html=True)
-    if subtitle:
-        st.markdown(f'<div class="ec-subtitle">{subtitle}</div>', unsafe_allow_html=True)
-
-def kpi_card(label, value, delta=None):
-    delta_html = f'<div class="kpi-delta">{delta}</div>' if delta else ''
-    html = f'<div class="kpi-card"><div class="kpi-label">{label}</div><div class="kpi-value">{value}</div>{delta_html}</div>'
-    st.markdown(html, unsafe_allow_html=True)
-
-def chart_card(fig, title=None, key=None):
-    with st.container(border=True):
-        if title:
-            st.markdown(f'<div class="chart-title">{title}</div>', unsafe_allow_html=True)
-        st.plotly_chart(fig, use_container_width=True, key=key, config={"displayModeBar": False})
-
-def bar_chart_v2(df, x, y, title, height=260, max_items=None):
-    chart_df = df.copy().sort_values(y, ascending=False)
-    if max_items:
-        chart_df = chart_df.head(max_items)
-    chart_df["Label"] = chart_df[y].apply(money)
-    fig = px.bar(chart_df, x=x, y=y, text="Label", title=title)
-    fig.update_traces(marker_color=rank_colors(len(chart_df)), marker_line_width=0, textposition="outside", textfont=dict(size=11, color=NAVY), cliponaxis=False, width=0.42)
-    ticks, labels = axis_ticks(chart_df[y].max() if len(chart_df) else 0, target_ticks=4)
-    fig.update_layout(height=height, margin=dict(l=28, r=18, t=35, b=42), plot_bgcolor="white", paper_bgcolor="white", font=dict(color=TEXT, family="Inter, Arial, sans-serif", size=11), title=dict(font=dict(size=14, color=NAVY)), yaxis=dict(tickvals=ticks, ticktext=labels, showgrid=False, zeroline=False), xaxis=dict(tickangle=0, tickfont=dict(size=10, color=TEXT), automargin=True), bargap=0.62, showlegend=False)
-    return fig
-
-def exposure_roe_clean(df):
-    ranked = grouped_view(df, ["Client"]).sort_values("Lending_Drawn", ascending=False).head(12)
-    ranked["LTM Group RoE %"] = ranked["LTM_Group_RoE"] * 100
-    ranked["Short_Client"] = ranked["Client"].astype(str).str.replace("Sample ", "", regex=False).str.replace(" Holdings", "", regex=False).str.replace(" Group", "", regex=False).str.slice(0, 14)
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=ranked["Short_Client"], y=ranked["Lending_Drawn"], name="Lending Exposure", marker_color=NAVY, text=[money(v) for v in ranked["Lending_Drawn"]], textposition="outside", cliponaxis=False, width=0.42))
-    fig.add_trace(go.Scatter(x=ranked["Short_Client"], y=ranked["LTM Group RoE %"], name="LTM Group RoE %", mode="lines+markers", marker=dict(color=EXEC_BLUE, size=7), line=dict(color=EXEC_BLUE, width=2.2), yaxis="y2"))
-    max_y = ranked["Lending_Drawn"].max() if len(ranked) else 0
-    ticks, labels = axis_ticks(max_y, target_ticks=4)
-    fig.update_layout(title="Capital Efficiency: Exposure vs LTM Group RoE", height=310, margin=dict(l=36, r=36, t=48, b=52), plot_bgcolor="white", paper_bgcolor="white", font=dict(family="Inter, Arial, sans-serif", size=10, color=TEXT), xaxis=dict(tickangle=0, tickfont=dict(size=9), automargin=True, showgrid=False), yaxis=dict(title="Lending Exposure", tickvals=ticks, ticktext=labels, showgrid=False, zeroline=False), yaxis2=dict(title="RoE %", overlaying="y", side="right", ticksuffix="%", showgrid=False), legend=dict(orientation="h", y=1.16))
-    return fig
-
-st.markdown("""
-<style>
-section[data-testid="stSidebar"] { background: linear-gradient(180deg, #08264A 0%, #031B33 100%); }
-section[data-testid="stSidebar"] * { color: #F8FAFC !important; }
-section[data-testid="stSidebar"] .stRadio label { background: rgba(255,255,255,0.06); border-radius: 10px; padding: 5px 8px; margin: 3px 0; }
-section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color:#CBD5E1 !important; }
-.block-container { padding-top: 1.2rem; padding-left: 1.7rem; padding-right: 1.7rem; max-width: 1500px; }
-.topbar { background:white; border:1px solid #D7DEE6; border-radius:16px; padding:14px 18px; margin-bottom:14px; box-shadow:0 1px 2px rgba(15,23,42,0.04); }
-.kpi-card { background:white; border:1px solid #D7DEE6; border-radius:14px; padding:14px 16px; min-height:92px; box-shadow:0 1px 2px rgba(15,23,42,0.04); }
-.kpi-label { font-size:12px; color:#667085; font-weight:700; text-transform:uppercase; letter-spacing:.02em; }
-.kpi-value { font-size:24px; color:#08264A; font-weight:850; margin-top:7px; }
-.kpi-delta { font-size:12px; color:#087443; margin-top:5px; font-weight:650; }
-.chart-title { font-size:15px; color:#08264A; font-weight:850; margin-bottom:2px; }
-.ec-card p, .ec-alert-text { font-size:14px !important; }
-[data-testid="stVerticalBlockBorderWrapper"] { background:white; border-radius:16px; }
-hr { margin: 1.2rem 0; }
-</style>
-""", unsafe_allow_html=True)
-
-
-st.markdown("""
-<style>
-/* V0.8.2 institutional blueprint refinements */
-header[data-testid="stHeader"] { background: transparent; }
-.block-container { padding-top: 0.9rem !important; max-width: 1520px !important; }
-.ec-section-title { font-size: 24px; font-weight: 850; color: #08264A; margin-top: 4px; margin-bottom: 0px; }
-.ec-subtitle { color: #667085; font-size: 13px; margin-bottom: 12px; }
-.topbar { display:flex; align-items:center; gap:16px; min-height:54px; }
-.topbar b { color:#475467; font-size:11px; text-transform:uppercase; }
-.kpi-card { min-height: 88px !important; }
-[data-testid="stSidebar"] { min-width: 260px; }
-section[data-testid="stSidebar"] div[role="radiogroup"] label { font-weight: 600; }
-</style>
-""", unsafe_allow_html=True)
-
-# =========================================================
-# APP HEADER / SIDEBAR — V0.8.2 BLUEPRINT
-# =========================================================
+# -----------------------------
+# Sidebar
+# -----------------------------
 with st.sidebar:
-    st.markdown("# EC-AI")
-    st.markdown("**Banking Intelligence**  \nv0.8.2")
-    st.markdown("---")
-    nav = st.radio("Navigate", ["Executive Dashboard", "Revenue & Exposure", "Capital Efficiency", "Deposit Intelligence", "Competitor Benchmarking", "Client Overview", "Wallet Intelligence", "Product Penetration", "Deal Screening (DSC)", "Portfolio Data"], index=0, label_visibility="collapsed", key="main_navigation_v082")
-    st.markdown("---")
-    data_mode = st.radio("Data source", ["Use Built-in Demo Data", "Upload File"], index=0, key="data_source_v082")
+    st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.3</div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
+    page = st.radio(
+        "Navigation",
+        [
+            "Executive Dashboard", "Revenue & Exposure", "Capital Efficiency", "Deposit Intelligence",
+            "Competitor Benchmarking", "Client Overview", "Wallet Intelligence", "Product Penetration",
+            "Deal Screening (DSC)", "Portfolio Data", "AI Banker Commentary"
+        ],
+        label_visibility="collapsed",
+        key="main_nav_v083",
+    )
+
+    st.markdown("<div class='sidebar-section'>DATA SOURCE</div>", unsafe_allow_html=True)
+    data_mode = st.radio("Data source", ["Use Built-in Demo Data", "Upload File"], index=0, label_visibility="collapsed", key="data_source_v083")
     uploaded = None
     if data_mode == "Upload File":
-        uploaded = st.file_uploader("Upload banking performance file", type=["csv", "xlsx"])
-    st.markdown("---")
-    st.markdown("### Threshold Settings")
-    roe_floor = st.slider("RoE floor", 0.05, 0.30, DEFAULT_RELATIONSHIP_ROE_FLOOR, 0.01, format="%.2f")
-    pricing_floor = st.slider("Pricing floor (bps)", 0, 150, DEFAULT_PRICING_FLOOR_BPS, 5)
-    st.caption("Demo thresholds only — not institution-specific.")
+        uploaded = st.file_uploader("Upload Excel", type=["xlsx"], key="upload_v083")
 
-if data_mode == "Use Built-in Demo Data":
-    raw = make_demo_data()
+    st.markdown("<div class='sidebar-section'>THRESHOLD SETTINGS</div>", unsafe_allow_html=True)
+    roe_floor = st.slider("RoE floor", 0.10, 0.25, 0.18, 0.005, key="roe_floor_v083")
+    margin_floor = st.slider("Pricing floor (bps)", 20, 120, 50, 5, key="margin_floor_v083")
+    st.caption("Demo thresholds only — configure for each institution / pilot.")
+
+# Load data
+if data_mode == "Upload File" and uploaded is not None:
+    data = read_uploaded_excel(uploaded)
 else:
-    if uploaded is None:
-        st.info("Upload a banking performance file or switch to built-in demo data.")
-        st.stop()
-    raw = pd.read_excel(uploaded) if uploaded.name.lower().endswith(".xlsx") else pd.read_csv(uploaded)
+    data = make_demo_data()
 
-df = ensure_metrics(raw)
+relationships = data["relationships"]
+country = data["country"]
+product = data["product"]
+deposit = data["deposit"]
+maturity = data["maturity"]
+wallet = data["wallet"]
+dsc = data["dsc"]
+historical = data["historical"]
 
-total_revenue = df["Total_Revenue"].sum(); total_nii = df["Net_Interest_Income"].sum(); total_drawn = df["Lending_Drawn"].sum(); total_deposit = df["Deposit_Balance"].sum(); total_rwa = df["RWA"].sum(); total_niat = df["NIAT"].sum(); portfolio_roe = safe_div(total_niat, total_rwa); wallet_share = safe_div(total_revenue, df["Wallet_Estimate"].sum())
+# -----------------------------
+# Common top controls
+# -----------------------------
+top_filter_bar()
 
-st.markdown('<div class="topbar"><b>Business Unit</b>&nbsp;&nbsp; GCIB &nbsp;&nbsp;&nbsp;&nbsp; <b>Country Cluster</b>&nbsp;&nbsp; Asia &nbsp;&nbsp;&nbsp;&nbsp; <b>Currency</b>&nbsp;&nbsp; USD &nbsp;&nbsp;&nbsp;&nbsp; <b>Time Period</b>&nbsp;&nbsp; LTM / Demo</div>', unsafe_allow_html=True)
+# -----------------------------
+# Page renderers
+# -----------------------------
+def render_executive_dashboard():
+    st.markdown("<h1>Executive Portfolio Overview</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>LTM performance summary — wallet, exposure, deposits, revenue and profitability.</div>", unsafe_allow_html=True)
 
-if nav == "Executive Dashboard":
-    section_header("Executive Portfolio Overview", "LTM performance summary — wallet, exposure, deposits, revenue and profitability.")
-    cols = st.columns(6)
-    for col, label, val, delta in zip(cols, ["Revenue","NII","RWA","Lending Exposure","Deposits","LTM Group RoE"], [money(total_revenue),money(total_nii),money(total_rwa),money(total_drawn),money(total_deposit),pct(portfolio_roe)], ["demo vs PY","Net interest income","Risk weighted assets","Drawn balance","Deposit franchise","Portfolio return"]):
-        with col: kpi_card(label, val, delta)
-    c1, c2 = st.columns(2, gap="large")
-    with c1: chart_card(bar_chart_v2(grouped_view(df, ["Country"]), "Country", "Total_Revenue", "Revenue by Country (USD)", height=260, max_items=6), key="ex_rev_country")
-    with c2: chart_card(bar_chart_v2(grouped_view(df, ["Country"]), "Country", "Lending_Drawn", "Exposure by Country (USD)", height=260, max_items=6), key="ex_exp_country")
-    section_header("Deposit Intelligence", "Franchise strength, liquidity profile and treasury opportunities.")
-    d1, d2, d3 = st.columns([1,1,1.05], gap="large")
-    with d1: chart_card(bar_chart_v2(grouped_view(df, ["Country"]), "Country", "Deposit_Balance", "Deposits by Country", height=210, max_items=6), key="ex_dep_country")
-    with d2:
-        dep_type = df.groupby("Deposit_Type", as_index=False)["Deposit_Balance"].sum()
-        chart_card(bar_chart_v2(dep_type, "Deposit_Type", "Deposit_Balance", "Deposits by Type", height=210), key="ex_dep_type")
-    with d3:
-        st.markdown('<div class="ec-card"><div class="ec-alert-title">Liquidity Profile</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="ec-alert-text">CASA / operational balances provide relationship stickiness and treasury dialogue.</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="ec-alert-text">Loan-to-deposit ratio: <b>{pct(safe_div(total_drawn,total_deposit))}</b></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="ec-alert-text">Estimated wallet penetration: <b>{pct(wallet_share)}</b></div></div>', unsafe_allow_html=True)
-    c3, c4 = st.columns([1.15,.85], gap="large")
-    with c3: chart_card(exposure_roe_clean(df), key="ex_cap_eff")
-    with c4:
-        top_country=grouped_view(df,["Country"]).iloc[0]
-        st.markdown('<div class="ec-card"><div class="ec-alert-title">Key Insights</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="ec-alert-text">• {top_country.Country} is the largest revenue contributor at <b>{money(top_country.Total_Revenue)}</b>.</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="ec-alert-text">• RoE floor is set at <b>{roe_floor*100:.0f}%</b> for demo purposes.</div>', unsafe_allow_html=True)
-        st.markdown('<div class="ec-alert-text">• Use Relationship 360 to identify product gaps, deposit opportunities and IB wallet expansion.</div></div>', unsafe_allow_html=True)
+    kpi_cols = st.columns(6)
+    metrics = [
+        ("Revenue", "$1.3B", "demo vs PY"),
+        ("NII", "$852.2M", "Net interest income"),
+        ("RWA", "$72.3B", "Risk weighted assets"),
+        ("Lending Exposure", "$102.4B", "Drawn balance"),
+        ("Deposits", "$195.1B", "Deposit franchise"),
+        ("LTM Group RoE", "16.7%", "Portfolio return"),
+    ]
+    for col, (label, value, note) in zip(kpi_cols, metrics):
+        with col:
+            st.markdown(metric_card(label, value, note), unsafe_allow_html=True)
 
-elif nav == "Revenue & Exposure":
-    section_header("Revenue & Exposure", "Actual historical revenue, exposure and product distribution.")
-    c1,c2=st.columns(2,gap="large")
-    with c1: chart_card(bar_chart_v2(grouped_view(df,["Product"]),"Product","Total_Revenue","Revenue by Product",height=300,max_items=10),key="rev_prod")
-    with c2: chart_card(bar_chart_v2(grouped_view(df,["Product"]),"Product","Lending_Drawn","Exposure by Product",height=300,max_items=10),key="exp_prod")
-    c3,c4=st.columns(2,gap="large")
-    with c3: chart_card(bar_chart_v2(grouped_view(df,["Country"]),"Country","Total_Revenue","Revenue by Country",height=300),key="rev_country")
-    with c4: chart_card(bar_chart_v2(grouped_view(df,["Country"]),"Country","Lending_Drawn","Exposure by Country",height=300),key="exp_country")
-
-elif nav == "Capital Efficiency":
-    section_header("Capital Efficiency", "Exposure vs LTM Group RoE. Gridlines removed for a cleaner institutional look.")
-    chart_card(exposure_roe_clean(df), key="cap_eff_clean")
-    watch=executive_watchlist(df,roe_floor,pricing_floor); st.dataframe(watch, use_container_width=True, hide_index=True) if not watch.empty else st.success("No pricing / profitability watchlist relationships detected.")
-
-elif nav == "Deposit Intelligence":
-    section_header("Deposit Intelligence", "Deposit balance, deposit revenue, maturity and liquidity profile.")
-    c1,c2=st.columns(2,gap="large")
-    with c1: chart_card(bar_chart_v2(grouped_view(df,["Country"]),"Country","Deposit_Balance","Deposits by Country",height=230,max_items=6),key="dep_country")
+    c1, c2 = st.columns([1, 1], gap="large")
+    with c1:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.plotly_chart(bar_fig(country, "Country", "Total_Revenue", "Revenue by Country (USD)", unit="M", height=245, width=0.32), use_container_width=True, config={"displayModeBar": False}, key="exec_rev_country_v083")
+        st.markdown("</div>", unsafe_allow_html=True)
     with c2:
-        dep_type=df.groupby("Deposit_Type",as_index=False)["Deposit_Balance"].sum(); chart_card(bar_chart_v2(dep_type,"Deposit_Type","Deposit_Balance","Deposits by Type",height=230),key="dep_type")
-    dep_detail=df[["Client","Country","Deposit_Type","Liquidity_Profile","Operational_Deposit_Flag","Deposit_Balance","Deposit_Revenue","Deposit_Maturity_Date"]].copy(); dep_detail["Deposit Balance"]=dep_detail["Deposit_Balance"].apply(money); dep_detail["Deposit Revenue"]=dep_detail["Deposit_Revenue"].apply(money)
-    st.dataframe(dep_detail[["Client","Country","Deposit_Type","Liquidity_Profile","Operational_Deposit_Flag","Deposit Balance","Deposit Revenue","Deposit_Maturity_Date"]],use_container_width=True,hide_index=True)
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.plotly_chart(bar_fig(country, "Country", "Lending_Drawn", "Exposure by Country (USD)", unit="B", height=245, width=0.32), use_container_width=True, config={"displayModeBar": False}, key="exec_exp_country_v083")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-elif nav == "Competitor Benchmarking":
-    section_header("Competitor Benchmarking", "Wallet sizing prototype using common global banking competitors.")
-    competitors=["HSBC","J.P. Morgan","Goldman Sachs","Citi","MUFG","SMBC","Standard Chartered","BNP Paribas"]; rng=np.random.default_rng(12); comp=pd.DataFrame({"Bank":competitors,"Estimated Wallet":rng.integers(80,380,len(competitors))*1_000_000}); comp.loc[comp["Bank"].eq("MUFG"),"Estimated Wallet"]=total_revenue; comp["Current Share"]=comp["Estimated Wallet"]/comp["Estimated Wallet"].sum(); comp["Wallet Gap"]=comp["Estimated Wallet"].max()-comp["Estimated Wallet"]
-    chart_card(bar_chart_v2(comp,"Bank","Estimated Wallet","Estimated Captured Wallet by Bank",height=320),key="comp_wallet")
-    comp_show=comp.copy(); comp_show["Estimated Wallet"]=comp_show["Estimated Wallet"].apply(money); comp_show["Current Share"]=comp_show["Current Share"].apply(pct); comp_show["Wallet Gap"]=comp_show["Wallet Gap"].apply(money); st.dataframe(comp_show,use_container_width=True,hide_index=True)
+    st.markdown("<h2>Deposit Intelligence</h2>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Franchise strength, liquidity profile and treasury opportunities.</div>", unsafe_allow_html=True)
+    d1, d2, d3, d4 = st.columns([1.05, 1.05, 0.92, 1.1], gap="large")
+    with d1:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=240, width=0.32), use_container_width=True, config={"displayModeBar": False}, key="exec_dep_country_v083")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with d2:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.plotly_chart(donut_deposit(deposit), use_container_width=True, config={"displayModeBar": False}, key="exec_dep_donut_v083")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with d3:
+        casa = float(deposit.loc[deposit["Deposit_Type"].eq("CASA"), "Deposit_Balance"].sum() / deposit["Deposit_Balance"].sum())
+        ltd = float(relationships["Lending_Drawn"].sum() / relationships["Deposit_Balance"].sum())
+        pen = float(relationships["Total_Revenue"].sum() / relationships["Estimated_Wallet"].sum())
+        st.markdown(
+            f"""
+            <div class='small-card'>
+              <h3>Liquidity Profile</h3>
+              <div style='height:12px'></div>
+              <div style='display:flex;justify-content:space-between;margin-bottom:14px;'><span>CASA Ratio</span><b style='color:{GREEN}'>{casa*100:.0f}%</b></div>
+              <div style='display:flex;justify-content:space-between;margin-bottom:14px;'><span>Loan to Deposit Ratio</span><b style='color:{RED}'>{ltd*100:.0f}%</b></div>
+              <div style='display:flex;justify-content:space-between;margin-bottom:14px;'><span>NSFR</span><b style='color:{GREEN}'>118%</b></div>
+              <div style='display:flex;justify-content:space-between;'><span>LCR</span><b style='color:{GREEN}'>142%</b></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with d4:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.plotly_chart(maturity_fig(maturity), use_container_width=True, config={"displayModeBar": False}, key="exec_maturity_v083")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-elif nav in ["Client Overview","Wallet Intelligence","Product Penetration"]:
-    section_header("Relationship 360", "Client-specific banking view: exposure, deposits, wallet and product white space.")
-    client=st.selectbox("Select Client",sorted(df["Client"].unique())); cdf=df[df["Client"].eq(client)]
-    mcols=st.columns(5)
-    for col, label, val in zip(mcols,["Client","Revenue","Exposure","Deposits","Wallet Share"],[client,money(cdf["Total_Revenue"].sum()),money(cdf["Lending_Drawn"].sum()),money(cdf["Deposit_Balance"].sum()),pct(safe_div(cdf["Total_Revenue"].sum(),cdf["Wallet_Estimate"].sum()))]):
-        with col: kpi_card(label,val)
-    c1,c2=st.columns(2,gap="large")
-    with c1: chart_card(bar_chart_v2(grouped_view(cdf,["Product"]),"Product","Total_Revenue","Client Revenue by Product",height=260,max_items=8),key="rel_rev_prod")
-    with c2: chart_card(bar_chart_v2(grouped_view(cdf,["Product"]),"Product","Lending_Drawn","Client Exposure by Product",height=260,max_items=8),key="rel_exp_prod")
-    st.markdown("### AI Banker Commentary")
-    st.markdown("- Pitch angle: diagnose whether the client need is refinancing, capex funding, working capital, hedging, treasury centralisation or IB execution.")
-    st.markdown("- Product gap check: assess DCM / syndication / project finance / fund finance / securitization / trade LC / AR financing / cash management penetration.")
-    st.markdown("- Wallet strategy: compare current revenue against estimated wallet, current share, wallet gap and penetration.")
+    c3, c4 = st.columns([1.35, 1], gap="large")
+    with c3:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.plotly_chart(combo_capital_fig(relationships, roe_floor), use_container_width=True, config={"displayModeBar": False}, key="exec_capital_combo_v083")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with c4:
+        st.markdown(roe_heatmap(country, roe_floor), unsafe_allow_html=True)
+        st.markdown(
+            """
+            <div style='height:14px'></div>
+            <div class='insight-box'>
+              <b>Key Insights</b><br><br>
+              • Hong Kong is the largest revenue contributor at <b>$315.8M</b>.<br>
+              • RoE floor is set at <b>18%</b> for demo purposes.<br>
+              • Use Relationship 360 to identify product gaps, deposit opportunities and IB wallet expansion.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-elif nav == "Deal Screening (DSC)":
-    section_header("Deal Screening / Pricing Engine", "DSC-style mini dashboard: facility amount, Tx RoE, NIM bucket and quality flag.")
-    m1,m2,m3,m4=st.columns(4); m1.metric("Screened Deals",len(df)); m2.metric("Facility Amount",money(df["Facility_Limit"].sum())); m3.metric("Below Tx RoE Floor",len(df[df["Tx_RoE"]<roe_floor])); m4.metric("Below Margin Floor",len(df[df["NIM_bps"]<pricing_floor]))
-    c1,c2=st.columns(2,gap="large")
-    with c1: chart_card(dsc_combo_chart(df,"Product","Facility_Limit","Tx_RoE","Tx RoE by Product",roe_floor,"%",height=300),key="dsc1")
-    with c2: chart_card(dsc_combo_chart(df,"Country","Facility_Limit","Tx_RoE","Tx RoE by Country",roe_floor,"%",height=300),key="dsc2")
-    bucket_df=df.copy(); bucket_df["NIM Bucket"]=pd.cut(bucket_df["NIM_bps"],bins=[-1,50,75,100,150,9999],labels=["<50 bps","50-75 bps","75-100 bps","100-150 bps",">150 bps"]); chart_card(bar_chart_v2(bucket_df.groupby("NIM Bucket",as_index=False,observed=False)["Facility_Limit"].sum(),"NIM Bucket","Facility_Limit","Facility Amount by NIM Bucket",height=270),key="dsc_bucket")
-    show=df.copy().sort_values("Facility_Limit",ascending=False).head(35); show["Facility Limit"]=show["Facility_Limit"].apply(money); show["Tx RoE"]=show["Tx_RoE"].apply(pct); show["NIM"]=show["NIM_bps"].round(1).astype(str)+" bps"; show["Quality Flag"]=np.where((show["Tx_RoE"]<roe_floor)|(show["NIM_bps"]<pricing_floor),"Review","Pass")
-    st.dataframe(show[["Deal_ID","Client","Country","RM","Product","Renewal_Type","Commitment_Type","Facility Limit","Tx RoE","NIM","Quality Flag"]],use_container_width=True,hide_index=True)
 
-elif nav == "Portfolio Data":
-    section_header("Portfolio Data", "Historical portfolio data: actual facilities, drawdown, revenue and deposits.")
-    st.dataframe(df,use_container_width=True,hide_index=True)
-    from io import BytesIO
-    excel_buffer=BytesIO()
-    with pd.ExcelWriter(excel_buffer,engine="openpyxl") as writer:
-        df.to_excel(writer,index=False,sheet_name="Portfolio_Data"); grouped_view(df,["Country"]).to_excel(writer,index=False,sheet_name="Country_Summary"); grouped_view(df,["Product"]).to_excel(writer,index=False,sheet_name="Product_Summary")
-    st.download_button("Download demo portfolio data as Excel",data=excel_buffer.getvalue(),file_name="ecai_banking_engine_v0_8_2_demo_data.xlsx",mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+def render_revenue_exposure():
+    st.markdown("<h1>Revenue & Exposure</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Historical portfolio revenue, exposure and product penetration view.</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.plotly_chart(bar_fig(product, "Product_Type", "Revenue", "Revenue by Product Type", unit="M", height=330, width=0.26), use_container_width=True, key="rev_product_v083")
+    with c2:
+        st.plotly_chart(bar_fig(product, "Product_Type", "Exposure", "Exposure by Product Type", unit="B", height=330, width=0.26), use_container_width=True, key="exp_product_v083")
+    st.markdown("<h2>Top Relationship Table</h2>", unsafe_allow_html=True)
+    cols = ["Relationship_Name", "Country", "Sector", "Client_Tier", "Total_Revenue", "Lending_Drawn", "Facility_Limit", "Deposit_Balance", "LTM_Group_RoE"]
+    st.dataframe(relationships[cols].sort_values("Total_Revenue", ascending=False), use_container_width=True, hide_index=True)
 
-st.caption("EC-AI Banking Intelligence Platform v0.8.2 | Demo data only | Framework inspired by general corporate banking analytics practice.")
+
+def render_capital_efficiency():
+    st.markdown("<h1>Capital Efficiency</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Exposure, capital usage, RWA and profitability discipline.</div>", unsafe_allow_html=True)
+    st.plotly_chart(combo_capital_fig(relationships, roe_floor), use_container_width=True, key="capital_combo_full_v083")
+    low = relationships[relationships["LTM_Group_RoE"] < roe_floor].copy()
+    st.markdown("<h2>Watchlist: Below Profitability Floor</h2>", unsafe_allow_html=True)
+    if low.empty:
+        st.success("No below-floor relationships detected.")
+    else:
+        st.dataframe(low[["Relationship_Name", "Country", "Sector", "Lending_Drawn", "RWA", "LTM_Group_RoE", "Deposit_Balance"]].sort_values("Lending_Drawn", ascending=False), use_container_width=True, hide_index=True)
+
+
+def render_deposit_intelligence():
+    st.markdown("<h1>Deposit Intelligence</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Deposit franchise, operational balance and treasury opportunity view.</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=300, width=0.30), use_container_width=True, key="dep_country_full_v083")
+    with c2:
+        st.plotly_chart(donut_deposit(deposit), use_container_width=True, key="dep_type_donut_full_v083")
+    c3, c4 = st.columns([1, 1], gap="large")
+    with c3:
+        st.plotly_chart(maturity_fig(maturity), use_container_width=True, key="dep_maturity_full_v083")
+    with c4:
+        st.markdown("<div class='small-card'><h3>Deposit Commentary</h3><br>CASA and operational balances indicate relationship stickiness and treasury dialogue potential.<br><br>Use maturity ladder to identify rollover risk, repricing windows and liquidity concentration.</div>", unsafe_allow_html=True)
+    st.markdown("<h2>Deposit Relationship Table</h2>", unsafe_allow_html=True)
+    table = relationships[["Relationship_Name", "Country", "Client_Tier", "Deposit_Balance", "Total_Revenue"]].copy()
+    table["Deposit_Type"] = np.random.default_rng(4).choice(["CASA", "Operational", "Time Deposit"], len(table))
+    table["Liquidity_Class"] = table["Deposit_Type"].map({"CASA":"Liquid", "Operational":"Operational", "Time Deposit":"Term"})
+    table["Deposit_Maturity_Date"] = [datetime(2024, 3, 31) + timedelta(days=int(x)) for x in np.random.default_rng(7).integers(15, 420, len(table))]
+    table = table.rename(columns={"Total_Revenue": "Deposit_Revenue_Proxy"})
+    st.dataframe(table.sort_values("Deposit_Balance", ascending=False), use_container_width=True, hide_index=True)
+
+
+def render_competitor_benchmarking():
+    st.markdown("<h1>Competitor Benchmarking</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Prototype view of estimated wallet, current share and competitor lead bank by product family.</div>", unsafe_allow_html=True)
+    comp = wallet.groupby("Lead_Competitor", as_index=False).agg(Estimated_Wallet=("Estimated_Wallet", "sum"), Current_Revenue=("Current_Revenue", "sum"), Wallet_Gap=("Wallet_Gap", "sum"))
+    comp["Penetration"] = comp["Current_Revenue"] / comp["Estimated_Wallet"]
+    st.plotly_chart(bar_fig(comp, "Lead_Competitor", "Wallet_Gap", "Wallet Gap by Competitor Relationship", unit="M", height=340, width=0.30), use_container_width=True, key="competitor_gap_v083")
+    st.dataframe(comp.sort_values("Wallet_Gap", ascending=False), use_container_width=True, hide_index=True)
+
+
+def render_client_overview():
+    st.markdown("<h1>Client Overview</h1>", unsafe_allow_html=True)
+    client = st.selectbox("Select relationship", relationships["Relationship_Name"].sort_values().tolist(), key="client_select_v083")
+    r = relationships[relationships["Relationship_Name"].eq(client)].iloc[0]
+    st.markdown(
+        f"""
+        <div class='card'>
+          <h2>{r['Relationship_Name']}</h2>
+          <div style='font-size:15px;color:#526173'>{r['Sector']} · {r['Country']} · {r['Client_Tier']} client</div>
+          <br>
+          <b>Relationship logic:</b> Lending exposure is {fmt_b(r['Lending_Drawn'])}, deposits are {fmt_b(r['Deposit_Balance'])}, LTM Group RoE is {r['LTM_Group_RoE']*100:.1f}%.<br>
+          <b>RM angle:</b> Identify the client’s true need from liquidity, capex, refinancing, cross-border trade, treasury control or capital markets access.
+        </div>
+        """, unsafe_allow_html=True,
+    )
+    c1, c2, c3, c4 = st.columns(4)
+    for c, (label, val) in zip(c1, [("Revenue", fmt_m(r["Total_Revenue"])),]):
+        c.markdown(metric_card(label, val, "LTM revenue"), unsafe_allow_html=True)
+    c2.markdown(metric_card("Exposure", fmt_b(r["Lending_Drawn"]), "Drawn balance"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Deposits", fmt_b(r["Deposit_Balance"]), "Franchise"), unsafe_allow_html=True)
+    c4.markdown(metric_card("Wallet Penetration", fmt_pct(r["Wallet_Penetration"]), "Estimated"), unsafe_allow_html=True)
+
+
+def render_wallet_intelligence():
+    st.markdown("<h1>Wallet Intelligence</h1>", unsafe_allow_html=True)
+    w = wallet.groupby("Product_Family", as_index=False).agg(Estimated_Wallet=("Estimated_Wallet", "sum"), Current_Revenue=("Current_Revenue", "sum"), Wallet_Gap=("Wallet_Gap", "sum"))
+    w["Penetration"] = w["Current_Revenue"] / w["Estimated_Wallet"]
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.plotly_chart(bar_fig(w, "Product_Family", "Estimated_Wallet", "Estimated Wallet by Product", unit="M", height=330, width=0.26), use_container_width=True, key="wallet_est_v083")
+    with c2:
+        st.plotly_chart(bar_fig(w, "Product_Family", "Wallet_Gap", "Wallet Gap by Product", unit="M", height=330, width=0.26), use_container_width=True, key="wallet_gap_v083")
+    st.dataframe(w.sort_values("Wallet_Gap", ascending=False), use_container_width=True, hide_index=True)
+
+
+def render_product_penetration():
+    st.markdown("<h1>Product Penetration</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Revenue and exposure across product hierarchy: lending, transaction banking, markets and IB products.</div>", unsafe_allow_html=True)
+    prod = product.copy()
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.plotly_chart(bar_fig(prod, "Product_Type", "Revenue", "Product Revenue", unit="M", height=350, width=0.24), use_container_width=True, key="prod_rev_v083")
+    with c2:
+        st.plotly_chart(bar_fig(prod, "Product_Type", "Exposure", "Product Exposure", unit="B", height=350, width=0.24), use_container_width=True, key="prod_exp_v083")
+    st.dataframe(prod.sort_values("Revenue", ascending=False), use_container_width=True, hide_index=True)
+
+
+def render_deal_screening():
+    st.markdown("<h1>Deal Screening (DSC)</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Mini DSC dashboard: approved amount, Tx RoE, NIM, hurdle and quality index.</div>", unsafe_allow_html=True)
+    d = dsc.copy()
+    d["Tx_RoE_Bucket"] = pd.cut(d["Tx_RoE"], bins=[0,0.10,0.15,0.20,1], labels=["0–10%", "10–15%", "15–20%", ">20%"])
+    d["NIM_Bucket"] = pd.cut(d["NIM_bps"], bins=[-1,30,60,100,10000], labels=["Below 30 bps", "30–60 bps", "60–100 bps", "Over 100 bps"])
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(metric_card("Deals", f"{len(d)}", "screened sample"), unsafe_allow_html=True)
+    c2.markdown(metric_card("Facility Limit", fmt_m(d["Facility_Limit_M"].sum()), "screened amount"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Avg Tx RoE", f"{d['Tx_RoE'].mean()*100:.1f}%", "transaction return"), unsafe_allow_html=True)
+    c4.markdown(metric_card("Avg NIM", f"{d['NIM_bps'].mean():.0f} bps", "price margin"), unsafe_allow_html=True)
+
+    by_month = d.assign(Month=pd.to_datetime(d["Screen_Date"]).dt.to_period("M").astype(str)).groupby("Month", as_index=False).agg(Facility_Limit_M=("Facility_Limit_M","sum"), Deals=("DS_ID","count"), Tx_RoE=("Tx_RoE","mean"), NIM_bps=("NIM_bps","mean"))
+    c5, c6 = st.columns(2, gap="large")
+    with c5:
+        st.plotly_chart(bar_fig(by_month, "Month", "Facility_Limit_M", "Approved Amount by Month", unit="M", height=300, width=0.28), use_container_width=True, key="dsc_month_v083")
+    with c6:
+        by_country = d.groupby("Country", as_index=False).agg(Expected_Draw_B=("Expected_Draw_B","sum"), Tx_RoE=("Tx_RoE","mean"), NIM_bps=("NIM_bps","mean"), DSC_Quality_Index=("DSC_Quality_Index","mean"))
+        st.plotly_chart(bar_fig(by_country, "Country", "Expected_Draw_B", "Expected Draw by Country", unit="B", height=300, width=0.30), use_container_width=True, key="dsc_country_v083")
+
+    c7, c8 = st.columns(2, gap="large")
+    with c7:
+        bucket = d.groupby("NIM_Bucket", observed=True, as_index=False).agg(Facility_Limit_M=("Facility_Limit_M", "sum"), Deals=("DS_ID", "count"))
+        st.plotly_chart(bar_fig(bucket, "NIM_Bucket", "Facility_Limit_M", "NIM Bucket by Facility Limit", unit="M", height=300, width=0.30), use_container_width=True, key="dsc_nim_bucket_v083")
+    with c8:
+        qual = d.groupby("Country", as_index=False).agg(DSC_Quality_Index=("DSC_Quality_Index", "mean"))
+        st.plotly_chart(bar_fig(qual, "Country", "DSC_Quality_Index", "DSC Quality Index by Country", unit="M", height=300, width=0.30), use_container_width=True, key="dsc_quality_v083")
+
+    st.markdown("<h2>Deal List</h2>", unsafe_allow_html=True)
+    st.dataframe(d.sort_values("Facility_Limit_M", ascending=False), use_container_width=True, hide_index=True)
+
+
+def render_portfolio_data():
+    st.markdown("<h1>Portfolio Data</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Historical actual facilities, drawdown, revenue, deposits and RWA.</div>", unsafe_allow_html=True)
+    excel_bytes = make_excel_download(data)
+    st.download_button("Download sample banking data (Excel)", data=excel_bytes, file_name="ecai_banking_sample_data_v083.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="download_excel_v083")
+    view = st.selectbox("Table", list(data.keys()), key="portfolio_table_select_v083")
+    st.dataframe(data[view], use_container_width=True, hide_index=True)
+
+
+def render_ai_banker_commentary():
+    st.markdown("<h1>AI Banker Commentary</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Prototype RM pitch angles based on relationship profile, wallet gap and product need.</div>", unsafe_allow_html=True)
+    client = st.selectbox("Select client", relationships["Relationship_Name"].sort_values().tolist(), key="ai_client_select_v083")
+    r = relationships[relationships["Relationship_Name"].eq(client)].iloc[0]
+    gap = wallet[wallet["Relationship_Name"].eq(client)].sort_values("Wallet_Gap", ascending=False).head(4)
+    st.markdown(
+        f"""
+        <div class='insight-box'>
+        <b>{client} — RM dialogue angle</b><br><br>
+        • Relationship profile: {r['Sector']} client in {r['Country']} with {fmt_b(r['Lending_Drawn'])} lending exposure and {fmt_b(r['Deposit_Balance'])} deposits.<br>
+        • True need hypothesis: {'liquidity and refinancing' if r['Lending_Drawn'] > r['Deposit_Balance'] else 'treasury control and operating balance stickiness'} plus selective capital markets / IB cross-sell.<br>
+        • Pitch angle: lead with balance sheet needs, then connect to product gaps rather than generic product pushing.<br>
+        </div>
+        """, unsafe_allow_html=True,
+    )
+    st.markdown("<h2>Top Product Gap Angles</h2>", unsafe_allow_html=True)
+    st.dataframe(gap[["Product_Family", "Estimated_Wallet", "Current_Revenue", "Wallet_Gap", "Wallet_Penetration", "Lead_Competitor"]], use_container_width=True, hide_index=True)
+
+# -----------------------------
+# Dispatch
+# -----------------------------
+if page == "Executive Dashboard":
+    render_executive_dashboard()
+elif page == "Revenue & Exposure":
+    render_revenue_exposure()
+elif page == "Capital Efficiency":
+    render_capital_efficiency()
+elif page == "Deposit Intelligence":
+    render_deposit_intelligence()
+elif page == "Competitor Benchmarking":
+    render_competitor_benchmarking()
+elif page == "Client Overview":
+    render_client_overview()
+elif page == "Wallet Intelligence":
+    render_wallet_intelligence()
+elif page == "Product Penetration":
+    render_product_penetration()
+elif page == "Deal Screening (DSC)":
+    render_deal_screening()
+elif page == "Portfolio Data":
+    render_portfolio_data()
+elif page == "AI Banker Commentary":
+    render_ai_banker_commentary()
+
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.3 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
