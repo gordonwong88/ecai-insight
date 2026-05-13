@@ -5,7 +5,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="EC-AI Banking Engine v0.7", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="EC-AI Banking Engine v0.8", layout="wide", initial_sidebar_state="expanded")
 
 # =========================================================
 # CONFIGURABLE DEMO THRESHOLDS
@@ -16,12 +16,12 @@ DEFAULT_RELATIONSHIP_ROE_FLOOR = 0.12
 # =========================================================
 # EC-AI BANKING VISUAL LANGUAGE
 # =========================================================
-NAVY = "#0B1F33"
-NAVY_2 = "#12395B"
-EXEC_BLUE = "#1F4E79"
-STEEL = "#5B6770"
-BLUE_GREY = "#6F8293"
-LIGHT_STEEL = "#D9E1E8"
+NAVY = "#08264A"
+NAVY_2 = "#173A5E"
+EXEC_BLUE = "#325B8C"
+STEEL = "#6E7B87"
+BLUE_GREY = "#7E8B97"
+LIGHT_STEEL = "#D9DEE3"
 LIGHT_BG = "#F4F6F8"
 CARD_BORDER = "#D7DEE6"
 TEXT = "#111827"
@@ -212,8 +212,10 @@ def make_demo_data(n=200, seed=7):
 
     countries = ["Hong Kong", "Singapore", "Japan", "Korea", "Taiwan", "Australia"]
     products = [
-        "Term Loan", "Revolver", "Trade Finance", "FX / Markets",
-        "Cash Management", "Deposits", "DCM", "Fund Finance", "Guarantee"
+        "Term Loan", "Revolver", "Project Finance", "Fund Finance",
+        "Structured Finance", "Trade LC", "AR Financing", "Supply Chain Finance",
+        "FX / Markets", "Hedging", "Cash Management", "Deposits",
+        "DCM", "ECM", "Syndication", "Securitization", "Advisory", "Guarantee"
     ]
     rms = ["RM - David", "RM - Michael", "RM - Sarah", "RM - Jason", "RM - Emily", "RM - Chris"]
     sectors = [
@@ -233,7 +235,11 @@ def make_demo_data(n=200, seed=7):
     rows = []
     for i in range(n):
         country = rng.choice(countries, p=[0.20, 0.17, 0.17, 0.16, 0.15, 0.15])
-        product = rng.choice(products, p=[0.23, 0.17, 0.12, 0.11, 0.10, 0.10, 0.06, 0.06, 0.05])
+        product = rng.choice(
+            products,
+            p=[0.13, 0.10, 0.07, 0.06, 0.05, 0.07, 0.05, 0.05,
+               0.08, 0.04, 0.08, 0.07, 0.05, 0.03, 0.04, 0.03, 0.03, 0.07]
+        )
         client = rng.choice(clients)
         sector = rng.choice(sectors)
         rm = rng.choice(rms)
@@ -247,9 +253,9 @@ def make_demo_data(n=200, seed=7):
             nim_bps = rng.choice([18, 24, 28, 36, 48, 65], p=[0.18, 0.22, 0.18, 0.20, 0.14, 0.08])
         elif product == "Term Loan":
             nim_bps = rng.choice([25, 35, 55, 80, 110, 140], p=[0.10, 0.18, 0.26, 0.22, 0.16, 0.08])
-        elif product == "Trade Finance":
+        elif product in ["Trade Finance", "Trade LC", "AR Financing", "Supply Chain Finance"]:
             nim_bps = rng.choice([35, 60, 90, 120, 160], p=[0.15, 0.25, 0.25, 0.22, 0.13])
-        elif product in ["FX / Markets", "DCM", "Fund Finance"]:
+        elif product in ["FX / Markets", "Hedging", "DCM", "ECM", "Syndication", "Securitization", "Advisory", "Fund Finance", "Project Finance", "Structured Finance"]:
             nim_bps = rng.choice([45, 75, 110, 150, 210], p=[0.12, 0.24, 0.28, 0.23, 0.13])
         elif product in ["Cash Management", "Deposits"]:
             nim_bps = rng.choice([20, 40, 70, 100], p=[0.20, 0.30, 0.30, 0.20])
@@ -281,6 +287,11 @@ def make_demo_data(n=200, seed=7):
         wallet_share = safe_div(revenue, wallet_estimate)
         wallet_gap = max(wallet_estimate - revenue, 0)
 
+        maturity_days = int(rng.choice([30, 60, 90, 180, 365, 730], p=[0.20, 0.20, 0.22, 0.18, 0.14, 0.06]))
+        deposit_maturity_date = (pd.Timestamp("2026-04-30") + pd.Timedelta(days=maturity_days)).date().isoformat()
+        liquidity_profile = rng.choice(["Sticky", "Stable", "Rate Sensitive", "Short-Term"], p=[0.25, 0.35, 0.25, 0.15])
+        deposit_revenue = deposit_balance * rng.uniform(0.0015, 0.0080)
+
         rows.append({
             "Month": "2026-04",
             "Client": client,
@@ -305,6 +316,9 @@ def make_demo_data(n=200, seed=7):
             "LTM_Group_RoE": round(ltm_group_roe, 4),
             "ThreeY_Avg_GRoE": round(three_year_avg_groe, 4),
             "Deposit_Balance": round(deposit_balance, 0),
+            "Deposit_Revenue": round(deposit_revenue, 0),
+            "Deposit_Maturity_Date": deposit_maturity_date,
+            "Liquidity_Profile": liquidity_profile,
             "Deposit_Type": deposit_type,
             "Operational_Deposit_Flag": operational_flag,
             "Deposit_Growth": round(deposit_growth, 4),
@@ -336,7 +350,7 @@ def ensure_metrics(df):
     for c in [
         "Limit", "Facility_Limit", "Lending_Drawn", "RWA", "Total_Revenue", "Revenue",
         "NIAT", "Deposit_Balance", "NIM_bps", "Net_Interest_Income",
-        "Wallet_Estimate", "Wallet_Share", "Wallet_Gap", "Deposit_Growth"
+        "Wallet_Estimate", "Wallet_Share", "Wallet_Gap", "Deposit_Growth", "Deposit_Revenue"
     ]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
@@ -388,6 +402,12 @@ def ensure_metrics(df):
 
     if "Deposit_Growth" not in df.columns:
         df["Deposit_Growth"] = 0.0
+    if "Deposit_Revenue" not in df.columns:
+        df["Deposit_Revenue"] = 0.0
+    if "Deposit_Maturity_Date" not in df.columns:
+        df["Deposit_Maturity_Date"] = "N/A"
+    if "Liquidity_Profile" not in df.columns:
+        df["Liquidity_Profile"] = "Stable"
 
     df["Revenue_per_RWA"] = df.apply(lambda r: safe_div(r["Total_Revenue"], r["RWA"]), axis=1)
     return df
@@ -441,7 +461,7 @@ def bar_chart(df, x, y, title):
         paper_bgcolor="white",
         font=dict(color=TEXT, family="Inter, Arial, sans-serif"),
         title=dict(font=dict(size=18, color=NAVY, family="Inter, Arial, sans-serif")),
-        yaxis=dict(tickvals=ticks, ticktext=labels, gridcolor="#E9EEF3", zeroline=False),
+        yaxis=dict(tickvals=ticks, ticktext=labels, gridcolor="rgba(217,222,227,0.45)", zeroline=False),
         xaxis=dict(tickangle=0, tickfont=dict(size=11, color=TEXT)),
         bargap=0.34,
         showlegend=False,
@@ -484,8 +504,8 @@ def combo_exposure_roe(df):
         title="Capital Efficiency: Exposure vs LTM Group RoE",
         height=500,
         margin=dict(l=35, r=35, t=60, b=110),
-        xaxis=dict(tickangle=-30),
-        yaxis=dict(title="Lending Drawn", tickvals=ticks, ticktext=labels, gridcolor="#E5E7EB"),
+        xaxis=dict(tickangle=0, tickfont=dict(size=10)),
+        yaxis=dict(title="Lending Drawn", tickvals=ticks, ticktext=labels, gridcolor="rgba(217,222,227,0.45)"),
         yaxis2=dict(title="LTM Group RoE %", overlaying="y", side="right", ticksuffix="%"),
         plot_bgcolor="white",
         paper_bgcolor="white",
@@ -547,7 +567,7 @@ def executive_watchlist(df, roe_floor, pricing_floor):
 # APP HEADER / SIDEBAR
 # =========================================================
 st.markdown(
-    '<div class="ec-hero"><h1>EC-AI Banking Engine v0.7</h1><p>Relationship intelligence / deposits / wallet share / revenue decision engine for corporate banking.</p></div>',
+    '<div class="ec-hero"><h1>EC-AI Banking Engine v0.8</h1><p>AI-native Relationship Intelligence Platform for corporate and investment banking.</p></div>',
     unsafe_allow_html=True
 )
 
@@ -563,7 +583,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown("### Configurable Thresholds")
-    st.caption("Demo thresholds only — configure for each institution / pilot.")
+    st.caption("Demo thresholds only — configure for each institution / pilot. NII = Net Interest Income.")
     roe_floor = st.slider("Relationship profitability floor", 0.05, 0.30, DEFAULT_RELATIONSHIP_ROE_FLOOR, 0.01, format="%.2f")
     pricing_floor = st.slider("Pricing / margin floor (bps)", 0, 150, DEFAULT_PRICING_FLOOR_BPS, 5)
 
@@ -607,11 +627,11 @@ c6.metric("Wallet Share", pct(wallet_share))
 # TABS
 # =========================================================
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-    "CEO Dashboard",
+    "Executive Portfolio Overview",
     "Revenue Engine",
     "Relationship 360",
     "Deposit Intelligence",
-    "Pricing & NIM Risk",
+    "Deal Screening / Pricing",
     "Capital Efficiency",
     "Portfolio Data"
 ])
@@ -621,7 +641,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 # CEO DASHBOARD
 # =========================================================
 with tab1:
-    st.markdown('<div class="ec-section-title">CEO Dashboard</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ec-section-title">Executive Portfolio Overview</div>', unsafe_allow_html=True)
 
     left, right = st.columns([1.05, 0.95], gap="large")
     with left:
@@ -649,7 +669,7 @@ with tab1:
 
     st.markdown("### Revenue by Country")
     st.plotly_chart(
-        bar_chart(grouped_view(df, ["Country"]).head(8), "Country", "Total_Revenue", "CEO Dashboard — Revenue by Country"),
+        bar_chart(grouped_view(df, ["Country"]).head(8), "Country", "Total_Revenue", "Executive Portfolio Overview — Revenue by Country"),
         use_container_width=True,
         key="ceo_revenue_country"
     )
@@ -744,12 +764,13 @@ with tab3:
     c5.metric("Deposits", money(total_deposits_c))
     c6.metric("LTM Group RoE", pct(ltm_groe_c))
 
-    st.markdown("### Wallet Share Prototype")
+    st.markdown("### Wallet Intelligence")
     w1, w2, w3, w4 = st.columns(4)
     w1.metric("Estimated Wallet", money(wallet_estimate_c))
-    w2.metric("Current Revenue", money(total_revenue_c))
-    w3.metric("Wallet Share", pct(wallet_share_c))
+    w2.metric("Current Share", money(total_revenue_c))
+    w3.metric("Penetration", pct(wallet_share_c))
     w4.metric("Wallet Gap", money(wallet_gap_c))
+    st.caption("Estimated Wallet = synthetic estimate of total bankable revenue opportunity. Current Share = captured revenue. Wallet Gap = uncaptured opportunity. Penetration = Current Share / Estimated Wallet.")
 
     left, right = st.columns(2, gap="large")
     with left:
@@ -782,10 +803,43 @@ with tab3:
     show_pt["LTM Group RoE"] = show_pt["LTM_Group_RoE"].apply(pct)
     st.dataframe(show_pt[["Product", "Facility Limit", "Lending Drawn", "Revenue", "Deposits", "Utilization", "LTM Group RoE"]], use_container_width=True, hide_index=True)
 
+
+    st.markdown("### Competitor Benchmarking")
+    competitors = ["HSBC", "JPMorgan", "Goldman Sachs", "Citi", "MUFG", "SMBC", "Standard Chartered", "BNP Paribas"]
+    comp_rows = []
+    rng_local = np.random.default_rng(abs(hash(selected_client)) % (2**32))
+    remaining_wallet = max(wallet_estimate_c - total_revenue_c, 1)
+    for bank in competitors:
+        if bank == "MUFG":
+            captured = total_revenue_c
+        else:
+            captured = remaining_wallet * rng_local.uniform(0.04, 0.18)
+        comp_rows.append({
+            "Bank": bank,
+            "Estimated Captured Revenue": captured,
+            "Estimated Wallet Share": safe_div(captured, wallet_estimate_c)
+        })
+    comp_df = pd.DataFrame(comp_rows).sort_values("Estimated Captured Revenue", ascending=False)
+    comp_show = comp_df.copy()
+    comp_show["Estimated Captured Revenue"] = comp_show["Estimated Captured Revenue"].apply(money)
+    comp_show["Estimated Wallet Share"] = comp_show["Estimated Wallet Share"].apply(pct)
+    st.dataframe(comp_show, use_container_width=True, hide_index=True)
+
+    st.markdown("### Banker Opportunity Mapping")
+    opp_map = pd.DataFrame([
+        {"Client Need": "Refinancing / maturity wall", "Potential Product": "Syndication / DCM", "Priority": "High"},
+        {"Client Need": "Capex / infrastructure expansion", "Potential Product": "Project Finance", "Priority": "High"},
+        {"Client Need": "Working capital pressure", "Potential Product": "Trade LC / AR Financing / Supply Chain Finance", "Priority": "Medium"},
+        {"Client Need": "FX / rates volatility", "Potential Product": "Markets Hedging", "Priority": "Medium"},
+        {"Client Need": "Treasury centralization", "Potential Product": "Cash Management / Liquidity Management", "Priority": "High"},
+        {"Client Need": "Asset monetization", "Potential Product": "Securitization", "Priority": "Selective"},
+    ])
+    st.dataframe(opp_map, use_container_width=True, hide_index=True)
+
     st.markdown("### AI Banker Commentary")
     commentary = []
     if wallet_share_c < 0.30:
-        commentary.append("Wallet capture appears underpenetrated relative to the estimated relationship wallet. This suggests white-space opportunity.")
+        commentary.append("Wallet capture appears underpenetrated relative to the estimated banking wallet. RM should test entry points through treasury, trade, markets or IB products depending on client priorities.")
     elif wallet_share_c < 0.60:
         commentary.append("Wallet capture is moderate. Selective cross-sell and product deepening may improve relationship economics.")
     else:
@@ -803,7 +857,7 @@ with tab3:
 
     product_count = client_df["Product"].nunique()
     if product_count <= 2:
-        commentary.append("Product penetration is narrow. Cross-sell opportunities may exist across trade, markets, cash management, DCM or fund finance products.")
+        commentary.append("Product penetration is narrow. RM should assess whether refinancing, capex, working capital, hedging or treasury centralization can open new product dialogue.")
     else:
         commentary.append("Product usage is diversified across multiple banking products.")
 
@@ -837,17 +891,25 @@ with tab4:
     deposit_rel = grouped_view(df, ["Client"]).head(20)
     dep = deposit_rel.copy()
     dep["Deposits"] = dep["Deposit_Balance"].apply(money)
-    dep["Lending Drawn"] = dep["Lending_Drawn"].apply(money)
-    dep["Revenue"] = dep["Total_Revenue"].apply(money)
-    dep["LTM Group RoE"] = dep["LTM_Group_RoE"].apply(pct)
-    st.dataframe(dep[["Client", "Deposits", "Lending Drawn", "Revenue", "LTM Group RoE"]], use_container_width=True, hide_index=True)
+    if "Deposit_Revenue" in dep.columns:
+        dep["Deposit Revenue"] = dep["Deposit_Revenue"].apply(money)
+    else:
+        dep["Deposit Revenue"] = "$0"
+    st.dataframe(dep[["Client", "Deposits", "Deposit Revenue"]], use_container_width=True, hide_index=True)
+
+    st.markdown("### Deposit Maturity / Liquidity Detail")
+    dep_detail = df[["Client", "Country", "Deposit_Type", "Liquidity_Profile", "Operational_Deposit_Flag", "Deposit_Balance", "Deposit_Revenue", "Deposit_Maturity_Date"]].copy()
+    dep_detail["Deposit Balance"] = dep_detail["Deposit_Balance"].apply(money)
+    dep_detail["Deposit Revenue"] = dep_detail["Deposit_Revenue"].apply(money)
+    st.dataframe(dep_detail[["Client", "Country", "Deposit_Type", "Liquidity_Profile", "Operational_Deposit_Flag", "Deposit Balance", "Deposit Revenue", "Deposit_Maturity_Date"]], use_container_width=True, hide_index=True)
 
 
 # =========================================================
 # PRICING & NIM
 # =========================================================
 with tab5:
-    st.markdown('<div class="ec-section-title">Pricing & NIM Risk</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ec-section-title">Deal Screening / Pricing Intelligence</div>', unsafe_allow_html=True)
+    st.caption("Forward-looking DSC-style view. Demo data only: product, facility, utilization, pricing/margin and relationship profitability indicators.")
     low = df[df["NIM_bps"] < pricing_floor].copy()
     a, b, c = st.columns(3)
     a.metric("Pricing Review Deals", len(low))
