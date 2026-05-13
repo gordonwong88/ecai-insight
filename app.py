@@ -619,44 +619,6 @@ def executive_watchlist(df, roe_floor, pricing_floor):
 
 
 # =========================================================
-# APP HEADER / SIDEBAR
-# =========================================================
-st.markdown(
-    '<div class="ec-hero"><h1>EC-AI Banking Engine v0.8</h1><p>AI-native Relationship Intelligence Platform for corporate and investment banking.</p></div>',
-    unsafe_allow_html=True
-)
-
-with st.sidebar:
-    st.markdown("## EC-AI Banking Engine")
-    st.caption("Relationship Intelligence Prototype")
-    data_mode = st.radio("Data source", ["Use Built-in Demo Data", "Upload File"], index=0)
-
-    uploaded = None
-    if data_mode == "Upload File":
-        uploaded = st.file_uploader("Upload banking performance file", type=["csv", "xlsx"])
-        st.caption("Required: Client, Country, RM, Product, Lending_Drawn, RWA, Total_Revenue, NIAT")
-
-    st.markdown("---")
-    st.markdown("### Configurable Thresholds")
-    st.caption("Demo thresholds only — configure for each institution / pilot. NII = Net Interest Income.")
-    roe_floor = st.slider("Relationship profitability floor", 0.05, 0.30, DEFAULT_RELATIONSHIP_ROE_FLOOR, 0.01, format="%.2f")
-    pricing_floor = st.slider("Pricing / margin floor (bps)", 0, 150, DEFAULT_PRICING_FLOOR_BPS, 5)
-
-
-if data_mode == "Use Built-in Demo Data":
-    raw = make_demo_data()
-else:
-    if uploaded is None:
-        st.info("Upload a banking performance file or switch to built-in demo data.")
-        st.stop()
-    raw = pd.read_excel(uploaded) if uploaded.name.lower().endswith(".xlsx") else pd.read_csv(uploaded)
-
-df = ensure_metrics(raw)
-
-
-
-
-# =========================================================
 # V0.8.2 BLUEPRINT LAYOUT HELPERS
 # =========================================================
 def section_header(title, subtitle=None):
@@ -717,6 +679,22 @@ hr { margin: 1.2rem 0; }
 </style>
 """, unsafe_allow_html=True)
 
+
+st.markdown("""
+<style>
+/* V0.8.2 institutional blueprint refinements */
+header[data-testid="stHeader"] { background: transparent; }
+.block-container { padding-top: 0.9rem !important; max-width: 1520px !important; }
+.ec-section-title { font-size: 24px; font-weight: 850; color: #08264A; margin-top: 4px; margin-bottom: 0px; }
+.ec-subtitle { color: #667085; font-size: 13px; margin-bottom: 12px; }
+.topbar { display:flex; align-items:center; gap:16px; min-height:54px; }
+.topbar b { color:#475467; font-size:11px; text-transform:uppercase; }
+.kpi-card { min-height: 88px !important; }
+[data-testid="stSidebar"] { min-width: 260px; }
+section[data-testid="stSidebar"] div[role="radiogroup"] label { font-weight: 600; }
+</style>
+""", unsafe_allow_html=True)
+
 # =========================================================
 # APP HEADER / SIDEBAR — V0.8.2 BLUEPRINT
 # =========================================================
@@ -724,9 +702,9 @@ with st.sidebar:
     st.markdown("# EC-AI")
     st.markdown("**Banking Intelligence**  \nv0.8.2")
     st.markdown("---")
-    nav = st.radio("Navigate", ["Executive Dashboard", "Revenue & Exposure", "Capital Efficiency", "Deposit Intelligence", "Competitor Benchmarking", "Client Overview", "Wallet Intelligence", "Product Penetration", "Deal Screening (DSC)", "Portfolio Data"], index=0, label_visibility="collapsed")
+    nav = st.radio("Navigate", ["Executive Dashboard", "Revenue & Exposure", "Capital Efficiency", "Deposit Intelligence", "Competitor Benchmarking", "Client Overview", "Wallet Intelligence", "Product Penetration", "Deal Screening (DSC)", "Portfolio Data"], index=0, label_visibility="collapsed", key="main_navigation_v082")
     st.markdown("---")
-    data_mode = st.radio("Data source", ["Use Built-in Demo Data", "Upload File"], index=0)
+    data_mode = st.radio("Data source", ["Use Built-in Demo Data", "Upload File"], index=0, key="data_source_v082")
     uploaded = None
     if data_mode == "Upload File":
         uploaded = st.file_uploader("Upload banking performance file", type=["csv", "xlsx"])
