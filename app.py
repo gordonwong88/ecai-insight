@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.3b - Top bar sanitized
+# EC-AI Banking Engine v0.8.4 - Clean canvas layout
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.3b",
+    page_title="EC-AI Banking Engine v0.8.4",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -70,6 +70,7 @@ st.markdown(
     .sidebar-section {{ font-size:12px; font-weight:800; opacity:.72; margin:24px 0 8px; letter-spacing:.04em; }}
     .footer {{ color:#526173; font-size:12px; margin-top:20px; }}
     div[data-testid="stDataFrame"] {{ border:1px solid {BORDER}; border-radius:12px; }}
+    div[data-testid="stVerticalBlockBorderWrapper"] {{ background: white; border:1px solid {BORDER}; border-radius:12px; box-shadow:0 1px 2px rgba(10,35,66,.03); padding: 0.25rem 0.25rem 0.1rem 0.25rem; }}
 </style>
 """,
     unsafe_allow_html=True,
@@ -434,10 +435,9 @@ def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
     total = d["Deposit_Balance"].sum()
     fig.update_layout(
         annotations=[dict(text=f"${total:.1f}B<br><span style='font-size:11px'>Total</span>", x=0.5, y=0.5, showarrow=False, font=dict(size=20, color=NAVY, family="Inter"))],
-        legend=dict(x=0.78, y=0.55, font=dict(size=13)),
         title=dict(text="Deposits by Type (USD b)", x=0.0, font=dict(size=16, color=NAVY)),
     )
-    return chart_layout(fig, height=310, show_legend=True)
+    return chart_layout(fig, height=310, show_legend=False)
 
 
 def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
@@ -493,7 +493,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.3</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.4</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -560,25 +560,21 @@ def render_executive_dashboard():
 
     c1, c2 = st.columns([1, 1], gap="large")
     with c1:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(bar_fig(country, "Country", "Total_Revenue", "Revenue by Country (USD)", unit="M", height=310, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_rev_country_v083")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.plotly_chart(bar_fig(country, "Country", "Total_Revenue", "Revenue by Country (USD)", unit="M", height=310, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_rev_country_v084")
     with c2:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(bar_fig(country, "Country", "Lending_Drawn", "Exposure by Country (USD)", unit="B", height=310, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_exp_country_v083")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.plotly_chart(bar_fig(country, "Country", "Lending_Drawn", "Exposure by Country (USD)", unit="B", height=310, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_exp_country_v084")
 
     st.markdown("<h2>Deposit Intelligence</h2>", unsafe_allow_html=True)
     st.markdown("<div class='subtitle'>Franchise strength, liquidity profile and treasury opportunities.</div>", unsafe_allow_html=True)
     d1, d2, d3, d4 = st.columns([1.05, 1.05, 0.92, 1.1], gap="large")
     with d1:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=300, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_dep_country_v083")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=300, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_dep_country_v084")
     with d2:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(donut_deposit(deposit), use_container_width=True, config={"displayModeBar": False}, key="exec_dep_donut_v083")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.plotly_chart(donut_deposit(deposit), use_container_width=True, config={"displayModeBar": False}, key="exec_dep_donut_v084")
     with d3:
         casa = float(deposit.loc[deposit["Deposit_Type"].eq("CASA"), "Deposit_Balance"].sum() / deposit["Deposit_Balance"].sum())
         ltd = float(relationships["Lending_Drawn"].sum() / relationships["Deposit_Balance"].sum())
@@ -597,15 +593,13 @@ def render_executive_dashboard():
             unsafe_allow_html=True,
         )
     with d4:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(maturity_fig(maturity), use_container_width=True, config={"displayModeBar": False}, key="exec_maturity_v083")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.plotly_chart(maturity_fig(maturity), use_container_width=True, config={"displayModeBar": False}, key="exec_maturity_v084")
 
     c3, c4 = st.columns([1.35, 1], gap="large")
     with c3:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(combo_capital_fig(relationships, roe_floor), use_container_width=True, config={"displayModeBar": False}, key="exec_capital_combo_v083")
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.plotly_chart(combo_capital_fig(relationships, roe_floor), use_container_width=True, config={"displayModeBar": False}, key="exec_capital_combo_v084")
     with c4:
         st.markdown(roe_heatmap(country, roe_floor), unsafe_allow_html=True)
         st.markdown(
@@ -812,4 +806,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.3b · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.4 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
