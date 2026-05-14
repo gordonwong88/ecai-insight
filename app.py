@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.5 - Readable dashboard with sidebar thresholds
+# EC-AI Banking Engine v0.8.6 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.5",
+    page_title="EC-AI Banking Engine v0.8.6",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -47,7 +47,7 @@ st.markdown(
     section[data-testid="stSidebar"] .stRadio label {{ font-size: 13px !important; }}
     section[data-testid="stSidebar"] div[role="radiogroup"] label {{ background: rgba(255,255,255,0.06); border-radius: 8px; padding: 4px 8px; margin: 2px 0; }}
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {{ background: rgba(255,255,255,0.12); }}
-    .main .block-container {{ padding-top: 1.4rem; max-width: 1580px; }}
+    .main .block-container {{ padding-top: 1.25rem; max-width: 1500px; padding-left: 1.7rem; padding-right: 1.7rem; }}
     h1 {{ color: #061B33; font-size: 34px !important; font-weight: 800 !important; margin-bottom: 0.15rem !important; }}
     h2 {{ color: #061B33; font-size: 28px !important; font-weight: 800 !important; margin-top: 1.2rem !important; }}
     h3 {{ color: #061B33; font-size: 19px !important; font-weight: 800 !important; }}
@@ -71,7 +71,7 @@ st.markdown(
     .sidebar-section {{ font-size:12px; font-weight:800; opacity:.72; margin:24px 0 8px; letter-spacing:.04em; }}
     .footer {{ color:#526173; font-size:12px; margin-top:20px; }}
     div[data-testid="stDataFrame"] {{ border:1px solid {BORDER}; border-radius:12px; }}
-    div[data-testid="stVerticalBlockBorderWrapper"] {{ background: white; border:1px solid {BORDER}; border-radius:12px; box-shadow:0 1px 2px rgba(10,35,66,.03); padding: 0.25rem 0.25rem 0.1rem 0.25rem; }}
+    div[data-testid="stVerticalBlockBorderWrapper"] {{ background: white; border:1px solid {BORDER}; border-radius:12px; box-shadow:0 1px 2px rgba(10,35,66,.03); padding: 0.55rem 0.55rem 0.35rem 0.55rem; }}
 </style>
 """,
     unsafe_allow_html=True,
@@ -280,6 +280,12 @@ def make_demo_data(seed: int = 83) -> Dict[str, pd.DataFrame]:
             "Status": rng.choice(["Approved", "Pipeline", "Lost", "Deferred"], p=[0.62,0.20,0.10,0.08]),
         })
     dsc = pd.DataFrame(dsc_rows)
+    # Demo facility tenor / final maturity profile for banking portfolio analytics.
+    tenor_labels = ["< 1 Year", "1 – 3 Years", "3 – 5 Years", "5 – 10 Years", "10+ Years"]
+    tenor_probs = [0.20, 0.30, 0.22, 0.17, 0.11]
+    dsc["Tenor_Bucket"] = rng.choice(tenor_labels, size=len(dsc), p=tenor_probs)
+    tenor_mid = {"< 1 Year": 0.6, "1 – 3 Years": 2.0, "3 – 5 Years": 4.0, "5 – 10 Years": 7.0, "10+ Years": 12.0}
+    dsc["Tenor_Years"] = dsc["Tenor_Bucket"].map(tenor_mid).astype(float)
 
     months = pd.date_range("2023-04-01", periods=24, freq="MS")
     hist_rows = []
@@ -447,25 +453,30 @@ def roe_heatmap(country: pd.DataFrame, roe_floor: float) -> str:
 
 def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
     d = deposit.copy()
+    # Donut is deliberately centered within the left visual area, with legend on the lower-right.
+    # This avoids overlap while keeping the chart visually balanced inside the card.
     fig = go.Figure(data=[go.Pie(
         labels=d["Deposit_Type"], values=d["Deposit_Balance"], hole=0.58,
         marker=dict(colors=[NAVY, BLUE, SLATE, "#CBD3DA"]),
         textinfo="none",
-        domain=dict(x=[0.02, 0.64], y=[0.08, 0.96]),
+        domain=dict(x=[0.03, 0.58], y=[0.08, 0.95]),
+        sort=False,
         hovertemplate="%{label}<br>$%{value:.1f}B (%{percent})<extra></extra>",
     )])
     total = d["Deposit_Balance"].sum()
     fig.update_layout(
-        annotations=[dict(text=f"${total:.1f}B<br><span style='font-size:12px'>Total</span>", x=0.33, y=0.52, showarrow=False, font=dict(size=20, color=NAVY, family="Inter"))],
+        annotations=[dict(text=f"${total:.1f}B<br><span style='font-size:12px'>Total</span>", x=0.305, y=0.52, showarrow=False, font=dict(size=18, color=NAVY, family="Inter"))],
         legend=dict(
-            x=0.75, y=0.15, xanchor="left", yanchor="bottom",
-            orientation="v", font=dict(size=13, color=NAVY),
+            x=0.68, y=0.12, xanchor="left", yanchor="bottom",
+            orientation="v", font=dict(size=12, color=NAVY),
             bgcolor="rgba(255,255,255,0)", borderwidth=0,
             itemsizing="constant"
         ),
         title=dict(text="Deposits by Type (USD b)", x=0.0, font=dict(size=16, color=NAVY)),
     )
-    return chart_layout(fig, height=310, show_legend=True)
+    fig = chart_layout(fig, height=300, show_legend=True)
+    fig.update_layout(margin=dict(l=24, r=12, t=32, b=20))
+    return fig
 
 
 def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
@@ -478,6 +489,34 @@ def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
     ))
     fig.update_layout(title=dict(text="Maturity Ladder (USD b)", x=0, font=dict(size=16, color=NAVY)))
     fig = chart_layout(fig, height=310)
+    fig.update_xaxes(title_text="USD billion")
+    return fig
+
+
+def tenor_breakdown_fig(dsc: pd.DataFrame) -> go.Figure:
+    """Breakdown of lending deals / facilities by final tenor bucket."""
+    order = ["< 1 Year", "1 – 3 Years", "3 – 5 Years", "5 – 10 Years", "10+ Years"]
+    d = dsc.copy()
+    if "Tenor_Bucket" not in d.columns:
+        # Fallback for uploaded files without tenor data.
+        rng = np.random.default_rng(11)
+        d["Tenor_Bucket"] = rng.choice(order, size=len(d), p=[0.20, 0.30, 0.22, 0.17, 0.11])
+    value_col = "Expected_Draw_B" if "Expected_Draw_B" in d.columns else "Facility_Limit_M"
+    agg = d.groupby("Tenor_Bucket")[value_col].sum().reindex(order).fillna(0).reset_index()
+    # Facility_Limit_M is in USD million; convert to USD billion if needed.
+    if value_col == "Facility_Limit_M":
+        agg[value_col] = agg[value_col] / 1000.0
+    agg = agg.sort_values(value_col, ascending=True)
+    fig = go.Figure(go.Bar(
+        x=agg[value_col], y=agg["Tenor_Bucket"], orientation="h",
+        marker_color=["#8BB2E8", "#6D9BD6", "#4B7FC1", "#386BAB", NAVY],
+        text=[f"{v:.1f}" for v in agg[value_col]], textposition="outside",
+        textfont=dict(size=12, color=NAVY), width=0.48,
+        hovertemplate="%{y}<br>$%{x:.1f}B<extra></extra>",
+    ))
+    fig.update_layout(title=dict(text="Tenor Breakdown of All Deals / Facilities (USD b)", x=0, font=dict(size=15, color=NAVY)))
+    fig = chart_layout(fig, height=235)
+    fig.update_layout(margin=dict(l=78, r=24, t=34, b=38))
     fig.update_xaxes(title_text="USD billion")
     return fig
 
@@ -521,7 +560,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.5 Demo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.6 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -611,11 +650,13 @@ def render_executive_dashboard():
         st.markdown(
             f"""
             <div class='small-card'>
-              <h3>Liquidity Profile</h3>
-              <div style='height:12px'></div>
-              <div style='display:flex;justify-content:space-between;margin-bottom:14px;'><span>CASA Ratio</span><b style='color:{GREEN}'>{casa*100:.0f}%</b></div>
-              <div style='display:flex;justify-content:space-between;margin-bottom:14px;'><span>Loan to Deposit Ratio</span><b style='color:{RED}'>{ltd*100:.0f}%</b></div>
-              <div style='display:flex;justify-content:space-between;margin-bottom:14px;'><span>NSFR</span><b style='color:{GREEN}'>118%</b></div>
+              <h3>Liquidity & Balance Sheet Indicators</h3>
+              <div style='font-size:12px;color:#526173;line-height:1.35;margin:8px 0 16px 0;'>
+                Measures the stability of deposit funding and the bank’s ability to support lending growth while meeting short-term liquidity requirements.
+              </div>
+              <div style='display:flex;justify-content:space-between;margin-bottom:13px;'><span>CASA Ratio</span><b style='color:{GREEN}'>{casa*100:.0f}%</b></div>
+              <div style='display:flex;justify-content:space-between;margin-bottom:13px;'><span>Loan to Deposit Ratio</span><b style='color:{RED}'>{ltd*100:.0f}%</b></div>
+              <div style='display:flex;justify-content:space-between;margin-bottom:13px;'><span>NSFR</span><b style='color:{GREEN}'>118%</b></div>
               <div style='display:flex;justify-content:space-between;'><span>LCR</span><b style='color:{GREEN}'>142%</b></div>
             </div>
             """,
@@ -625,30 +666,34 @@ def render_executive_dashboard():
         with st.container(border=True):
             st.plotly_chart(maturity_fig(maturity), use_container_width=True, config={"displayModeBar": False}, key="exec_maturity_v084")
 
-    c3, c4 = st.columns([1.35, 1], gap="large")
+    c3, c4 = st.columns([1.38, 1], gap="large")
     with c3:
         with st.container(border=True):
-            st.plotly_chart(combo_capital_fig(relationships, roe_floor), use_container_width=True, config={"displayModeBar": False}, key="exec_capital_combo_v084")
+            st.plotly_chart(combo_capital_fig(relationships, roe_floor), use_container_width=True, config={"displayModeBar": False}, key="exec_capital_combo_v086")
     with c4:
         st.markdown(roe_heatmap(country, roe_floor), unsafe_allow_html=True)
-        st.markdown(
-            """
-            <div style='height:14px'></div>
-            <div class='insight-box'>
-              <b>Key Insights</b><br><br>
-              • Hong Kong is the largest revenue and exposure contributor at <b>$315.8M</b> revenue and <b>$25.1B</b> exposure.<br>
-              • Portfolio RoE of <b>16.7%</b> is above the default <b>10%</b> RoE floor.<br>
-              • Korea is the second-largest revenue market with <b>$277.6M</b> revenue and <b>$20.6B</b> exposure.<br>
-              • CASA ratio at <b>49%</b> and LCR at <b>142%</b> indicate a strong funding and liquidity position.<br>
-              • Loan to Deposit Ratio of <b>52%</b> leaves balance sheet headroom for selective lending growth.<br>
-              • Time deposits and term balances represent a material rollover and repricing management opportunity.<br>
-              • Maturity ladder shows a well-distributed deposit base across short and medium buckets.<br>
-              • Focus areas: grow low-cost CASA, expand relationships in Australia and Singapore, and protect Hong Kong wallet share.<br>
-              • Use Relationship 360 to identify product gaps, deposit opportunities and IB wallet expansion.<br>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        tcol, icol = st.columns([0.86, 1.14], gap="large")
+        with tcol:
+            with st.container(border=True):
+                st.plotly_chart(tenor_breakdown_fig(dsc), use_container_width=True, config={"displayModeBar": False}, key="exec_tenor_v086")
+        with icol:
+            st.markdown(
+                """
+                <div class='insight-box' style='font-size:13.5px;line-height:1.55;padding:16px 18px;min-height:235px;'>
+                  <b style='font-size:16px;'>Key Insights</b><br><br>
+                  • Hong Kong is the largest revenue and exposure contributor at <b>$315.8M</b> revenue and <b>$25.1B</b> exposure.<br>
+                  • Portfolio RoE of <b>16.7%</b> is above the <b>10%</b> RoE floor in most country relationships.<br>
+                  • CASA ratio at <b>49%</b> indicates a solid low-cost deposit base.<br>
+                  • LCR at <b>142%</b> and NSFR at <b>118%</b> indicate strong short-term and structural funding resilience.<br>
+                  • Loan to Deposit Ratio of <b>52%</b> leaves balance sheet headroom for selective lending growth.<br>
+                  • Time deposits require active rollover and repricing management as rates change.<br>
+                  • Tenor view highlights facility duration concentration across <b>1–3Y</b> and <b>3–5Y</b> buckets.<br>
+                  • Use Relationship 360 to identify product gaps, treasury opportunities and IB wallet expansion.<br>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
 
 def render_revenue_exposure():
