@@ -886,7 +886,7 @@ def fmt_money_auto_m(v: float) -> str:
         return "-"
 
 
-def style_banking_table(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+def style_banking_table(df: pd.DataFrame):
     """Executive-readable formatting for banking tables."""
     fmt = {}
     for c in df.columns:
