@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.3a - Top bar sanitized
+# EC-AI Banking Engine v0.8.3b - Top bar sanitized
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.3a",
+    page_title="EC-AI Banking Engine v0.8.3b",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -47,23 +47,23 @@ st.markdown(
     section[data-testid="stSidebar"] .stRadio label {{ font-size: 13px !important; }}
     section[data-testid="stSidebar"] div[role="radiogroup"] label {{ background: rgba(255,255,255,0.06); border-radius: 8px; padding: 4px 8px; margin: 2px 0; }}
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {{ background: rgba(255,255,255,0.12); }}
-    .main .block-container {{ padding-top: 1.4rem; max-width: 1420px; }}
-    h1 {{ color: #061B33; font-size: 28px !important; font-weight: 800 !important; margin-bottom: 0.15rem !important; }}
-    h2 {{ color: #061B33; font-size: 22px !important; font-weight: 800 !important; margin-top: 1.2rem !important; }}
-    h3 {{ color: #061B33; font-size: 16px !important; font-weight: 800 !important; }}
-    .subtitle {{ color:#526173; font-size:13px; margin-bottom: 12px; }}
+    .main .block-container {{ padding-top: 1.4rem; max-width: 1580px; }}
+    h1 {{ color: #061B33; font-size: 34px !important; font-weight: 800 !important; margin-bottom: 0.15rem !important; }}
+    h2 {{ color: #061B33; font-size: 28px !important; font-weight: 800 !important; margin-top: 1.2rem !important; }}
+    h3 {{ color: #061B33; font-size: 19px !important; font-weight: 800 !important; }}
+    .subtitle {{ color:#526173; font-size:15px; margin-bottom: 18px; }}
     .top-filter {{ background:white; border:1px solid {BORDER}; border-radius:14px; padding:18px 22px; margin-bottom:20px; box-shadow:0 1px 2px rgba(10,35,66,.03); display:flex; align-items:center; gap:34px; flex-wrap:wrap; }}
     .filter-item {{ display:flex; align-items:baseline; gap:12px; }}
-    .filter-label {{ font-size:12px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.05em; }}
-    .filter-value {{ font-size:16px; color:#061B33; font-weight:700; }}
-    .metric-card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:18px 18px 14px 18px; min-height:105px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
-    .metric-label {{ font-size:11px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.04em; }}
-    .metric-value {{ color:#061B33; font-size:25px; font-weight:800; margin-top:10px; }}
-    .metric-note {{ color:{GREEN}; font-size:12px; font-weight:700; margin-top:8px; }}
-    .card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:14px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
-    .small-card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:14px; min-height:180px; }}
+    .filter-label {{ font-size:13px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.05em; }}
+    .filter-value {{ font-size:18px; color:#061B33; font-weight:700; }}
+    .metric-card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:22px 20px 18px 20px; min-height:128px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
+    .metric-label {{ font-size:12px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.04em; }}
+    .metric-value {{ color:#061B33; font-size:31px; font-weight:800; margin-top:10px; }}
+    .metric-note {{ color:{GREEN}; font-size:14px; font-weight:700; margin-top:8px; }}
+    .card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:18px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
+    .small-card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:20px; min-height:220px; font-size:16px; }}
     .section-gap {{ height: 8px; }}
-    .insight-box {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:14px 18px; font-size:13px; color:#061B33; }}
+    .insight-box {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:18px 22px; font-size:15px; color:#061B33; }}
     .sidebar-brand {{ font-size:30px; font-weight:800; margin-top:10px; }}
     .sidebar-sub {{ font-size:14px; font-weight:700; opacity:.95; }}
     .sidebar-ver {{ font-size:12px; opacity:.85; margin-bottom:28px; }}
@@ -340,18 +340,18 @@ def read_uploaded_excel(file) -> Dict[str, pd.DataFrame]:
 # -----------------------------
 # Chart helpers
 # -----------------------------
-def chart_layout(fig: go.Figure, height: int = 260, show_legend: bool = False) -> go.Figure:
+def chart_layout(fig: go.Figure, height: int = 310, show_legend: bool = False) -> go.Figure:
     fig.update_layout(
         template="plotly_white",
         height=height,
         margin=dict(l=42, r=24, t=32, b=42),
         paper_bgcolor="white",
         plot_bgcolor="white",
-        font=dict(family="Inter, Arial", size=11, color=NAVY),
+        font=dict(family="Inter, Arial", size=13, color=NAVY),
         showlegend=show_legend,
     )
-    fig.update_xaxes(showgrid=False, showline=False, zeroline=False, tickfont=dict(size=10, color=NAVY))
-    fig.update_yaxes(showgrid=False, showline=False, zeroline=False, tickfont=dict(size=10, color="#50627A"))
+    fig.update_xaxes(showgrid=False, showline=False, zeroline=False, tickfont=dict(size=12, color=NAVY))
+    fig.update_yaxes(showgrid=False, showline=False, zeroline=False, tickfont=dict(size=12, color="#50627A"))
     return fig
 
 
@@ -363,10 +363,10 @@ def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", heigh
     fig.add_trace(go.Bar(
         x=d[x], y=d[y], marker_color=colors, width=width,
         text=[f"${v:.1f}{suffix}" for v in d[y]], textposition="outside",
-        textfont=dict(size=10, color=NAVY),
+        textfont=dict(size=12, color=NAVY),
         hovertemplate=f"%{{x}}<br>%{{y:.1f}} {suffix}<extra></extra>",
     ))
-    fig.update_layout(title=dict(text=title, x=0.0, font=dict(size=14, color=NAVY)))
+    fig.update_layout(title=dict(text=title, x=0.0, font=dict(size=16, color=NAVY)))
     fig = chart_layout(fig, height=height)
     fig.update_yaxes(title_text="USD billion" if unit == "B" else "USD million")
     return fig
@@ -387,8 +387,8 @@ def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
     ))
     fig.add_hline(y=roe_floor*100, line_dash="dot", line_color=AMBER, annotation_text="RoE floor", annotation_position="top left", secondary_y=False if False else None)
     fig.update_layout(
-        title=dict(text="Capital Efficiency: Exposure vs LTM Group RoE", x=0, font=dict(size=14, color=NAVY)),
-        template="plotly_white", height=330, margin=dict(l=45, r=55, t=44, b=88),
+        title=dict(text="Capital Efficiency: Exposure vs LTM Group RoE", x=0, font=dict(size=16, color=NAVY)),
+        template="plotly_white", height=390, margin=dict(l=45, r=55, t=44, b=88),
         paper_bgcolor="white", plot_bgcolor="white", font=dict(family="Inter, Arial", size=10, color=NAVY),
         legend=dict(orientation="h", y=1.08, x=0),
         yaxis=dict(title="Lending Exposure (USD b)", showgrid=False, zeroline=False),
@@ -413,7 +413,7 @@ def roe_heatmap(country: pd.DataFrame, roe_floor: float) -> str:
         else:
             bg = "#D9DEE5"
             color = NAVY
-        cells.append(f"<div style='background:{bg};color:{color};padding:20px 10px;text-align:center;border-right:1px solid white;min-height:78px;'><div style='font-size:13px'>{r['Country']}</div><div style='font-size:20px;font-weight:800;margin-top:8px'>{val*100:.1f}%</div></div>")
+        cells.append(f"<div style='background:{bg};color:{color};padding:26px 12px;text-align:center;border-right:1px solid white;min-height:96px;'><div style='font-size:15px'>{r['Country']}</div><div style='font-size:24px;font-weight:800;margin-top:8px'>{val*100:.1f}%</div></div>")
     return f"""
     <div class='card'>
       <div style='font-weight:800;color:{NAVY};font-size:14px;margin-bottom:12px;'>LTM Group RoE Heatmap by Country</div>
@@ -433,11 +433,11 @@ def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
     )])
     total = d["Deposit_Balance"].sum()
     fig.update_layout(
-        annotations=[dict(text=f"${total:.1f}B<br><span style='font-size:11px'>Total</span>", x=0.5, y=0.5, showarrow=False, font=dict(size=16, color=NAVY, family="Inter"))],
-        legend=dict(x=0.78, y=0.55, font=dict(size=11)),
-        title=dict(text="Deposits by Type (USD b)", x=0.0, font=dict(size=14, color=NAVY)),
+        annotations=[dict(text=f"${total:.1f}B<br><span style='font-size:11px'>Total</span>", x=0.5, y=0.5, showarrow=False, font=dict(size=20, color=NAVY, family="Inter"))],
+        legend=dict(x=0.78, y=0.55, font=dict(size=13)),
+        title=dict(text="Deposits by Type (USD b)", x=0.0, font=dict(size=16, color=NAVY)),
     )
-    return chart_layout(fig, height=260, show_legend=True)
+    return chart_layout(fig, height=310, show_legend=True)
 
 
 def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
@@ -446,10 +446,10 @@ def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
         x=d["Deposit_Balance"], y=d["Maturity_Bucket"], orientation="h",
         marker_color=["#8BB2E8", "#6D9BD6", "#4B7FC1", "#386BAB", "#28578F", NAVY],
         text=[f"{v:.1f}" for v in d["Deposit_Balance"]], textposition="outside",
-        textfont=dict(size=10, color=NAVY), width=0.45,
+        textfont=dict(size=12, color=NAVY), width=0.45,
     ))
-    fig.update_layout(title=dict(text="Maturity Ladder (USD b)", x=0, font=dict(size=14, color=NAVY)))
-    fig = chart_layout(fig, height=260)
+    fig.update_layout(title=dict(text="Maturity Ladder (USD b)", x=0, font=dict(size=16, color=NAVY)))
+    fig = chart_layout(fig, height=310)
     fig.update_xaxes(title_text="USD billion")
     return fig
 
@@ -561,11 +561,11 @@ def render_executive_dashboard():
     c1, c2 = st.columns([1, 1], gap="large")
     with c1:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(bar_fig(country, "Country", "Total_Revenue", "Revenue by Country (USD)", unit="M", height=245, width=0.32), use_container_width=True, config={"displayModeBar": False}, key="exec_rev_country_v083")
+        st.plotly_chart(bar_fig(country, "Country", "Total_Revenue", "Revenue by Country (USD)", unit="M", height=310, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_rev_country_v083")
         st.markdown("</div>", unsafe_allow_html=True)
     with c2:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(bar_fig(country, "Country", "Lending_Drawn", "Exposure by Country (USD)", unit="B", height=245, width=0.32), use_container_width=True, config={"displayModeBar": False}, key="exec_exp_country_v083")
+        st.plotly_chart(bar_fig(country, "Country", "Lending_Drawn", "Exposure by Country (USD)", unit="B", height=310, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_exp_country_v083")
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<h2>Deposit Intelligence</h2>", unsafe_allow_html=True)
@@ -573,7 +573,7 @@ def render_executive_dashboard():
     d1, d2, d3, d4 = st.columns([1.05, 1.05, 0.92, 1.1], gap="large")
     with d1:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=240, width=0.32), use_container_width=True, config={"displayModeBar": False}, key="exec_dep_country_v083")
+        st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=300, width=0.38), use_container_width=True, config={"displayModeBar": False}, key="exec_dep_country_v083")
         st.markdown("</div>", unsafe_allow_html=True)
     with d2:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -627,9 +627,9 @@ def render_revenue_exposure():
     st.markdown("<div class='subtitle'>Historical portfolio revenue, exposure and product penetration view.</div>", unsafe_allow_html=True)
     c1, c2 = st.columns(2, gap="large")
     with c1:
-        st.plotly_chart(bar_fig(product, "Product_Type", "Revenue", "Revenue by Product Type", unit="M", height=330, width=0.26), use_container_width=True, key="rev_product_v083")
+        st.plotly_chart(bar_fig(product, "Product_Type", "Revenue", "Revenue by Product Type", unit="M", height=390, width=0.32), use_container_width=True, key="rev_product_v083")
     with c2:
-        st.plotly_chart(bar_fig(product, "Product_Type", "Exposure", "Exposure by Product Type", unit="B", height=330, width=0.26), use_container_width=True, key="exp_product_v083")
+        st.plotly_chart(bar_fig(product, "Product_Type", "Exposure", "Exposure by Product Type", unit="B", height=390, width=0.32), use_container_width=True, key="exp_product_v083")
     st.markdown("<h2>Top Relationship Table</h2>", unsafe_allow_html=True)
     cols = ["Relationship_Name", "Country", "Sector", "Client_Tier", "Total_Revenue", "Lending_Drawn", "Facility_Limit", "Deposit_Balance", "LTM_Group_RoE"]
     st.dataframe(relationships[cols].sort_values("Total_Revenue", ascending=False), use_container_width=True, hide_index=True)
@@ -652,7 +652,7 @@ def render_deposit_intelligence():
     st.markdown("<div class='subtitle'>Deposit franchise, operational balance and treasury opportunity view.</div>", unsafe_allow_html=True)
     c1, c2 = st.columns(2, gap="large")
     with c1:
-        st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=300, width=0.30), use_container_width=True, key="dep_country_full_v083")
+        st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=300, width=0.36), use_container_width=True, key="dep_country_full_v083")
     with c2:
         st.plotly_chart(donut_deposit(deposit), use_container_width=True, key="dep_type_donut_full_v083")
     c3, c4 = st.columns([1, 1], gap="large")
@@ -674,7 +674,7 @@ def render_competitor_benchmarking():
     st.markdown("<div class='subtitle'>Prototype view of estimated wallet, current share and competitor lead bank by product family.</div>", unsafe_allow_html=True)
     comp = wallet.groupby("Lead_Competitor", as_index=False).agg(Estimated_Wallet=("Estimated_Wallet", "sum"), Current_Revenue=("Current_Revenue", "sum"), Wallet_Gap=("Wallet_Gap", "sum"))
     comp["Penetration"] = comp["Current_Revenue"] / comp["Estimated_Wallet"]
-    st.plotly_chart(bar_fig(comp, "Lead_Competitor", "Wallet_Gap", "Wallet Gap by Competitor Relationship", unit="M", height=340, width=0.30), use_container_width=True, key="competitor_gap_v083")
+    st.plotly_chart(bar_fig(comp, "Lead_Competitor", "Wallet_Gap", "Wallet Gap by Competitor Relationship", unit="M", height=340, width=0.36), use_container_width=True, key="competitor_gap_v083")
     st.dataframe(comp.sort_values("Wallet_Gap", ascending=False), use_container_width=True, hide_index=True)
 
 
@@ -707,9 +707,9 @@ def render_wallet_intelligence():
     w["Penetration"] = w["Current_Revenue"] / w["Estimated_Wallet"]
     c1, c2 = st.columns(2, gap="large")
     with c1:
-        st.plotly_chart(bar_fig(w, "Product_Family", "Estimated_Wallet", "Estimated Wallet by Product", unit="M", height=330, width=0.26), use_container_width=True, key="wallet_est_v083")
+        st.plotly_chart(bar_fig(w, "Product_Family", "Estimated_Wallet", "Estimated Wallet by Product", unit="M", height=390, width=0.32), use_container_width=True, key="wallet_est_v083")
     with c2:
-        st.plotly_chart(bar_fig(w, "Product_Family", "Wallet_Gap", "Wallet Gap by Product", unit="M", height=330, width=0.26), use_container_width=True, key="wallet_gap_v083")
+        st.plotly_chart(bar_fig(w, "Product_Family", "Wallet_Gap", "Wallet Gap by Product", unit="M", height=390, width=0.32), use_container_width=True, key="wallet_gap_v083")
     st.dataframe(w.sort_values("Wallet_Gap", ascending=False), use_container_width=True, hide_index=True)
 
 
@@ -719,9 +719,9 @@ def render_product_penetration():
     prod = product.copy()
     c1, c2 = st.columns(2, gap="large")
     with c1:
-        st.plotly_chart(bar_fig(prod, "Product_Type", "Revenue", "Product Revenue", unit="M", height=350, width=0.24), use_container_width=True, key="prod_rev_v083")
+        st.plotly_chart(bar_fig(prod, "Product_Type", "Revenue", "Product Revenue", unit="M", height=350, width=0.30), use_container_width=True, key="prod_rev_v083")
     with c2:
-        st.plotly_chart(bar_fig(prod, "Product_Type", "Exposure", "Product Exposure", unit="B", height=350, width=0.24), use_container_width=True, key="prod_exp_v083")
+        st.plotly_chart(bar_fig(prod, "Product_Type", "Exposure", "Product Exposure", unit="B", height=350, width=0.30), use_container_width=True, key="prod_exp_v083")
     st.dataframe(prod.sort_values("Revenue", ascending=False), use_container_width=True, hide_index=True)
 
 
@@ -744,15 +744,15 @@ def render_deal_screening():
         st.plotly_chart(bar_fig(by_month, "Month", "Facility_Limit_M", "Approved Amount by Month", unit="M", height=300, width=0.28), use_container_width=True, key="dsc_month_v083")
     with c6:
         by_country = d.groupby("Country", as_index=False).agg(Expected_Draw_B=("Expected_Draw_B","sum"), Tx_RoE=("Tx_RoE","mean"), NIM_bps=("NIM_bps","mean"), DSC_Quality_Index=("DSC_Quality_Index","mean"))
-        st.plotly_chart(bar_fig(by_country, "Country", "Expected_Draw_B", "Expected Draw by Country", unit="B", height=300, width=0.30), use_container_width=True, key="dsc_country_v083")
+        st.plotly_chart(bar_fig(by_country, "Country", "Expected_Draw_B", "Expected Draw by Country", unit="B", height=300, width=0.36), use_container_width=True, key="dsc_country_v083")
 
     c7, c8 = st.columns(2, gap="large")
     with c7:
         bucket = d.groupby("NIM_Bucket", observed=True, as_index=False).agg(Facility_Limit_M=("Facility_Limit_M", "sum"), Deals=("DS_ID", "count"))
-        st.plotly_chart(bar_fig(bucket, "NIM_Bucket", "Facility_Limit_M", "NIM Bucket by Facility Limit", unit="M", height=300, width=0.30), use_container_width=True, key="dsc_nim_bucket_v083")
+        st.plotly_chart(bar_fig(bucket, "NIM_Bucket", "Facility_Limit_M", "NIM Bucket by Facility Limit", unit="M", height=300, width=0.36), use_container_width=True, key="dsc_nim_bucket_v083")
     with c8:
         qual = d.groupby("Country", as_index=False).agg(DSC_Quality_Index=("DSC_Quality_Index", "mean"))
-        st.plotly_chart(bar_fig(qual, "Country", "DSC_Quality_Index", "DSC Quality Index by Country", unit="M", height=300, width=0.30), use_container_width=True, key="dsc_quality_v083")
+        st.plotly_chart(bar_fig(qual, "Country", "DSC_Quality_Index", "DSC Quality Index by Country", unit="M", height=300, width=0.36), use_container_width=True, key="dsc_quality_v083")
 
     st.markdown("<h2>Deal List</h2>", unsafe_allow_html=True)
     st.dataframe(d.sort_values("Facility_Limit_M", ascending=False), use_container_width=True, hide_index=True)
@@ -812,4 +812,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.3 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.3b · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
