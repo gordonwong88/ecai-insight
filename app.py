@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.3
+# EC-AI Banking Engine v0.8.3a - Top bar sanitized
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.3",
+    page_title="EC-AI Banking Engine v0.8.3a",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -52,9 +52,10 @@ st.markdown(
     h2 {{ color: #061B33; font-size: 22px !important; font-weight: 800 !important; margin-top: 1.2rem !important; }}
     h3 {{ color: #061B33; font-size: 16px !important; font-weight: 800 !important; }}
     .subtitle {{ color:#526173; font-size:13px; margin-bottom: 12px; }}
-    .top-filter {{ background:white; border:1px solid {BORDER}; border-radius:14px; padding:14px 18px; margin-bottom:18px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
-    .filter-label {{ font-size:10px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.04em; }}
-    .filter-value {{ font-size:14px; color:#061B33; margin-left:10px; font-weight:600; }}
+    .top-filter {{ background:white; border:1px solid {BORDER}; border-radius:14px; padding:18px 22px; margin-bottom:20px; box-shadow:0 1px 2px rgba(10,35,66,.03); display:flex; align-items:center; gap:34px; flex-wrap:wrap; }}
+    .filter-item {{ display:flex; align-items:baseline; gap:12px; }}
+    .filter-label {{ font-size:12px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.05em; }}
+    .filter-value {{ font-size:16px; color:#061B33; font-weight:700; }}
     .metric-card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:18px 18px 14px 18px; min-height:105px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
     .metric-label {{ font-size:11px; font-weight:800; color:#526173; text-transform:uppercase; letter-spacing:.04em; }}
     .metric-value {{ color:#061B33; font-size:25px; font-weight:800; margin-top:10px; }}
@@ -467,13 +468,10 @@ def top_filter_bar() -> None:
     st.markdown(
         """
         <div class='top-filter'>
-          <span class='filter-label'>Business Unit</span><span class='filter-value'>GCIB</span>
-          <span style='display:inline-block;width:28px'></span>
-          <span class='filter-label'>Country Cluster</span><span class='filter-value'>Asia</span>
-          <span style='display:inline-block;width:28px'></span>
-          <span class='filter-label'>Currency</span><span class='filter-value'>USD</span>
-          <span style='display:inline-block;width:28px'></span>
-          <span class='filter-label'>Time Period</span><span class='filter-value'>LTM / Demo</span>
+          <div class='filter-item'><span class='filter-label'>Portfolio</span><span class='filter-value'>Corporate Banking</span></div>
+          <div class='filter-item'><span class='filter-label'>Region</span><span class='filter-value'>Asia Demo</span></div>
+          <div class='filter-item'><span class='filter-label'>Currency</span><span class='filter-value'>USD</span></div>
+          <div class='filter-item'><span class='filter-label'>Period</span><span class='filter-value'>LTM / Demo</span></div>
         </div>
         """,
         unsafe_allow_html=True,
