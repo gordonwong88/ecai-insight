@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.4 - Clean canvas layout
+# EC-AI Banking Engine v0.8.5 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.4",
+    page_title="EC-AI Banking Engine v0.8.5",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -63,7 +63,8 @@ st.markdown(
     .card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:18px; box-shadow:0 1px 2px rgba(10,35,66,.03); }}
     .small-card {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:20px; min-height:220px; font-size:16px; }}
     .section-gap {{ height: 8px; }}
-    .insight-box {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:18px 22px; font-size:15px; color:#061B33; }}
+    .insight-box {{ background:white; border:1px solid {BORDER}; border-radius:12px; padding:20px 24px; font-size:16px; line-height:1.62; color:#061B33; }}
+    .insight-box b {{ font-size:17px; }}
     .sidebar-brand {{ font-size:30px; font-weight:800; margin-top:10px; }}
     .sidebar-sub {{ font-size:14px; font-weight:700; opacity:.95; }}
     .sidebar-ver {{ font-size:12px; opacity:.85; margin-bottom:28px; }}
@@ -375,33 +376,53 @@ def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", heigh
 
 def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
     d = rel.sort_values("Lending_Drawn", ascending=False).head(14).copy()
+
+    def short_name(name: str) -> str:
+        words = str(name).replace(" Holdings", "").replace(" Group", "").replace(" Ltd", "").split()
+        if len(words) <= 2:
+            return "<br>".join(words)
+        return "<br>".join(words[:2])
+
+    d["Short_Name"] = d["Relationship_Name"].map(short_name)
+    x = d["Short_Name"]
+
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=d["Relationship_Name"], y=d["Lending_Drawn"], name="Lending Exposure",
-        marker_color=NAVY, width=0.38,
+        x=x, y=d["Lending_Drawn"], name="Lending Exposure (USD b)",
+        marker_color=NAVY, width=0.34,
         text=[f"${v:.1f}B" for v in d["Lending_Drawn"]], textposition="outside",
-        textfont=dict(size=9, color=NAVY), yaxis="y1",
+        textfont=dict(size=11, color=NAVY), yaxis="y1",
+        hovertemplate="%{customdata}<br>Lending Exposure: $%{y:.1f}B<extra></extra>",
+        customdata=d["Relationship_Name"],
     ))
     fig.add_trace(go.Scatter(
-        x=d["Relationship_Name"], y=d["LTM_Group_RoE"]*100, name="LTM Group RoE %",
-        mode="lines+markers", marker=dict(size=6, color=BLUE), line=dict(width=2.2, color=BLUE), yaxis="y2",
+        x=x, y=d["LTM_Group_RoE"]*100, name="LTM Group RoE (%)",
+        mode="lines+markers", marker=dict(size=7, color=BLUE), line=dict(width=2.6, color=BLUE), yaxis="y2",
+        hovertemplate="%{customdata}<br>RoE: %{y:.1f}%<extra></extra>",
+        customdata=d["Relationship_Name"],
     ))
-    fig.add_hline(y=roe_floor*100, line_dash="dot", line_color=AMBER, annotation_text="RoE floor", annotation_position="top left", secondary_y=False if False else None)
+    # RoE floor is plotted against the secondary RoE axis, not the lending exposure axis.
+    fig.add_trace(go.Scatter(
+        x=x, y=[roe_floor*100] * len(d), name=f"RoE Floor ({roe_floor*100:.0f}%)",
+        mode="lines", line=dict(color=AMBER, width=2, dash="dot"), yaxis="y2",
+        hoverinfo="skip",
+    ))
     fig.update_layout(
-        title=dict(text="Capital Efficiency: Exposure vs LTM Group RoE", x=0, font=dict(size=16, color=NAVY)),
-        template="plotly_white", height=390, margin=dict(l=45, r=55, t=44, b=88),
-        paper_bgcolor="white", plot_bgcolor="white", font=dict(family="Inter, Arial", size=10, color=NAVY),
-        legend=dict(orientation="h", y=1.08, x=0),
-        yaxis=dict(title="Lending Exposure (USD b)", showgrid=False, zeroline=False),
-        yaxis2=dict(title="RoE %", overlaying="y", side="right", showgrid=False, zeroline=False, range=[10, 22]),
-        xaxis=dict(tickangle=0, tickfont=dict(size=8), showgrid=False),
+        title=dict(text="Capital Efficiency: Exposure vs LTM Group RoE", x=0, font=dict(size=17, color=NAVY)),
+        template="plotly_white", height=455, margin=dict(l=58, r=62, t=62, b=118),
+        paper_bgcolor="white", plot_bgcolor="white", font=dict(family="Inter, Arial", size=13, color=NAVY),
+        legend=dict(orientation="h", y=1.10, x=0.0, font=dict(size=13)),
+        yaxis=dict(title="Lending Exposure (USD b)", showgrid=False, zeroline=False, range=[0, max(12, float(d["Lending_Drawn"].max())*1.28)], titlefont=dict(size=13), tickfont=dict(size=12)),
+        yaxis2=dict(title="RoE %", overlaying="y", side="right", showgrid=False, zeroline=False, range=[10, 24], titlefont=dict(size=13), tickfont=dict(size=12)),
+        xaxis=dict(tickangle=0, tickfont=dict(size=10), showgrid=False, automargin=True),
+        hovermode="x unified",
     )
     return fig
 
 
 def roe_heatmap(country: pd.DataFrame, roe_floor: float) -> str:
     d = country.sort_values("LTM_Group_RoE", ascending=False).copy()
-    min_r = min(0.12, float(d["LTM_Group_RoE"].min()))
+    min_r = min(0.10, float(d["LTM_Group_RoE"].min()))
     max_r = max(0.22, float(d["LTM_Group_RoE"].max()))
     cells = []
     for _, r in d.iterrows():
@@ -418,7 +439,7 @@ def roe_heatmap(country: pd.DataFrame, roe_floor: float) -> str:
     return f"""
     <div class='card'>
       <div style='font-weight:800;color:{NAVY};font-size:14px;margin-bottom:12px;'>LTM Group RoE Heatmap by Country</div>
-      <div style='display:flex;align-items:center;gap:10px;margin-bottom:8px;color:{NAVY};font-size:12px;'><span>12%</span><div style='height:10px;background:linear-gradient(90deg,#D9DEE5,{BLUE},{NAVY});border-radius:8px;flex:1;max-width:300px;'></div><span>22%</span></div>
+      <div style='display:flex;align-items:center;gap:10px;margin-bottom:8px;color:{NAVY};font-size:12px;'><span>10%</span><div style='height:10px;background:linear-gradient(90deg,#D9DEE5,{BLUE},{NAVY});border-radius:8px;flex:1;max-width:300px;'></div><span>22%</span></div>
       <div style='display:grid;grid-template-columns:repeat({len(cells)},1fr);border-radius:8px;overflow:hidden;border:1px solid {BORDER};'>{''.join(cells)}</div>
     </div>
     """
@@ -430,14 +451,21 @@ def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
         labels=d["Deposit_Type"], values=d["Deposit_Balance"], hole=0.58,
         marker=dict(colors=[NAVY, BLUE, SLATE, "#CBD3DA"]),
         textinfo="none",
+        domain=dict(x=[0.02, 0.64], y=[0.08, 0.96]),
         hovertemplate="%{label}<br>$%{value:.1f}B (%{percent})<extra></extra>",
     )])
     total = d["Deposit_Balance"].sum()
     fig.update_layout(
-        annotations=[dict(text=f"${total:.1f}B<br><span style='font-size:11px'>Total</span>", x=0.5, y=0.5, showarrow=False, font=dict(size=20, color=NAVY, family="Inter"))],
+        annotations=[dict(text=f"${total:.1f}B<br><span style='font-size:12px'>Total</span>", x=0.33, y=0.52, showarrow=False, font=dict(size=20, color=NAVY, family="Inter"))],
+        legend=dict(
+            x=0.75, y=0.15, xanchor="left", yanchor="bottom",
+            orientation="v", font=dict(size=13, color=NAVY),
+            bgcolor="rgba(255,255,255,0)", borderwidth=0,
+            itemsizing="constant"
+        ),
         title=dict(text="Deposits by Type (USD b)", x=0.0, font=dict(size=16, color=NAVY)),
     )
-    return chart_layout(fig, height=310, show_legend=False)
+    return chart_layout(fig, height=310, show_legend=True)
 
 
 def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
@@ -493,7 +521,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.4</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.5 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -514,8 +542,9 @@ with st.sidebar:
         uploaded = st.file_uploader("Upload Excel", type=["xlsx"], key="upload_v083")
 
     st.markdown("<div class='sidebar-section'>THRESHOLD SETTINGS</div>", unsafe_allow_html=True)
-    roe_floor = st.slider("RoE floor", 0.10, 0.25, 0.18, 0.005, key="roe_floor_v083")
-    margin_floor = st.slider("Pricing floor (bps)", 20, 120, 50, 5, key="margin_floor_v083")
+    roe_floor_pct = st.slider("RoE floor (%)", 10, 30, 10, 1, key="roe_floor_v085_pct")
+    roe_floor = roe_floor_pct / 100
+    margin_floor = st.slider("Pricing floor (bps)", 20, 120, 50, 5, key="margin_floor_v085")
     st.caption("Demo thresholds only — configure for each institution / pilot.")
 
 # Load data
@@ -607,9 +636,15 @@ def render_executive_dashboard():
             <div style='height:14px'></div>
             <div class='insight-box'>
               <b>Key Insights</b><br><br>
-              • Hong Kong is the largest revenue contributor at <b>$315.8M</b>.<br>
-              • RoE floor is set at <b>18%</b> for demo purposes.<br>
-              • Use Relationship 360 to identify product gaps, deposit opportunities and IB wallet expansion.
+              • Hong Kong is the largest revenue and exposure contributor at <b>$315.8M</b> revenue and <b>$25.1B</b> exposure.<br>
+              • Portfolio RoE of <b>16.7%</b> is above the default <b>10%</b> RoE floor.<br>
+              • Korea is the second-largest revenue market with <b>$277.6M</b> revenue and <b>$20.6B</b> exposure.<br>
+              • CASA ratio at <b>49%</b> and LCR at <b>142%</b> indicate a strong funding and liquidity position.<br>
+              • Loan to Deposit Ratio of <b>52%</b> leaves balance sheet headroom for selective lending growth.<br>
+              • Time deposits and term balances represent a material rollover and repricing management opportunity.<br>
+              • Maturity ladder shows a well-distributed deposit base across short and medium buckets.<br>
+              • Focus areas: grow low-cost CASA, expand relationships in Australia and Singapore, and protect Hong Kong wallet share.<br>
+              • Use Relationship 360 to identify product gaps, deposit opportunities and IB wallet expansion.<br>
             </div>
             """,
             unsafe_allow_html=True,
