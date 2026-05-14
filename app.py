@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.6 - Readable dashboard with sidebar thresholds
+# EC-AI Banking Engine v0.8.7 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.6",
+    page_title="EC-AI Banking Engine v0.8.7",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -560,7 +560,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.6 Demo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.7 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -860,6 +860,299 @@ def render_ai_banker_commentary():
     st.markdown("<h2>Top Product Gap Angles</h2>", unsafe_allow_html=True)
     st.dataframe(gap[["Product_Family", "Estimated_Wallet", "Current_Revenue", "Wallet_Gap", "Wallet_Penetration", "Lead_Competitor"]], use_container_width=True, hide_index=True)
 
+
+
+# =============================================================
+# v0.8.7 STRATEGY UPGRADE LAYER
+# Stronger executive strategy, RM action engine, cleaner DSC,
+# richer wallet / product interpretation, and banker-grade tables.
+# =============================================================
+
+def fmt_bps(x: float, digits: int = 0) -> str:
+    try:
+        return f"{float(x):,.{digits}f}"
+    except Exception:
+        return "-"
+
+
+def fmt_money_auto_m(v: float) -> str:
+    """Input in USD million, display as M/B depending size."""
+    try:
+        v = float(v)
+        if abs(v) >= 1000:
+            return f"${v/1000:.1f}B"
+        return f"${v:.1f}M"
+    except Exception:
+        return "-"
+
+
+def style_banking_table(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    """Executive-readable formatting for banking tables."""
+    fmt = {}
+    for c in df.columns:
+        lc = c.lower()
+        if "roe" in lc or "penetration" in lc or "share" in lc or "utilization" in lc:
+            fmt[c] = "{:.1%}"
+        elif "bps" in lc or c in ["LP", "EL", "NIM", "Spread"]:
+            fmt[c] = "{:.0f}"
+        elif any(k in lc for k in ["wallet", "revenue", "facility", "limit", "amount"]):
+            fmt[c] = "{:,.1f}"
+        elif any(k in lc for k in ["drawn", "exposure", "deposit", "rwa"]):
+            fmt[c] = "{:,.1f}"
+    return df.style.format(fmt)
+
+
+def strategic_callout(title: str, bullets: List[str], tone: str = "blue") -> None:
+    accent = {"blue": BLUE, "green": GREEN, "amber": AMBER, "red": RED}.get(tone, BLUE)
+    bullet_html = "".join([f"<li>{b}</li>" for b in bullets])
+    st.markdown(
+        f"""
+        <div class='insight-box' style='border-left:6px solid {accent}; padding:18px 22px; margin: 4px 0 18px 0;'>
+          <b>{title}</b>
+          <ul style='margin-top:10px; padding-left:20px;'>{bullet_html}</ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.34) -> go.Figure:
+    """v0.8.7 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
+    d = df.sort_values(y, ascending=False).copy()
+    colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
+    suffix = "B" if unit == "B" else "M"
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=d[x], y=d[y], marker_color=colors, width=width,
+        text=[f"${v:.1f}{suffix}" if unit in ["M", "B"] else f"{v:.1f}" for v in d[y]],
+        textposition="outside",
+        cliponaxis=False,
+        textfont=dict(size=13, color=NAVY),
+        hovertemplate=f"%{{x}}<br>%{{y:.1f}} {suffix}<extra></extra>",
+    ))
+    fig.update_layout(title=dict(text=title, x=0.0, font=dict(size=16, color=NAVY)))
+    fig = chart_layout(fig, height=height)
+    fig.update_xaxes(tickangle=0, automargin=True, tickfont=dict(size=11, color=NAVY))
+    fig.update_yaxes(title_text="USD billion" if unit == "B" else "USD million")
+    return fig
+
+
+def wallet_strategy_summary(w: pd.DataFrame) -> List[str]:
+    d = w.sort_values("Wallet_Gap", ascending=False).copy()
+    top = d.iloc[0]
+    low_pen = d.sort_values("Penetration", ascending=True).iloc[0]
+    comp = d.groupby("Lead_Competitor", as_index=False)["Wallet_Gap"].sum().sort_values("Wallet_Gap", ascending=False).head(1)
+    comp_txt = comp.iloc[0]["Lead_Competitor"] if len(comp) else "key competitors"
+    return [
+        f"Largest monetisation gap sits in <b>{top['Product_Family']}</b> with estimated untapped wallet of <b>${top['Wallet_Gap']:.1f}M</b>.",
+        f"Lowest penetration is <b>{low_pen['Product_Family']}</b> at <b>{low_pen['Penetration']*100:.1f}%</b>; this is the clearest under-served product angle.",
+        f"Competitor-led leakage is visible around <b>{comp_txt}</b>; RM strategy should position a relationship-level solution, not a single-product pitch.",
+        "Recommended play: lead with client treasury / funding need, then attach capital markets and transaction banking as a packaged relationship solution.",
+    ]
+
+
+def render_wallet_intelligence():
+    st.markdown("<h1>Wallet Intelligence</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Identify where the bank is under-penetrated versus estimated client wallet potential across lending, transaction banking, markets and investment banking products.</div>", unsafe_allow_html=True)
+    w = wallet.groupby("Product_Family", as_index=False).agg(
+        Estimated_Wallet=("Estimated_Wallet", "sum"),
+        Current_Revenue=("Current_Revenue", "sum"),
+        Wallet_Gap=("Wallet_Gap", "sum"),
+    )
+    w["Penetration"] = w["Current_Revenue"] / w["Estimated_Wallet"]
+    # Add competitor leakage by product for strategic reading.
+    lead_comp = wallet.sort_values("Wallet_Gap", ascending=False).groupby("Product_Family").head(1)[["Product_Family", "Lead_Competitor"]]
+    w = w.merge(lead_comp, on="Product_Family", how="left")
+
+    strategic_callout("Executive interpretation", wallet_strategy_summary(w), "blue")
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.plotly_chart(bar_fig(w, "Product_Family", "Estimated_Wallet", "Estimated Wallet by Product", unit="M", height=410, width=0.30), use_container_width=True, key="wallet_est_v087")
+    with c2:
+        st.plotly_chart(bar_fig(w, "Product_Family", "Wallet_Gap", "Wallet Gap by Product", unit="M", height=410, width=0.30), use_container_width=True, key="wallet_gap_v087")
+    strategic_callout("How to use this tab", [
+        "Large wallet gap = revenue opportunity; high penetration = existing franchise strength.",
+        "Low penetration in Transaction Banking / Markets usually points to treasury operating model, FX risk or cash management opportunity.",
+        "Competitor-led products identify where rival banks are controlling the relationship conversation.",
+    ], "green")
+    st.dataframe(style_banking_table(w.sort_values("Wallet_Gap", ascending=False)), use_container_width=True, hide_index=True)
+
+
+def render_product_penetration():
+    st.markdown("<h1>Product Penetration</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Revenue and exposure across product hierarchy: lending, transaction banking, markets and investment banking products.</div>", unsafe_allow_html=True)
+    prod = product.copy()
+    total_rev = float(prod["Revenue"].sum())
+    total_exp = float(prod["Exposure"].sum())
+    prod["Revenue_Share"] = prod["Revenue"] / total_rev
+    prod["Exposure_Share"] = prod["Exposure"] / total_exp
+    prod["Revenue_per_Exposure"] = prod["Revenue"] / prod["Exposure"].replace(0, np.nan)
+    best = prod.sort_values("Revenue_per_Exposure", ascending=False).iloc[0]
+    largest = prod.sort_values("Revenue", ascending=False).iloc[0]
+    balance = prod.sort_values("Exposure", ascending=False).iloc[0]
+    strategic_callout("Product strategy readout", [
+        f"<b>{largest['Product_Type']}</b> is the largest revenue contributor at <b>${largest['Revenue']:.1f}M</b>.",
+        f"<b>{balance['Product_Type']}</b> consumes the most balance sheet with <b>${balance['Exposure']:.1f}B</b> exposure.",
+        f"Best revenue intensity is <b>{best['Product_Type']}</b>; use this to identify fee / spread-efficient products to scale.",
+        "RM action: protect balance-sheet products, but attach fee products such as Markets, DCM, Cash Management and Investment Banking to improve relationship RoE.",
+    ], "blue")
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.plotly_chart(bar_fig(prod, "Product_Type", "Revenue", "Product Revenue", unit="M", height=390, width=0.26), use_container_width=True, key="prod_rev_v087")
+    with c2:
+        st.plotly_chart(bar_fig(prod, "Product_Type", "Exposure", "Product Exposure", unit="B", height=390, width=0.26), use_container_width=True, key="prod_exp_v087")
+    st.dataframe(style_banking_table(prod.sort_values("Revenue", ascending=False)), use_container_width=True, hide_index=True)
+
+
+def render_deal_screening():
+    st.markdown("<h1>Deal Screening (DSC)</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Mini DSC dashboard: approved amount, Tx RoE, NIM, hurdle view and pricing quality.</div>", unsafe_allow_html=True)
+    d = dsc.copy()
+    d["Screen_Date"] = pd.to_datetime(d["Screen_Date"], errors="coerce")
+    d["Tx_RoE_Bucket"] = pd.cut(d["Tx_RoE"], bins=[0,0.10,0.15,0.20,1], labels=["0–10%", "10–15%", "15–20%", ">20%"])
+    d["NIM_Bucket"] = pd.cut(d["NIM_bps"], bins=[-1,30,60,100,10000], labels=["Below 30 bps", "30–60 bps", "60–100 bps", "Over 100 bps"])
+    d["Pass_RoE"] = d["Tx_RoE"] >= roe_floor
+    d["Pass_NIM"] = d["NIM_bps"] >= margin_floor
+    d["Strategic_Decision"] = np.select(
+        [d["Pass_RoE"] & d["Pass_NIM"], d["Pass_RoE"] & ~d["Pass_NIM"], ~d["Pass_RoE"] & d["Pass_NIM"]],
+        ["Approve / Prioritise", "Reprice", "Reduce RWA / add fees"],
+        default="Escalate / restructure"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(metric_card("Deals", f"{len(d)}", "screened sample"), unsafe_allow_html=True)
+    c2.markdown(metric_card("Facility Limit", fmt_m(d["Facility_Limit_M"].sum()), "screened amount"), unsafe_allow_html=True)
+    c3.markdown(metric_card("Avg Tx RoE", f"{d['Tx_RoE'].mean()*100:.1f}%", "transaction return"), unsafe_allow_html=True)
+    c4.markdown(metric_card("Avg NIM", f"{d['NIM_bps'].mean():.0f} bps", "price margin"), unsafe_allow_html=True)
+
+    pass_rate = float((d["Pass_RoE"] & d["Pass_NIM"]).mean())
+    reprice_count = int((d["Strategic_Decision"].eq("Reprice")).sum())
+    restructure_count = int((d["Strategic_Decision"].eq("Escalate / restructure")).sum())
+    strategic_callout("Deal strategy readout", [
+        f"<b>{pass_rate*100:.0f}%</b> of screened deals pass both RoE and NIM thresholds.",
+        f"<b>{reprice_count}</b> deals pass RoE but miss pricing floor — candidates for repricing / fee uplift.",
+        f"<b>{restructure_count}</b> deals miss both tests — candidates for RWA reduction, collateral improvement or relationship-level exception approval.",
+        "Use DSC as a forward-looking control tower: not just approval volume, but quality of future balance-sheet deployment.",
+    ], "amber")
+
+    by_month = (d.dropna(subset=["Screen_Date"])
+                .assign(Month=lambda x: x["Screen_Date"].dt.to_period("M").dt.to_timestamp())
+                .groupby("Month", as_index=False)
+                .agg(Facility_Limit_M=("Facility_Limit_M","sum"), Deals=("DS_ID","count"), Tx_RoE=("Tx_RoE","mean"), NIM_bps=("NIM_bps","mean")))
+    by_month["Month_Label"] = by_month["Month"].dt.strftime("%b-%y")
+    c5, c6 = st.columns(2, gap="large")
+    with c5:
+        st.plotly_chart(bar_fig(by_month, "Month_Label", "Facility_Limit_M", "Approved Amount by Month", unit="M", height=320, width=0.28), use_container_width=True, key="dsc_month_v087")
+    with c6:
+        by_country = d.groupby("Country", as_index=False).agg(Expected_Draw_B=("Expected_Draw_B","sum"), Tx_RoE=("Tx_RoE","mean"), NIM_bps=("NIM_bps","mean"))
+        st.plotly_chart(bar_fig(by_country, "Country", "Expected_Draw_B", "Expected Draw by Country", unit="B", height=320, width=0.36), use_container_width=True, key="dsc_country_v087")
+
+    c7, c8 = st.columns(2, gap="large")
+    with c7:
+        bucket = d.groupby("NIM_Bucket", observed=True, as_index=False).agg(Facility_Limit_M=("Facility_Limit_M", "sum"), Deals=("DS_ID", "count"))
+        st.plotly_chart(bar_fig(bucket, "NIM_Bucket", "Facility_Limit_M", "NIM Bucket by Facility Limit", unit="M", height=320, width=0.36), use_container_width=True, key="dsc_nim_bucket_v087")
+    with c8:
+        decision = d.groupby("Strategic_Decision", as_index=False).agg(Facility_Limit_M=("Facility_Limit_M", "sum"), Deals=("DS_ID", "count"))
+        st.plotly_chart(bar_fig(decision, "Strategic_Decision", "Facility_Limit_M", "Strategic Decision by Facility Limit", unit="M", height=320, width=0.36), use_container_width=True, key="dsc_decision_v087")
+
+    st.markdown("<h2>Deal List</h2>", unsafe_allow_html=True)
+    show_cols = ["DS_ID", "Relationship_Name", "Country", "Product_Type", "Facility_Limit_M", "Expected_Utilization", "Expected_Draw_B", "Spread_bps", "LP_bps", "BAC_bps", "EL_bps", "NIM_bps", "Tx_RoE", "Strategic_Decision", "Status"]
+    show_cols = [c for c in show_cols if c in d.columns]
+    st.dataframe(style_banking_table(d.sort_values("Facility_Limit_M", ascending=False)[show_cols]), use_container_width=True, hide_index=True)
+
+
+def banker_need_hypothesis(r: pd.Series, gap: pd.DataFrame, client_dsc: pd.DataFrame) -> str:
+    ltd = clean_number(r["Lending_Drawn"]) / max(clean_number(r["Deposit_Balance"]), 0.01)
+    top_gap = gap.iloc[0]["Product_Family"] if len(gap) else "Transaction Banking"
+    if ltd > 1.15:
+        return f"funding, refinancing and balance-sheet optimisation, with {top_gap} as the first cross-sell angle"
+    if clean_number(r["Deposit_Balance"]) > clean_number(r["Lending_Drawn"]) * 1.5:
+        return f"treasury control, operating balance stickiness and liquidity monetisation, then connect to {top_gap} wallet gap"
+    if len(client_dsc) and client_dsc["NIM_bps"].mean() < margin_floor:
+        return "pricing improvement and fee attachment, because screened deal margins are below the pricing floor"
+    return f"relationship deepening through {top_gap}, capital efficiency and selective product specialist engagement"
+
+
+def build_ai_banker_strategy(client: str, r: pd.Series, gap: pd.DataFrame, client_dsc: pd.DataFrame) -> Dict[str, List[str]]:
+    top_gap = gap.iloc[0] if len(gap) else None
+    second_gap = gap.iloc[1] if len(gap) > 1 else None
+    roe_txt = f"{r['LTM_Group_RoE']*100:.1f}%"
+    deposit_to_loan = clean_number(r["Deposit_Balance"]) / max(clean_number(r["Lending_Drawn"]), 0.01)
+    wallet_pen = clean_number(r["Wallet_Penetration"])
+    dsc_avg_roe = client_dsc["Tx_RoE"].mean() if len(client_dsc) else np.nan
+    dsc_avg_nim = client_dsc["NIM_bps"].mean() if len(client_dsc) else np.nan
+    gap_text = f"<b>{top_gap['Product_Family']}</b> gap of <b>${top_gap['Wallet_Gap']:.1f}M</b>" if top_gap is not None else "product wallet gap not available"
+    second_text = f" and <b>{second_gap['Product_Family']}</b>" if second_gap is not None else ""
+    comp = str(top_gap["Lead_Competitor"]) if top_gap is not None else "lead competitor"
+
+    return {
+        "Relationship snapshot": [
+            f"<b>{client}</b> is a <b>{r['Sector']}</b> client in <b>{r['Country']}</b> with <b>{fmt_b(r['Lending_Drawn'])}</b> lending exposure and <b>{fmt_b(r['Deposit_Balance'])}</b> deposits.",
+            f"Deposit-to-loan multiple is approximately <b>{deposit_to_loan:.1f}x</b>, indicating {'a liquidity-rich treasury franchise' if deposit_to_loan > 1 else 'a lending-led relationship requiring balance-sheet discipline'}.",
+            f"LTM Group RoE is <b>{roe_txt}</b> versus current floor of <b>{roe_floor*100:.0f}%</b>; relationship wallet penetration is <b>{wallet_pen*100:.1f}%</b>.",
+        ],
+        "Wallet gap analysis": [
+            f"Largest monetisation opportunity is {gap_text}{second_text}.",
+            f"Current lead competitor in the largest gap area is <b>{comp}</b>; this suggests the RM needs to shift the conversation from product pitching to relationship-level problem solving.",
+            "Low penetration should be framed as unrealised client need: treasury control, funding resilience, risk hedging, capital markets access or strategic financing.",
+        ],
+        "Cross-sell strategy": [
+            f"Primary pitch angle: <b>{banker_need_hypothesis(r, gap, client_dsc)}</b>.",
+            "Lead with client business need first, then attach product specialists only after the need is clearly established.",
+            "Recommended package: treasury / cash management + markets risk management + selective DCM / IB discussion where wallet gap supports it.",
+        ],
+        "Risk / return assessment": [
+            f"Portfolio RoE signal is {'above hurdle and relationship-accretive' if r['LTM_Group_RoE'] >= roe_floor else 'below hurdle and requires pricing or RWA remediation'}.",
+            (f"DSC read-through: average screened Tx RoE is <b>{dsc_avg_roe*100:.1f}%</b> and average NIM is <b>{dsc_avg_nim:.0f} bps</b>." if len(client_dsc) else "No DSC deals currently linked to this client in the demo data."),
+            "Balance-sheet growth should be selective: prioritise higher RoE drawdowns and require fee / deposit attachment where lending consumes RWA.",
+        ],
+        "RM action plan": [
+            "1. Open with a relationship review: liquidity position, debt maturity, funding plans and treasury operating model.",
+            "2. Quantify wallet gap by product and show where the client already gives wallet to competitors.",
+            "3. Ask for one senior client conversation around operating balances / refinancing / risk management rather than multiple disconnected product calls.",
+            "4. Bring the right specialist only after the client need is validated: TB for cash, Markets for FX/rates, DCM/IB for funding or strategic activity.",
+            "5. Track next action in a simple pipeline: need identified, product owner assigned, proposal date, expected revenue and competitor displacement target.",
+        ]
+    }
+
+
+def render_ai_banker_commentary():
+    st.markdown("<h1>AI Banker Commentary</h1>", unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Executive Relationship Intelligence — RM pitch angles, wallet strategy, risk / return read-through and next-best actions.</div>", unsafe_allow_html=True)
+    client = st.selectbox("Select client", relationships["Relationship_Name"].sort_values().tolist(), key="ai_client_select_v087")
+    r = relationships[relationships["Relationship_Name"].eq(client)].iloc[0]
+    gap = wallet[wallet["Relationship_Name"].eq(client)].sort_values("Wallet_Gap", ascending=False).head(5)
+    client_dsc = dsc[dsc["Relationship_Name"].eq(client)].copy()
+
+    sections = build_ai_banker_strategy(client, r, gap, client_dsc)
+    top_cards = st.columns(5)
+    kpis = [
+        ("Exposure", fmt_b(r["Lending_Drawn"]), "Drawn"),
+        ("Deposits", fmt_b(r["Deposit_Balance"]), "Franchise"),
+        ("RoE", f"{r['LTM_Group_RoE']*100:.1f}%", "LTM Group"),
+        ("Wallet Pen.", f"{r['Wallet_Penetration']*100:.1f}%", "Estimated"),
+        ("Top Gap", gap.iloc[0]["Product_Family"] if len(gap) else "N/A", "Product angle"),
+    ]
+    for col, (label, val, note) in zip(top_cards, kpis):
+        col.markdown(metric_card(label, val, note), unsafe_allow_html=True)
+
+    for i, (title, bullets) in enumerate(sections.items()):
+        tone = ["blue", "amber", "green", "red", "blue"][i % 5]
+        strategic_callout(title, bullets, tone)
+
+    st.markdown("<h2>Top Product Gap Angles</h2>", unsafe_allow_html=True)
+    show = gap[["Product_Family", "Estimated_Wallet", "Current_Revenue", "Wallet_Gap", "Wallet_Penetration", "Lead_Competitor"]].copy()
+    st.dataframe(style_banking_table(show), use_container_width=True, hide_index=True)
+
+    st.markdown("<h2>Suggested RM Opening Script</h2>", unsafe_allow_html=True)
+    script = f"""
+    <div class='insight-box'>
+      <b>Opening angle for {client}</b><br><br>
+      “Based on your current relationship profile, we see a strong link between your balance sheet position and several under-penetrated wallet areas. Rather than discuss products separately, I suggest we start with your treasury and funding priorities, then identify where we can help reduce friction, improve returns, and consolidate wallet currently sitting with competitor banks.”
+    </div>
+    """
+    st.markdown(script, unsafe_allow_html=True)
+
 # -----------------------------
 # Dispatch
 # -----------------------------
@@ -886,4 +1179,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.4 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.7 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
