@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.8.7 - Readable dashboard with sidebar thresholds
+# EC-AI Banking Engine v0.8.8.8 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -49,7 +49,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.8.7",
+    page_title="EC-AI Banking Engine v0.8.8.8",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -430,7 +430,7 @@ def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
         x=x, y=d["Lending_Drawn"], name="Lending Exposure (USD b)",
         marker_color=NAVY, width=0.34,
         text=[f"${v:.1f}B" for v in d["Lending_Drawn"]], textposition="outside",
-        textfont=dict(size=13, color=NAVY), yaxis="y1",
+        textfont=dict(size=15, color=NAVY), yaxis="y1",
         hovertemplate="%{customdata}<br>Lending Exposure: $%{y:.1f}B<extra></extra>",
         customdata=d["Relationship_Name"],
     ))
@@ -451,9 +451,9 @@ def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
         template="plotly_white", height=485, margin=dict(l=58, r=62, t=62, b=118),
         paper_bgcolor="white", plot_bgcolor="white", font=dict(family="Inter, Arial", size=13, color=NAVY),
         legend=dict(orientation="h", y=1.10, x=0.0, font=dict(size=13)),
-        yaxis=dict(title="Lending Exposure (USD b)", showgrid=False, zeroline=False, range=[0, max(12, float(d["Lending_Drawn"].max())*1.28)], titlefont=dict(size=13), tickfont=dict(size=12)),
-        yaxis2=dict(title="RoE %", overlaying="y", side="right", showgrid=False, zeroline=False, range=[10, 24], titlefont=dict(size=13), tickfont=dict(size=12)),
-        xaxis=dict(tickangle=0, tickfont=dict(size=12), showgrid=False, automargin=True),
+        yaxis=dict(title="Lending Exposure (USD b)", showgrid=False, zeroline=False, range=[0, max(12, float(d["Lending_Drawn"].max())*1.28)], titlefont=dict(size=13), tickfont=dict(size=13)),
+        yaxis2=dict(title="RoE %", overlaying="y", side="right", showgrid=False, zeroline=False, range=[10, 24], titlefont=dict(size=13), tickfont=dict(size=13)),
+        xaxis=dict(tickangle=0, tickfont=dict(size=13), showgrid=False, automargin=True),
         hovermode="x unified",
     )
     return fig
@@ -593,7 +593,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.8.7 Demo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.8.8 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -896,7 +896,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.8.7 STRATEGY UPGRADE LAYER
+# v0.8.8.8 STRATEGY UPGRADE LAYER
 # Stronger executive strategy, RM action engine, cleaner DSC,
 # richer wallet / product interpretation, and banker-grade tables.
 # =============================================================
@@ -950,7 +950,7 @@ def strategic_callout(title: str, bullets: List[str], tone: str = "blue") -> Non
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.34) -> go.Figure:
-    """v0.8.8.7 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
+    """v0.8.8.8 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -960,7 +960,7 @@ def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", heigh
         text=[f"${v:.1f}{suffix}" if unit in ["M", "B"] else f"{v:.1f}" for v in d[y]],
         textposition="outside",
         cliponaxis=False,
-        textfont=dict(size=13, color=NAVY),
+        textfont=dict(size=15, color=NAVY),
         hovertemplate=f"%{{x}}<br>%{{y:.1f}} {suffix}<extra></extra>",
     ))
     fig.update_layout(title=dict(text=title, x=0.0, font=dict(size=16, color=NAVY)))
@@ -1189,7 +1189,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.8.7 HOTFIX LAYER — readability, strategy and table fixes
+# v0.8.8.8 HOTFIX LAYER — readability, strategy and table fixes
 # =============================================================
 
 def _wrap_axis_label(label, max_len=13):
@@ -1238,7 +1238,7 @@ def _fmt_pct_1(x):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.30) -> go.Figure:
-    """Final v0.8.8.7 chart style: horizontal wrapped labels, larger values, wider chart margins."""
+    """Final v0.8.8.8 chart style: horizontal wrapped labels, larger values, wider chart margins."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1497,7 +1497,7 @@ def render_portfolio_data():
 
 
 # =============================================================
-# v0.8.8.7 FINAL OVERRIDES — readability + red-error fixes
+# v0.8.8.8 FINAL OVERRIDES — readability + red-error fixes
 # =============================================================
 
 def _safe_float_v088(v, default=np.nan):
@@ -1557,7 +1557,7 @@ def _wrap_axis_label_v088(s: str, width: int = 12) -> str:
 
 
 def style_banking_table(df: pd.DataFrame):
-    """v0.8.8.7 safe table formatting — prevents red errors from mixed text/numeric fields."""
+    """v0.8.8.8 safe table formatting — prevents red errors from mixed text/numeric fields."""
     d = df.copy()
     fmt = {}
     for c in d.columns:
@@ -1594,7 +1594,7 @@ def competitor_table_format(df: pd.DataFrame):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', height: int = 380, width: float = 0.26) -> go.Figure:
-    """v0.8.8.7: larger value labels + readable horizontal/wrapped x-axis + missing-column safe."""
+    """v0.8.8.8: larger value labels + readable horizontal/wrapped x-axis + missing-column safe."""
     d = df.copy()
     if y not in d.columns:
         alias_map = {
@@ -1650,7 +1650,7 @@ def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', heigh
 
 
 def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
-    """v0.8.8.7 centered donut with annotation exactly at donut centre."""
+    """v0.8.8.8 centered donut with annotation exactly at donut centre."""
     d = deposit.copy()
     total = float(pd.to_numeric(d['Deposit_Balance'], errors='coerce').fillna(0).sum())
     fig = go.Figure(data=[go.Pie(
@@ -1696,7 +1696,7 @@ def render_executive_dashboard():
             st.plotly_chart(bar_fig(country, 'Country', 'Total_Revenue', 'Revenue by Country (USD)', unit='M', height=390, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_rev_country_v0887')
     with c2:
         with st.container(border=True):
-            st.plotly_chart(bar_fig(country, 'Country', 'Lending_Drawn', 'Exposure by Country (USD)', unit='B', height=390, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_exp_country_v0887')
+            st.plotly_chart(bar_fig(country, 'Country', 'Lending_Drawn', 'Exposure by Country (USD)', unit='B', height=390, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_exp_country_v0888')
     st.markdown('<h2>Deposit Intelligence</h2>', unsafe_allow_html=True)
     st.markdown("<div class='subtitle'>Franchise strength, liquidity profile and treasury opportunities.</div>", unsafe_allow_html=True)
     d1, d2, d3, d4 = st.columns(4, gap='large')
@@ -1909,7 +1909,7 @@ def render_portfolio_data():
 
 
 def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
-    """v0.8.8.7 ordered deposit maturity ladder. On Demand = immediately withdrawable / sight deposits."""
+    """v0.8.8.8 ordered deposit maturity ladder. On Demand = immediately withdrawable / sight deposits."""
     d = maturity.copy()
     order = ["On Demand", "<= 3M", "3M – 12M", "1Y – 2Y", "2Y – 5Y", "> 5Y"]
     # Display short explanation in label for On Demand without cluttering source data
@@ -1938,7 +1938,7 @@ def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
 
 
 def tenor_breakdown_fig(dsc: pd.DataFrame) -> go.Figure:
-    """v0.8.8.7 ordered lending tenor breakdown: shortest tenor shown at top."""
+    """v0.8.8.8 ordered lending tenor breakdown: shortest tenor shown at top."""
     order = ["< 1 Year", "1 – 3 Years", "3 – 5 Years", "5 – 10 Years", "10+ Years"]
     d = dsc.copy()
     if "Tenor_Bucket" not in d.columns:
@@ -1996,4 +1996,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.8.7 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.8.8 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
