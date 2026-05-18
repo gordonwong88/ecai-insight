@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.8.5 - Readable dashboard with sidebar thresholds
+# EC-AI Banking Engine v0.8.8.6 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -49,7 +49,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.8.5",
+    page_title="EC-AI Banking Engine v0.8.8.6",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -593,7 +593,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.8.5 Demo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.8.6 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -896,7 +896,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.8.5 STRATEGY UPGRADE LAYER
+# v0.8.8.6 STRATEGY UPGRADE LAYER
 # Stronger executive strategy, RM action engine, cleaner DSC,
 # richer wallet / product interpretation, and banker-grade tables.
 # =============================================================
@@ -950,7 +950,7 @@ def strategic_callout(title: str, bullets: List[str], tone: str = "blue") -> Non
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.34) -> go.Figure:
-    """v0.8.8.5 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
+    """v0.8.8.6 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1189,7 +1189,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.8.5 HOTFIX LAYER — readability, strategy and table fixes
+# v0.8.8.6 HOTFIX LAYER — readability, strategy and table fixes
 # =============================================================
 
 def _wrap_axis_label(label, max_len=13):
@@ -1238,7 +1238,7 @@ def _fmt_pct_1(x):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.30) -> go.Figure:
-    """Final v0.8.8.5 chart style: horizontal wrapped labels, larger values, wider chart margins."""
+    """Final v0.8.8.6 chart style: horizontal wrapped labels, larger values, wider chart margins."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1497,7 +1497,7 @@ def render_portfolio_data():
 
 
 # =============================================================
-# v0.8.8.5 FINAL OVERRIDES — readability + red-error fixes
+# v0.8.8.6 FINAL OVERRIDES — readability + red-error fixes
 # =============================================================
 
 def _safe_float_v088(v, default=np.nan):
@@ -1557,7 +1557,7 @@ def _wrap_axis_label_v088(s: str, width: int = 12) -> str:
 
 
 def style_banking_table(df: pd.DataFrame):
-    """v0.8.8.5 safe table formatting — prevents red errors from mixed text/numeric fields."""
+    """v0.8.8.6 safe table formatting — prevents red errors from mixed text/numeric fields."""
     d = df.copy()
     fmt = {}
     for c in d.columns:
@@ -1594,8 +1594,24 @@ def competitor_table_format(df: pd.DataFrame):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', height: int = 380, width: float = 0.26) -> go.Figure:
-    """v0.8.8.5: larger value labels + readable horizontal/wrapped x-axis."""
+    """v0.8.8.6: larger value labels + readable horizontal/wrapped x-axis + missing-column safe."""
     d = df.copy()
+    if y not in d.columns:
+        alias_map = {
+            'Revenue': ['Total_Revenue', 'LTM_Revenue', 'Current_Revenue'],
+            'Total_Revenue': ['Revenue', 'LTM_Revenue', 'Current_Revenue'],
+            'Exposure': ['Lending_Drawn', 'Lending_Exposure', 'Total_Exposure'],
+            'Lending_Drawn': ['Exposure', 'Lending_Exposure', 'Total_Exposure'],
+            'Deposit_Balance': ['Deposits', 'Total_Deposits', 'Deposit Balance'],
+        }
+        for cand in alias_map.get(y, []):
+            if cand in d.columns:
+                d[y] = d[cand]
+                break
+        if y not in d.columns:
+            d[y] = 0
+    if x not in d.columns:
+        d[x] = 'N/A'
     d[y] = pd.to_numeric(d[y], errors='coerce').fillna(0)
     d = d.sort_values(y, ascending=False)
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
@@ -1634,7 +1650,7 @@ def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', heigh
 
 
 def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
-    """v0.8.8.5 centered donut with annotation exactly at donut centre."""
+    """v0.8.8.6 centered donut with annotation exactly at donut centre."""
     d = deposit.copy()
     total = float(pd.to_numeric(d['Deposit_Balance'], errors='coerce').fillna(0).sum())
     fig = go.Figure(data=[go.Pie(
@@ -1662,11 +1678,11 @@ def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
 
 
 def render_executive_dashboard():
-    top_filter_bar()
+    # top_filter_bar() removed here because it is already rendered globally
     st.markdown('<h1>Executive Portfolio Overview</h1>', unsafe_allow_html=True)
     st.markdown("<div class='subtitle'>LTM performance summary — wallet, exposure, deposits, revenue and profitability.</div>", unsafe_allow_html=True)
-    total_rev = safe_sum(country, 'Revenue')
-    total_exp = safe_sum(country, 'Exposure')
+    total_rev = safe_sum(country, 'Total_Revenue') or safe_sum(country, 'Revenue')
+    total_exp = safe_sum(country, 'Lending_Drawn') or safe_sum(country, 'Exposure')
     total_dep = safe_sum(country, 'Deposit_Balance')
     avg_roe = safe_mean(country, 'LTM_Group_RoE')
     cards = st.columns(6, gap='small')
@@ -1677,10 +1693,10 @@ def render_executive_dashboard():
     c1, c2 = st.columns(2, gap='large')
     with c1:
         with st.container(border=True):
-            st.plotly_chart(bar_fig(country, 'Country', 'Revenue', 'Revenue by Country (USD)', unit='M', height=360, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_rev_country_v088')
+            st.plotly_chart(bar_fig(country, 'Country', 'Total_Revenue', 'Revenue by Country (USD)', unit='M', height=360, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_rev_country_v088')
     with c2:
         with st.container(border=True):
-            st.plotly_chart(bar_fig(country, 'Country', 'Exposure', 'Exposure by Country (USD)', unit='B', height=360, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_exp_country_v088')
+            st.plotly_chart(bar_fig(country, 'Country', 'Lending_Drawn', 'Exposure by Country (USD)', unit='B', height=360, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_exp_country_v088')
     st.markdown('<h2>Deposit Intelligence</h2>', unsafe_allow_html=True)
     st.markdown("<div class='subtitle'>Franchise strength, liquidity profile and treasury opportunities.</div>", unsafe_allow_html=True)
     d1, d2, d3, d4 = st.columns(4, gap='large')
@@ -1691,7 +1707,7 @@ def render_executive_dashboard():
         with st.container(border=True):
             st.plotly_chart(donut_deposit(deposit), use_container_width=True, config={'displayModeBar': False}, key='exec_dep_donut_v088')
     casa = deposit.loc[deposit['Deposit_Type'].eq('CASA'), 'Deposit_Balance'].sum() / deposit['Deposit_Balance'].sum()
-    ltd = country['Exposure'].sum() / country['Deposit_Balance'].sum()
+    ltd = country['Lending_Drawn'].sum() / country['Deposit_Balance'].sum()
     with d3:
         st.markdown(f"""
         <div class='small-card'>
@@ -1913,4 +1929,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.8.5 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.8.6 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
