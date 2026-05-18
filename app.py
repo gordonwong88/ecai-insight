@@ -1,12 +1,12 @@
 
-# v0.8.9.6 safe brand color constants
+# v0.8.9.7 safe brand color constants
 NAVY = globals().get("NAVY", "#0B1F3B")
 BLUE = globals().get("BLUE", "#2A5D9F")
 ORANGE = globals().get("ORANGE", "#D97706")
 GREEN = globals().get("GREEN", "#00875A")
 RED = globals().get("RED", "#D14343")
 
-# EC-AI Banking Engine v0.8.9.6 - Readable dashboard with sidebar thresholds
+# EC-AI Banking Engine v0.8.9.7 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -74,7 +74,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.9.6",
+    page_title="EC-AI Banking Engine v0.8.9.7",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -618,7 +618,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.9.6 Demo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.9.7 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -669,7 +669,7 @@ top_filter_bar()
 # -----------------------------
 
 def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
-    """v0.8.9.6 executive-readable capital efficiency chart with larger labels."""
+    """v0.8.9.7 executive-readable capital efficiency chart with larger labels."""
     d = rel.copy()
     if 'Relationship' not in d.columns:
         fallback_rel = [c for c in d.columns if 'relationship' in str(c).lower() or 'client' in str(c).lower() or 'name' in str(c).lower()]
@@ -782,7 +782,7 @@ def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
 
 
 def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
-    """v0.8.9.6 clean readable capital efficiency chart.
+    """v0.8.9.7 clean readable capital efficiency chart.
     Shows bar labels only; RoE remains visible through line + hover to avoid label clutter.
     """
     d = rel.copy()
@@ -1009,19 +1009,116 @@ st.markdown('''
 </style>
 ''', unsafe_allow_html=True)
 
+
+def deposit_country_big_fig(df: pd.DataFrame) -> go.Figure:
+    """Large, readable Deposits by Country chart for Deposit Intelligence."""
+    d = df.copy()
+    if "Country" not in d.columns:
+        d["Country"] = "N/A"
+    if "Deposit_Balance" not in d.columns:
+        d["Deposit_Balance"] = 0
+
+    d["Deposit_Balance"] = pd.to_numeric(d["Deposit_Balance"], errors="coerce").fillna(0)
+    d = d.groupby("Country", as_index=False)["Deposit_Balance"].sum().sort_values("Deposit_Balance", ascending=False)
+
+    colors = [globals().get("NAVY", "#0B1F3B"), globals().get("BLUE", "#2A5D9F"), "#7B8A97", "#94A1AD", "#AAB5BF", "#CBD3DA"]
+    colors = (colors * ((len(d) // len(colors)) + 1))[:len(d)]
+
+    fig = go.Figure(go.Bar(
+        x=d["Country"],
+        y=d["Deposit_Balance"],
+        marker_color=colors,
+        width=0.48,
+        text=[f"${v:.1f}B" for v in d["Deposit_Balance"]],
+        textposition="outside",
+        cliponaxis=False,
+        textfont=dict(size=24, color=globals().get("NAVY", "#0B1F3B"), family="Inter, Arial Black, Arial"),
+        hovertemplate="%{x}<br>Deposits: $%{y:.1f}B<extra></extra>",
+    ))
+
+    ymax = float(d["Deposit_Balance"].max()) if len(d) else 1
+    fig.update_layout(
+        title=dict(text="Deposits by Country (USD b)", x=0.0, font=dict(size=20, color=globals().get("NAVY", "#0B1F3B"))),
+        template="plotly_white",
+        height=540,
+        margin=dict(l=74, r=50, t=90, b=110),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(family="Inter, Arial", size=16, color=globals().get("NAVY", "#0B1F3B")),
+        showlegend=False,
+        bargap=0.52,
+        uniformtext_minsize=18,
+        uniformtext_mode="show",
+    )
+    fig.update_yaxes(
+        title_text="USD billion",
+        range=[0, ymax * 1.30 if ymax else 1],
+        showgrid=False,
+        showline=False,
+        zeroline=False,
+        tickfont=dict(size=16, color="#50627A"),
+        titlefont=dict(size=16, color="#50627A"),
+        automargin=True,
+    )
+    fig.update_xaxes(
+        showgrid=False,
+        showline=False,
+        zeroline=False,
+        tickfont=dict(size=16, color=globals().get("NAVY", "#0B1F3B")),
+        tickangle=0,
+        automargin=True,
+    )
+    return fig
+
+
 def render_deposit_intelligence():
     st.markdown("<h1>Deposit Intelligence</h1>", unsafe_allow_html=True)
     st.markdown("<div class='subtitle'>Deposit franchise, operational balance and treasury opportunity view.</div>", unsafe_allow_html=True)
-    c1, c2 = st.columns(2, gap="large")
+
+    # ROW 1: full-width / double-size Deposits by Country chart
+    with st.container(border=True):
+        st.plotly_chart(
+            deposit_country_big_fig(country),
+            use_container_width=True,
+            config={"displayModeBar": False},
+            key="dep_country_big_v0897"
+        )
+
+    # ROW 2: three supporting charts/cards
+    c1, c2, c3 = st.columns([1.05, 1.05, 1.15], gap="large")
     with c1:
-        st.plotly_chart(bar_fig(country, "Country", "Deposit_Balance", "Deposits by Country", unit="B", height=300, width=0.36), use_container_width=True, key="dep_country_full_v083")
+        with st.container(border=True):
+            st.plotly_chart(
+                donut_deposit(deposit),
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="dep_type_donut_v0897"
+            )
+
     with c2:
-        st.plotly_chart(donut_deposit(deposit), use_container_width=True, key="dep_type_donut_full_v083")
-    c3, c4 = st.columns([1, 1], gap="large")
+        st.markdown("""
+        <div class='small-card' style='min-height:330px;'>
+            <h3>Liquidity Profile</h3>
+            <div style='font-size:15px;color:#526173;line-height:1.45;margin:16px 0 20px 0;'>
+                Deposit stability and funding resilience indicators.
+            </div>
+            <div style='display:flex;justify-content:space-between;margin:18px 0;font-size:16px;'><span>CASA Ratio</span><b style='color:#00875A;'>49%</b></div>
+            <div style='display:flex;justify-content:space-between;margin:18px 0;font-size:16px;'><span>Loan to Deposit Ratio</span><b style='color:#D14343;'>53%</b></div>
+            <div style='display:flex;justify-content:space-between;margin:18px 0;font-size:16px;'><span>NSFR</span><b style='color:#00875A;'>118%</b></div>
+            <div style='display:flex;justify-content:space-between;margin:18px 0;font-size:16px;'><span>LCR</span><b style='color:#00875A;'>142%</b></div>
+        </div>
+        """, unsafe_allow_html=True)
+
     with c3:
-        st.plotly_chart(maturity_fig(maturity), use_container_width=True, key="dep_maturity_full_v083")
-    with c4:
-        st.markdown("<div class='small-card'><h3>Deposit Commentary</h3><br>CASA and operational balances indicate relationship stickiness and treasury dialogue potential.<br><br>Use maturity ladder to identify rollover risk, repricing windows and liquidity concentration.</div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.plotly_chart(
+                maturity_fig(maturity),
+                use_container_width=True,
+                config={"displayModeBar": False},
+                key="dep_maturity_v0897"
+            )
+
+    # ROW 3: commentary table
     st.markdown("<h2>Deposit Relationship Table</h2>", unsafe_allow_html=True)
     table = relationships[["Relationship_Name", "Country", "Client_Tier", "Deposit_Balance", "Total_Revenue"]].copy()
     table["Deposit_Type"] = np.random.default_rng(4).choice(["CASA", "Operational", "Time Deposit"], len(table))
@@ -1029,7 +1126,6 @@ def render_deposit_intelligence():
     table["Deposit_Maturity_Date"] = [datetime(2024, 3, 31) + timedelta(days=int(x)) for x in np.random.default_rng(7).integers(15, 420, len(table))]
     table = table.rename(columns={"Total_Revenue": "Deposit_Revenue_Proxy"})
     st.dataframe(table.sort_values("Deposit_Balance", ascending=False), use_container_width=True, hide_index=True)
-
 
 def render_competitor_benchmarking():
     st.markdown("<h1>Competitor Benchmarking</h1>", unsafe_allow_html=True)
@@ -1151,7 +1247,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.9.6 STRATEGY UPGRADE LAYER
+# v0.8.9.7 STRATEGY UPGRADE LAYER
 # Stronger executive strategy, RM action engine, cleaner DSC,
 # richer wallet / product interpretation, and banker-grade tables.
 # =============================================================
@@ -1205,7 +1301,7 @@ def strategic_callout(title: str, bullets: List[str], tone: str = "blue") -> Non
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.34) -> go.Figure:
-    """v0.8.9.6 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
+    """v0.8.9.7 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1444,7 +1540,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.9.6 HOTFIX LAYER — readability, strategy and table fixes
+# v0.8.9.7 HOTFIX LAYER — readability, strategy and table fixes
 # =============================================================
 
 def _wrap_axis_label(label, max_len=13):
@@ -1493,7 +1589,7 @@ def _fmt_pct_1(x):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.30) -> go.Figure:
-    """Final v0.8.9.6 chart style: horizontal wrapped labels, larger values, wider chart margins."""
+    """Final v0.8.9.7 chart style: horizontal wrapped labels, larger values, wider chart margins."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1752,7 +1848,7 @@ def render_portfolio_data():
 
 
 # =============================================================
-# v0.8.9.6 FINAL OVERRIDES — readability + red-error fixes
+# v0.8.9.7 FINAL OVERRIDES — readability + red-error fixes
 # =============================================================
 
 def _safe_float_v088(v, default=np.nan):
@@ -1812,7 +1908,7 @@ def _wrap_axis_label_v088(s: str, width: int = 12) -> str:
 
 
 def style_banking_table(df: pd.DataFrame):
-    """v0.8.9.6 safe table formatting — prevents red errors from mixed text/numeric fields."""
+    """v0.8.9.7 safe table formatting — prevents red errors from mixed text/numeric fields."""
     d = df.copy()
     fmt = {}
     for c in d.columns:
@@ -1849,7 +1945,7 @@ def competitor_table_format(df: pd.DataFrame):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', height: int = 380, width: float = 0.26) -> go.Figure:
-    """v0.8.9.6: larger value labels + readable horizontal/wrapped x-axis + missing-column safe."""
+    """v0.8.9.7: larger value labels + readable horizontal/wrapped x-axis + missing-column safe."""
     d = df.copy()
     if y not in d.columns:
         alias_map = {
@@ -1905,7 +2001,7 @@ def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', heigh
 
 
 def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
-    """v0.8.9.6 centered donut with annotation exactly at donut centre."""
+    """v0.8.9.7 centered donut with annotation exactly at donut centre."""
     d = deposit.copy()
     total = float(pd.to_numeric(d['Deposit_Balance'], errors='coerce').fillna(0).sum())
     fig = go.Figure(data=[go.Pie(
@@ -1934,7 +2030,7 @@ def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
 
 
 def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
-    """v0.8.9.6 executive-readable capital efficiency chart with larger labels."""
+    """v0.8.9.7 executive-readable capital efficiency chart with larger labels."""
     d = rel.copy()
 
     # Defensive fallback for missing columns (prevents Streamlit crash)
@@ -2043,7 +2139,7 @@ def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
 
 
 def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
-    """v0.8.9.6 clean readable capital efficiency chart.
+    """v0.8.9.7 clean readable capital efficiency chart.
     Shows bar labels only; RoE remains visible through line + hover to avoid label clutter.
     """
     d = rel.copy()
@@ -2395,7 +2491,7 @@ def render_portfolio_data():
 
 
 def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
-    """v0.8.9.6 ordered deposit maturity ladder. On Demand = immediately withdrawable / sight deposits."""
+    """v0.8.9.7 ordered deposit maturity ladder. On Demand = immediately withdrawable / sight deposits."""
     d = maturity.copy()
     order = ["On Demand", "<= 3M", "3M – 12M", "1Y – 2Y", "2Y – 5Y", "> 5Y"]
     # Display short explanation in label for On Demand without cluttering source data
@@ -2424,7 +2520,7 @@ def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
 
 
 def tenor_breakdown_fig(dsc: pd.DataFrame) -> go.Figure:
-    """v0.8.9.6 ordered lending tenor breakdown: shortest tenor shown at top."""
+    """v0.8.9.7 ordered lending tenor breakdown: shortest tenor shown at top."""
     order = ["< 1 Year", "1 – 3 Years", "3 – 5 Years", "5 – 10 Years", "10+ Years"]
     d = dsc.copy()
     if "Tenor_Bucket" not in d.columns:
@@ -2482,4 +2578,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.9.6 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.9.7 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
