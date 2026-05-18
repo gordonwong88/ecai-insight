@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.8.1 - Readable dashboard with sidebar thresholds
+# EC-AI Banking Engine v0.8.8.3 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -49,7 +49,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.8.1",
+    page_title="EC-AI Banking Engine v0.8.8.3",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -593,7 +593,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.8.1 Demo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.8.3 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -896,7 +896,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.8.1 STRATEGY UPGRADE LAYER
+# v0.8.8.3 STRATEGY UPGRADE LAYER
 # Stronger executive strategy, RM action engine, cleaner DSC,
 # richer wallet / product interpretation, and banker-grade tables.
 # =============================================================
@@ -950,7 +950,7 @@ def strategic_callout(title: str, bullets: List[str], tone: str = "blue") -> Non
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.34) -> go.Figure:
-    """v0.8.8.1 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
+    """v0.8.8.3 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1189,7 +1189,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.8.1 HOTFIX LAYER — readability, strategy and table fixes
+# v0.8.8.3 HOTFIX LAYER — readability, strategy and table fixes
 # =============================================================
 
 def _wrap_axis_label(label, max_len=13):
@@ -1238,7 +1238,7 @@ def _fmt_pct_1(x):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.30) -> go.Figure:
-    """Final v0.8.8.1 chart style: horizontal wrapped labels, larger values, wider chart margins."""
+    """Final v0.8.8.3 chart style: horizontal wrapped labels, larger values, wider chart margins."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1497,7 +1497,7 @@ def render_portfolio_data():
 
 
 # =============================================================
-# v0.8.8.1 FINAL OVERRIDES — readability + red-error fixes
+# v0.8.8.3 FINAL OVERRIDES — readability + red-error fixes
 # =============================================================
 
 def _safe_float_v088(v, default=np.nan):
@@ -1557,7 +1557,7 @@ def _wrap_axis_label_v088(s: str, width: int = 12) -> str:
 
 
 def style_banking_table(df: pd.DataFrame):
-    """v0.8.8.1 safe table formatting — prevents red errors from mixed text/numeric fields."""
+    """v0.8.8.3 safe table formatting — prevents red errors from mixed text/numeric fields."""
     d = df.copy()
     fmt = {}
     for c in d.columns:
@@ -1594,7 +1594,7 @@ def competitor_table_format(df: pd.DataFrame):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', height: int = 380, width: float = 0.26) -> go.Figure:
-    """v0.8.8.1: larger value labels + readable horizontal/wrapped x-axis."""
+    """v0.8.8.3: larger value labels + readable horizontal/wrapped x-axis."""
     d = df.copy()
     d[y] = pd.to_numeric(d[y], errors='coerce').fillna(0)
     d = d.sort_values(y, ascending=False)
@@ -1634,7 +1634,7 @@ def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', heigh
 
 
 def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
-    """v0.8.8.1 centered donut with annotation exactly at donut centre."""
+    """v0.8.8.3 centered donut with annotation exactly at donut centre."""
     d = deposit.copy()
     total = float(pd.to_numeric(d['Deposit_Balance'], errors='coerce').fillna(0).sum())
     fig = go.Figure(data=[go.Pie(
@@ -1665,10 +1665,10 @@ def render_executive_dashboard():
     top_filter_bar()
     st.markdown('<h1>Executive Portfolio Overview</h1>', unsafe_allow_html=True)
     st.markdown("<div class='subtitle'>LTM performance summary — wallet, exposure, deposits, revenue and profitability.</div>", unsafe_allow_html=True)
-    total_rev = country['Revenue'].sum() if 'Revenue' in country.columns else 0
-    total_exp = country['Exposure'].sum() if 'Exposure' in country.columns else 0
-    total_dep = country['Deposit_Balance'].sum() if 'Deposit_Balance' in country.columns else 0
-    avg_roe = country['LTM_Group_RoE'].mean() if 'LTM_Group_RoE' in country.columns else None
+    total_rev = safe_sum(country, 'Revenue')
+    total_exp = safe_sum(country, 'Exposure')
+    total_dep = safe_sum(country, 'Deposit_Balance')
+    avg_roe = safe_mean(country, 'LTM_Group_RoE')
     cards = st.columns(6, gap='small')
     vals = [('REVENUE', fmt_b(total_rev/1000), 'demo vs PY'), ('NII', '$852.2M', 'Net interest income'), ('RWA', '$72.3B', 'Risk weighted assets'), ('LENDING EXPOSURE', fmt_b(total_exp), 'Drawn balance'), ('DEPOSITS', fmt_b(total_dep), 'Deposit franchise'), ('LTM GROUP ROE', f'{avg_roe*100:.1f}%', 'Portfolio return')]
     for col, (label, val, sub) in zip(cards, vals):
@@ -1913,4 +1913,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.8.1 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.8.3 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
