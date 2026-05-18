@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.7 - Readable dashboard with sidebar thresholds
+# EC-AI Banking Engine v0.8.8 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.7",
+    page_title="EC-AI Banking Engine v0.8.8",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -560,7 +560,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.7 Demo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.8 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -863,7 +863,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.7 STRATEGY UPGRADE LAYER
+# v0.8.8 STRATEGY UPGRADE LAYER
 # Stronger executive strategy, RM action engine, cleaner DSC,
 # richer wallet / product interpretation, and banker-grade tables.
 # =============================================================
@@ -917,7 +917,7 @@ def strategic_callout(title: str, bullets: List[str], tone: str = "blue") -> Non
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.34) -> go.Figure:
-    """v0.8.7 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
+    """v0.8.8 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1156,7 +1156,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.7 HOTFIX LAYER — readability, strategy and table fixes
+# v0.8.8 HOTFIX LAYER — readability, strategy and table fixes
 # =============================================================
 
 def _wrap_axis_label(label, max_len=13):
@@ -1205,7 +1205,7 @@ def _fmt_pct_1(x):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.30) -> go.Figure:
-    """Final v0.8.7 chart style: horizontal wrapped labels, larger values, wider chart margins."""
+    """Final v0.8.8 chart style: horizontal wrapped labels, larger values, wider chart margins."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1461,6 +1461,396 @@ def render_portfolio_data():
     view = st.selectbox("Table", list(data.keys()), key="portfolio_table_select_v087_hotfix")
     st.dataframe(style_banking_table(data[view]), use_container_width=True, hide_index=True)
 
+
+
+# =============================================================
+# v0.8.8 FINAL OVERRIDES — readability + red-error fixes
+# =============================================================
+
+def _safe_float_v088(v, default=np.nan):
+    try:
+        if pd.isna(v):
+            return default
+        return float(v)
+    except Exception:
+        return default
+
+
+def _fmt_num_1_v088(v):
+    x = _safe_float_v088(v)
+    return "-" if pd.isna(x) else f"{x:,.1f}"
+
+
+def _fmt_money_m_1_v088(v):
+    x = _safe_float_v088(v)
+    return "-" if pd.isna(x) else f"${x:,.1f}M"
+
+
+def _fmt_money_b_1_v088(v):
+    x = _safe_float_v088(v)
+    return "-" if pd.isna(x) else f"${x:,.1f}B"
+
+
+def _fmt_pct_1_v088(v):
+    x = _safe_float_v088(v)
+    if pd.isna(x):
+        return "-"
+    if abs(x) <= 1.5:
+        x = x * 100
+    return f"{x:.1f}%"
+
+
+def _fmt_bps_0_v088(v):
+    x = _safe_float_v088(v)
+    return "-" if pd.isna(x) else f"{x:,.0f} bps"
+
+
+def _wrap_axis_label_v088(s: str, width: int = 12) -> str:
+    s = str(s)
+    words = s.split()
+    if len(words) <= 1 and len(s) > width:
+        return "<br>".join([s[i:i+width] for i in range(0, len(s), width)][:3])
+    lines, cur = [], ""
+    for w in words:
+        if len((cur + " " + w).strip()) <= width:
+            cur = (cur + " " + w).strip()
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return "<br>".join(lines[:3])
+
+
+def style_banking_table(df: pd.DataFrame):
+    """v0.8.8 safe table formatting — prevents red errors from mixed text/numeric fields."""
+    d = df.copy()
+    fmt = {}
+    for c in d.columns:
+        lc = str(c).lower()
+        if lc.endswith('_bps') or lc in ['nim', 'spread', 'lp', 'el', 'bac', 'nim_bps', 'spread_bps', 'lp_bps', 'el_bps', 'bac_bps']:
+            fmt[c] = _fmt_bps_0_v088
+        elif any(k in lc for k in ['roe', 'penetration', 'share', 'utilization', 'ratio']):
+            fmt[c] = _fmt_pct_1_v088
+        elif any(k in lc for k in ['wallet', 'revenue', 'facility', 'limit', 'amount']):
+            fmt[c] = _fmt_num_1_v088
+        elif any(k in lc for k in ['drawn', 'exposure', 'deposit', 'rwa', 'balance', 'expected_draw']):
+            fmt[c] = _fmt_num_1_v088
+    return (d.style.format(fmt)
+            .set_properties(**{'text-align': 'right', 'font-size': '13px'})
+            .set_table_styles([
+                {'selector': 'th', 'props': [('text-align', 'right'), ('font-weight', '800'), ('font-size', '13px'), ('background-color', '#F7F9FC')]},
+                {'selector': 'td', 'props': [('text-align', 'right'), ('font-size', '13px')]},
+            ]))
+
+
+def competitor_table_format(df: pd.DataFrame):
+    d = df.copy()
+    for c in ['Estimated_Wallet', 'Current_Revenue', 'Wallet_Gap', 'Penetration']:
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors='coerce')
+    return d.style.format({
+        'Estimated_Wallet': _fmt_money_m_1_v088,
+        'Current_Revenue': _fmt_money_m_1_v088,
+        'Wallet_Gap': _fmt_money_m_1_v088,
+        'Penetration': _fmt_pct_1_v088,
+    }).set_properties(**{'text-align': 'right', 'font-size': '13px'}).set_table_styles([
+        {'selector':'th', 'props':[('text-align','right'),('font-weight','800'),('background-color','#F7F9FC')]}
+    ])
+
+
+def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', height: int = 380, width: float = 0.26) -> go.Figure:
+    """v0.8.8: larger value labels + readable horizontal/wrapped x-axis."""
+    d = df.copy()
+    d[y] = pd.to_numeric(d[y], errors='coerce').fillna(0)
+    d = d.sort_values(y, ascending=False)
+    colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
+    suffix = 'B' if unit == 'B' else 'M'
+    vals = d[y].astype(float)
+    labels = [f'${v:.1f}{suffix}' if unit in ['M','B'] else f'{v:.1f}' for v in vals]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=d[x].astype(str), y=vals, marker_color=colors, width=width,
+        text=labels, textposition='outside', cliponaxis=False,
+        textfont=dict(size=16, color=NAVY, family='Inter, Arial'),
+        hovertemplate=f'%{{x}}<br>%{{y:.1f}} {suffix}<extra></extra>',
+    ))
+    ymax = float(vals.max()) if len(vals) else 0
+    fig.update_layout(
+        title=dict(text=title, x=0.0, font=dict(size=17, color=NAVY)),
+        template='plotly_white', height=height,
+        margin=dict(l=58, r=32, t=52, b=118),
+        paper_bgcolor='white', plot_bgcolor='white',
+        font=dict(family='Inter, Arial', size=14, color=NAVY),
+        showlegend=False, bargap=0.64,
+    )
+    fig.update_xaxes(
+        showgrid=False, showline=False, zeroline=False, tickangle=0,
+        tickmode='array', tickvals=d[x].astype(str).tolist(),
+        ticktext=[_wrap_axis_label_v088(v, 12) for v in d[x].astype(str).tolist()],
+        tickfont=dict(size=12, color=NAVY), automargin=True,
+    )
+    fig.update_yaxes(
+        title_text='USD billion' if unit == 'B' else 'USD million',
+        showgrid=False, showline=False, zeroline=False,
+        tickfont=dict(size=12, color='#50627A'),
+        range=[0, ymax * 1.25 if ymax else 1],
+    )
+    return fig
+
+
+def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
+    """v0.8.8 centered donut with annotation exactly at donut centre."""
+    d = deposit.copy()
+    total = float(pd.to_numeric(d['Deposit_Balance'], errors='coerce').fillna(0).sum())
+    fig = go.Figure(data=[go.Pie(
+        labels=d['Deposit_Type'], values=d['Deposit_Balance'], hole=0.62,
+        marker=dict(colors=[NAVY, BLUE, SLATE, '#CBD3DA']),
+        textinfo='none', sort=False,
+        domain=dict(x=[0.07, 0.63], y=[0.08, 0.94]),
+        hovertemplate='%{label}<br>$%{value:.1f}B (%{percent})<extra></extra>',
+    )])
+    fig.update_layout(
+        annotations=[dict(
+            text=f"<b>${total:.1f}B</b><br><span style='font-size:12px'>Total</span>",
+            x=0.35, y=0.51, xref='paper', yref='paper', showarrow=False,
+            xanchor='center', yanchor='middle', align='center',
+            font=dict(size=18, color=NAVY, family='Inter, Arial')
+        )],
+        legend=dict(x=0.74, y=0.18, xanchor='left', yanchor='bottom', orientation='v', font=dict(size=13, color=NAVY), bgcolor='rgba(255,255,255,0)', borderwidth=0),
+        title=dict(text='Deposits by Type (USD b)', x=0.0, font=dict(size=17, color=NAVY)),
+        template='plotly_white', height=330,
+        margin=dict(l=18, r=12, t=42, b=18),
+        paper_bgcolor='white', plot_bgcolor='white', showlegend=True,
+        font=dict(family='Inter, Arial', size=14, color=NAVY),
+    )
+    return fig
+
+
+def render_executive_dashboard():
+    top_filter_bar()
+    st.markdown('<h1>Executive Portfolio Overview</h1>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>LTM performance summary — wallet, exposure, deposits, revenue and profitability.</div>", unsafe_allow_html=True)
+    total_rev = country['Revenue'].sum(); total_exp = country['Exposure'].sum(); total_dep = country['Deposit_Balance'].sum(); avg_roe = country['LTM_Group_RoE'].mean()
+    cards = st.columns(6, gap='small')
+    vals = [('REVENUE', fmt_b(total_rev/1000), 'demo vs PY'), ('NII', '$852.2M', 'Net interest income'), ('RWA', '$72.3B', 'Risk weighted assets'), ('LENDING EXPOSURE', fmt_b(total_exp), 'Drawn balance'), ('DEPOSITS', fmt_b(total_dep), 'Deposit franchise'), ('LTM GROUP ROE', f'{avg_roe*100:.1f}%', 'Portfolio return')]
+    for col, (label, val, sub) in zip(cards, vals):
+        col.markdown(metric_card(label, val, sub), unsafe_allow_html=True)
+    st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2, gap='large')
+    with c1:
+        with st.container(border=True):
+            st.plotly_chart(bar_fig(country, 'Country', 'Revenue', 'Revenue by Country (USD)', unit='M', height=360, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_rev_country_v088')
+    with c2:
+        with st.container(border=True):
+            st.plotly_chart(bar_fig(country, 'Country', 'Exposure', 'Exposure by Country (USD)', unit='B', height=360, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_exp_country_v088')
+    st.markdown('<h2>Deposit Intelligence</h2>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Franchise strength, liquidity profile and treasury opportunities.</div>", unsafe_allow_html=True)
+    d1, d2, d3, d4 = st.columns(4, gap='large')
+    with d1:
+        with st.container(border=True):
+            st.plotly_chart(bar_fig(country, 'Country', 'Deposit_Balance', 'Deposits by Country', unit='B', height=330, width=0.34), use_container_width=True, config={'displayModeBar': False}, key='exec_dep_country_v088')
+    with d2:
+        with st.container(border=True):
+            st.plotly_chart(donut_deposit(deposit), use_container_width=True, config={'displayModeBar': False}, key='exec_dep_donut_v088')
+    casa = deposit.loc[deposit['Deposit_Type'].eq('CASA'), 'Deposit_Balance'].sum() / deposit['Deposit_Balance'].sum()
+    ltd = country['Exposure'].sum() / country['Deposit_Balance'].sum()
+    with d3:
+        st.markdown(f"""
+        <div class='small-card'>
+          <h3>Liquidity Profile</h3><br>
+          <div style='display:flex;justify-content:space-between;margin-bottom:13px;'><span>CASA Ratio</span><b style='color:{GREEN}'>{casa*100:.0f}%</b></div>
+          <div style='display:flex;justify-content:space-between;margin-bottom:13px;'><span>Loan to Deposit Ratio</span><b style='color:{RED}'>{ltd*100:.0f}%</b></div>
+          <div style='display:flex;justify-content:space-between;margin-bottom:13px;'><span>NSFR</span><b style='color:{GREEN}'>118%</b></div>
+          <div style='display:flex;justify-content:space-between;'><span>LCR</span><b style='color:{GREEN}'>142%</b></div>
+        </div>""", unsafe_allow_html=True)
+    with d4:
+        with st.container(border=True):
+            st.plotly_chart(maturity_fig(maturity), use_container_width=True, config={'displayModeBar': False}, key='exec_maturity_v088')
+    c3, c4 = st.columns([1.25, 1], gap='large')
+    with c3:
+        with st.container(border=True):
+            st.plotly_chart(combo_capital_fig(relationships, roe_floor), use_container_width=True, config={'displayModeBar': False}, key='exec_capital_combo_v088')
+    with c4:
+        st.markdown(roe_heatmap(country, roe_floor), unsafe_allow_html=True)
+        st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.plotly_chart(tenor_breakdown_fig(dsc), use_container_width=True, config={'displayModeBar': False}, key='exec_tenor_v088')
+    st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class='insight-box' style='font-size:14.5px;line-height:1.65;padding:18px 20px;'>
+      <b style='font-size:18px;'>Key Insights & RM Action Plan</b><br><br>
+      • <b>Hong Kong</b> is the largest revenue and exposure contributor, anchoring both relationship depth and balance-sheet deployment.<br>
+      • Portfolio RoE is above the <b>10%</b> floor in most relationships, but capital discipline should remain active for below-floor names.<br>
+      • CASA ratio near <b>49%</b> indicates a meaningful low-cost deposit base and treasury relationship stickiness.<br>
+      • LCR and NSFR indicators show funding resilience; this creates capacity for selective high-quality lending growth.<br>
+      • Deposit maturity and tenor views should be used to identify rollover risk, repricing windows and treasury dialogue timing.<br>
+      • Next best action: use Relationship 360 to convert country/product gaps into named RM pursuits across treasury, markets and IB wallet expansion.
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_revenue_exposure():
+    st.markdown('<h1>Revenue & Exposure</h1>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Historical portfolio revenue, exposure and product penetration view.</div>", unsafe_allow_html=True)
+    c1, c2 = st.columns(2, gap='large')
+    with c1:
+        st.plotly_chart(bar_fig(product, 'Product_Type', 'Revenue', 'Revenue by Product Type', unit='M', height=540, width=0.20), use_container_width=True, key='rev_product_v088_final')
+    with c2:
+        st.plotly_chart(bar_fig(product, 'Product_Type', 'Exposure', 'Exposure by Product Type', unit='B', height=540, width=0.20), use_container_width=True, key='exp_product_v088_final')
+    st.markdown('<h2>Top Relationship Table</h2>', unsafe_allow_html=True)
+    cols = ['Relationship_Name', 'Country', 'Sector', 'Client_Tier', 'Total_Revenue', 'Lending_Drawn', 'Facility_Limit', 'Deposit_Balance', 'LTM_Group_RoE']
+    st.dataframe(style_banking_table(relationships[cols].sort_values('Total_Revenue', ascending=False)), use_container_width=True, hide_index=True)
+
+
+def render_capital_efficiency():
+    st.markdown('<h1>Capital Efficiency</h1>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Exposure, capital usage, RWA and profitability discipline.</div>", unsafe_allow_html=True)
+    avg_roe = float(relationships['LTM_Group_RoE'].mean())
+    below = relationships[relationships['LTM_Group_RoE'] < roe_floor]
+    largest_exposure = relationships.sort_values('Lending_Drawn', ascending=False).iloc[0]
+    best_roe = relationships.sort_values('LTM_Group_RoE', ascending=False).iloc[0]
+    strategic_callout('Capital strategy readout', [
+        f"Portfolio average RoE is <b>{avg_roe*100:.1f}%</b> versus current floor of <b>{roe_floor*100:.0f}%</b>.",
+        f"Largest exposure relationship is <b>{largest_exposure['Relationship_Name']}</b> with <b>{fmt_b(largest_exposure['Lending_Drawn'])}</b> drawn exposure — monitor capital usage and pricing discipline.",
+        f"Highest-return relationship is <b>{best_roe['Relationship_Name']}</b> at <b>{best_roe['LTM_Group_RoE']*100:.1f}%</b>; use it as pricing and fee-attachment benchmark.",
+        'RM action: below-floor relationships need one of three levers — reprice, reduce RWA intensity, or attach fee / deposit products to lift total relationship return.',
+        'Management action: focus balance-sheet growth on relationships where exposure, deposits and fee wallet can work together rather than lending-only growth.'
+    ], 'blue')
+    st.plotly_chart(combo_capital_fig(relationships, roe_floor), use_container_width=True, key='capital_combo_full_v088')
+    st.markdown('<h2>Watchlist: Below Profitability Floor</h2>', unsafe_allow_html=True)
+    if below.empty:
+        st.success('No below-floor relationships detected.')
+    else:
+        st.dataframe(style_banking_table(below[['Relationship_Name','Country','Sector','Lending_Drawn','RWA','LTM_Group_RoE','Deposit_Balance']].sort_values('Lending_Drawn', ascending=False)), use_container_width=True, hide_index=True)
+
+
+def render_deposit_intelligence():
+    st.markdown('<h1>Deposit Intelligence</h1>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Deposit franchise, operational balance and treasury opportunity view.</div>", unsafe_allow_html=True)
+    casa = float(deposit.loc[deposit['Deposit_Type'].eq('CASA'), 'Deposit_Balance'].sum() / deposit['Deposit_Balance'].sum())
+    td = float(deposit.loc[deposit['Deposit_Type'].eq('Time Deposit'), 'Deposit_Balance'].sum() / deposit['Deposit_Balance'].sum())
+    largest_dep = country.sort_values('Deposit_Balance', ascending=False).iloc[0]
+    maturity_top = maturity.sort_values('Deposit_Balance', ascending=False).iloc[0]
+    strategic_callout('AI deposit strategy readout', [
+        f"Total deposit franchise is <b>{fmt_b(relationships['Deposit_Balance'].sum())}</b>; <b>{largest_dep['Country']}</b> is the largest contributor at <b>{fmt_b(largest_dep['Deposit_Balance'])}</b>.",
+        f"CASA ratio is <b>{casa*100:.0f}%</b>, giving the portfolio a meaningful low-cost and sticky funding base.",
+        f"Time deposit share is approximately <b>{td*100:.0f}%</b>; this creates repricing and rollover conversations as rates change.",
+        f"Largest maturity bucket is <b>{maturity_top['Maturity_Bucket']}</b> with <b>{fmt_b(maturity_top['Deposit_Balance'])}</b>; RM teams should monitor concentration and rollover dates.",
+        'Treasury pitch angle: use operating balances, cash concentration, liquidity sweeping and FX flow visibility to convert deposit franchise into fee wallet.',
+        'Management action: segment deposits by stability — operating balances for relationship stickiness, time deposits for repricing risk, and surplus liquidity for investment / markets dialogue.',
+    ], 'green')
+    c1, c2 = st.columns(2, gap='large')
+    with c1:
+        st.plotly_chart(bar_fig(country, 'Country', 'Deposit_Balance', 'Deposits by Country', unit='B', height=390, width=0.34), use_container_width=True, key='dep_country_full_v088')
+    with c2:
+        st.plotly_chart(donut_deposit(deposit), use_container_width=True, key='dep_type_donut_full_v088')
+    c3, c4 = st.columns([1.2, .8], gap='large')
+    with c3:
+        st.plotly_chart(maturity_fig(maturity), use_container_width=True, key='dep_maturity_full_v088')
+    with c4:
+        st.markdown("<div class='small-card'><h3>Deposit Commentary</h3><br><b>Liquidity profile</b> tells bankers whether deposits are stable operating balances, price-sensitive term money, or short-term liquidity. CASA and operational balances indicate stickiness; maturity ladder identifies rollover risk, repricing windows and treasury dialogue opportunities.<br><br><b>Banker angle:</b> do not pitch deposits alone — connect liquidity to cash management, FX, rates hedging, investment sweep and working-capital needs.</div>", unsafe_allow_html=True)
+    st.markdown('<h2>Deposit Relationship Table</h2>', unsafe_allow_html=True)
+    table = relationships[['Relationship_Name', 'Country', 'Client_Tier', 'Deposit_Balance', 'Total_Revenue']].copy()
+    table['Deposit_Type'] = np.random.default_rng(4).choice(['CASA', 'Operational', 'Time Deposit'], len(table))
+    table['Liquidity_Class'] = table['Deposit_Type'].map({'CASA':'Liquid', 'Operational':'Operational', 'Time Deposit':'Term'})
+    table['Deposit_Maturity_Date'] = [datetime(2024, 3, 31) + timedelta(days=int(x)) for x in np.random.default_rng(7).integers(15, 420, len(table))]
+    table = table.rename(columns={'Total_Revenue': 'Deposit_Revenue_Proxy'})
+    st.dataframe(style_banking_table(table.sort_values('Deposit_Balance', ascending=False)), use_container_width=True, hide_index=True)
+
+
+def render_competitor_benchmarking():
+    st.markdown('<h1>Competitor Benchmarking</h1>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Estimated wallet, current share and competitor lead bank by product family.</div>", unsafe_allow_html=True)
+    comp = wallet.groupby('Lead_Competitor', as_index=False).agg(Estimated_Wallet=('Estimated_Wallet','sum'), Current_Revenue=('Current_Revenue','sum'), Wallet_Gap=('Wallet_Gap','sum'))
+    comp['Penetration'] = comp['Current_Revenue'] / comp['Estimated_Wallet']
+    comp = comp.sort_values('Estimated_Wallet', ascending=False).reset_index(drop=True)
+    top_wallet = comp.iloc[0]; largest_gap = comp.sort_values('Wallet_Gap', ascending=False).iloc[0]; low_pen = comp.sort_values('Penetration', ascending=True).iloc[0]
+    strategic_callout('Competitor strategy readout', [
+        f"Rank is by <b>estimated wallet size</b>. <b>{top_wallet['Lead_Competitor']}</b> is the largest wallet pool at <b>${top_wallet['Estimated_Wallet']:.1f}M</b>.",
+        f"Largest absolute wallet gap is with <b>{largest_gap['Lead_Competitor']}</b> at <b>${largest_gap['Wallet_Gap']:.1f}M</b>; this should become a named RM pursuit.",
+        f"Lowest penetration pocket is <b>{low_pen['Lead_Competitor']}</b> at <b>{low_pen['Penetration']*100:.1f}%</b>; this is a good displacement target if the client need is clear.",
+        'Banker use case: identify which competitor controls the wallet, then prepare a product-specific attack plan rather than generic cross-sell.',
+        'Pitch angle: lead with client pain points — liquidity, refinancing, FX / rates exposure, working capital, or capital markets access — then map EC-AI wallet gap to the right product specialist.',
+        'Management action: convert top gaps into pursuit owner, next meeting, product partner and expected revenue capture.',
+    ], 'amber')
+    st.plotly_chart(bar_fig(comp, 'Lead_Competitor', 'Estimated_Wallet', 'Estimated Wallet by Competitor Relationship', unit='M', height=420, width=0.30), use_container_width=True, key='competitor_wallet_v088_final')
+    st.dataframe(competitor_table_format(comp), use_container_width=True, hide_index=True)
+
+
+def render_product_penetration():
+    st.markdown('<h1>Product Penetration</h1>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Revenue and exposure across product hierarchy: lending, transaction banking, markets and investment banking products.</div>", unsafe_allow_html=True)
+    prod = product.copy()
+    total_rev = float(prod['Revenue'].sum()); total_exp = float(prod['Exposure'].sum())
+    prod['Revenue_Share'] = prod['Revenue'] / total_rev
+    prod['Exposure_Share'] = prod['Exposure'] / total_exp
+    prod['Revenue_per_Exposure'] = prod['Revenue'] / prod['Exposure'].replace(0, np.nan)
+    best = prod.sort_values('Revenue_per_Exposure', ascending=False).iloc[0]
+    largest = prod.sort_values('Revenue', ascending=False).iloc[0]
+    strategic_callout('Product strategy readout', [
+        f"<b>{largest['Product_Type']}</b> is the largest revenue contributor at <b>${largest['Revenue']:.1f}M</b>.",
+        f"Best revenue intensity is <b>{best['Product_Type']}</b>; use this to identify fee / spread-efficient products to scale.",
+        'RM action: protect balance-sheet products, but attach fee products such as Markets, DCM, Cash Management and Investment Banking to improve relationship RoE.',
+    ], 'blue')
+    c1, c2 = st.columns(2, gap='large')
+    with c1:
+        st.plotly_chart(bar_fig(prod, 'Product_Type', 'Revenue', 'Product Revenue', unit='M', height=540, width=0.20), use_container_width=True, key='prod_rev_v088_final')
+    with c2:
+        st.plotly_chart(bar_fig(prod, 'Product_Type', 'Exposure', 'Product Exposure', unit='B', height=540, width=0.20), use_container_width=True, key='prod_exp_v088_final')
+    st.dataframe(style_banking_table(prod.sort_values('Revenue', ascending=False)), use_container_width=True, hide_index=True)
+
+
+def render_deal_screening():
+    st.markdown('<h1>Deal Screening (DSC)</h1>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Mini DSC dashboard: approved amount, Tx RoE, NIM, hurdle view and pricing quality.</div>", unsafe_allow_html=True)
+    d = dsc.copy()
+    d['Screen_Date'] = pd.to_datetime(d['Screen_Date'], errors='coerce')
+    d['Tx_RoE_Bucket'] = pd.cut(d['Tx_RoE'], bins=[0,0.10,0.15,0.20,1], labels=['0–10%', '10–15%', '15–20%', '>20%'])
+    d['NIM_Bucket'] = pd.cut(d['NIM_bps'], bins=[-1,30,60,100,10000], labels=['Below 30 bps', '30–60 bps', '60–100 bps', 'Over 100 bps'])
+    d['Pass_RoE'] = d['Tx_RoE'] >= roe_floor; d['Pass_NIM'] = d['NIM_bps'] >= margin_floor
+    d['Strategic_Decision'] = np.select([d['Pass_RoE'] & d['Pass_NIM'], d['Pass_RoE'] & ~d['Pass_NIM'], ~d['Pass_RoE'] & d['Pass_NIM']], ['Approve / Prioritise', 'Reprice', 'Reduce RWA / add fees'], default='Escalate / restructure')
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(metric_card('Deals', f'{len(d)}', 'screened sample'), unsafe_allow_html=True)
+    c2.markdown(metric_card('Facility Limit', fmt_m(d['Facility_Limit_M'].sum()), 'screened amount'), unsafe_allow_html=True)
+    c3.markdown(metric_card('Avg Tx RoE', f"{d['Tx_RoE'].mean()*100:.1f}%", 'transaction return'), unsafe_allow_html=True)
+    c4.markdown(metric_card('Avg NIM', f"{d['NIM_bps'].mean():.0f} bps", 'price margin'), unsafe_allow_html=True)
+    pass_rate = float((d['Pass_RoE'] & d['Pass_NIM']).mean())
+    strategic_callout('Deal strategy readout', [
+        f"<b>{pass_rate*100:.0f}%</b> of screened deals pass both RoE and NIM thresholds.",
+        'Use DSC as a forward-looking control tower: not just approval volume, but quality of future balance-sheet deployment.',
+        'Reprice low-NIM deals, restructure below-hurdle RoE deals, and attach fee/deposit wallet where lending consumes RWA.',
+    ], 'amber')
+    by_month = (d.dropna(subset=['Screen_Date']).assign(Month=lambda x: x['Screen_Date'].dt.to_period('M').dt.to_timestamp()).groupby('Month', as_index=False).agg(Facility_Limit_M=('Facility_Limit_M','sum'), Deals=('DS_ID','count'), Tx_RoE=('Tx_RoE','mean'), NIM_bps=('NIM_bps','mean')))
+    by_month['Month_Label'] = by_month['Month'].dt.strftime('%b-%y')
+    c5, c6 = st.columns(2, gap='large')
+    with c5:
+        st.plotly_chart(bar_fig(by_month, 'Month_Label', 'Facility_Limit_M', 'Approved Amount by Month', unit='M', height=390, width=0.30), use_container_width=True, key='dsc_month_v088_final')
+    with c6:
+        by_country = d.groupby('Country', as_index=False).agg(Expected_Draw_B=('Expected_Draw_B','sum'), Tx_RoE=('Tx_RoE','mean'), NIM_bps=('NIM_bps','mean'))
+        st.plotly_chart(bar_fig(by_country, 'Country', 'Expected_Draw_B', 'Expected Draw by Country', unit='B', height=390, width=0.34), use_container_width=True, key='dsc_country_v088_final')
+    c7, c8 = st.columns(2, gap='large')
+    with c7:
+        bucket = d.groupby('NIM_Bucket', observed=True, as_index=False).agg(Facility_Limit_M=('Facility_Limit_M','sum'), Deals=('DS_ID','count'))
+        st.plotly_chart(bar_fig(bucket, 'NIM_Bucket', 'Facility_Limit_M', 'NIM Bucket by Facility Limit', unit='M', height=390, width=0.34), use_container_width=True, key='dsc_nim_bucket_v088_final')
+    with c8:
+        decision = d.groupby('Strategic_Decision', as_index=False).agg(Facility_Limit_M=('Facility_Limit_M','sum'), Deals=('DS_ID','count'))
+        st.plotly_chart(bar_fig(decision, 'Strategic_Decision', 'Facility_Limit_M', 'Strategic Decision by Facility Limit', unit='M', height=390, width=0.30), use_container_width=True, key='dsc_decision_v088_final')
+    st.markdown('<h2>Deal List</h2>', unsafe_allow_html=True)
+    show_cols = ['DS_ID','Relationship_Name','Country','Product_Type','Facility_Limit_M','Expected_Utilization','Expected_Draw_B','Spread_bps','LP_bps','BAC_bps','EL_bps','NIM_bps','Tx_RoE','Strategic_Decision','Status']
+    show_cols = [c for c in show_cols if c in d.columns]
+    st.dataframe(style_banking_table(d.sort_values('Facility_Limit_M', ascending=False)[show_cols]), use_container_width=True, hide_index=True)
+
+
+def render_portfolio_data():
+    st.markdown('<h1>Portfolio Data</h1>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Historical actual facilities, drawdown, revenue, deposits and RWA.</div>", unsafe_allow_html=True)
+    excel_bytes = make_excel_download(data)
+    st.download_button('Download sample banking data (Excel)', data=excel_bytes, file_name='ecai_banking_sample_data_v088.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='download_excel_v088_final')
+    view = st.selectbox('Table', list(data.keys()), key='portfolio_table_select_v088_final')
+    st.dataframe(style_banking_table(data[view]), use_container_width=True, hide_index=True)
+
 # -----------------------------
 # Dispatch
 # -----------------------------
@@ -1487,4 +1877,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.7 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.8 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
