@@ -1,5 +1,17 @@
+# EC-AI Banking Engine v0.8.8.1 - Readable dashboard with sidebar thresholds
+# Relationship Intelligence Prototype for Corporate & Investment Banking
+# Streamlit single-file app
 
-def safe_sum(df: pd.DataFrame, col: str, default: float = 0.0) -> float:
+import math
+import io
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
+
+
+def safe_sum(df, col: str, default: float = 0.0) -> float:
     """Return numeric sum safely without crashing if a column is missing."""
     try:
         if df is None or col not in df.columns:
@@ -8,7 +20,7 @@ def safe_sum(df: pd.DataFrame, col: str, default: float = 0.0) -> float:
     except Exception:
         return default
 
-def safe_mean(df: pd.DataFrame, col: str, default=None):
+def safe_mean(df, col: str, default=None):
     """Return numeric mean safely without crashing if a column is missing."""
     try:
         if df is None or col not in df.columns:
@@ -21,7 +33,7 @@ def safe_mean(df: pd.DataFrame, col: str, default=None):
         return default
 
 def safe_display_pct(x, digits: int = 1) -> str:
-    """Safe percent display for ratios or percentage-point values."""
+    """Safe percent display for percentage-point values."""
     try:
         if x is None or pd.isna(x):
             return "N/A"
@@ -30,17 +42,6 @@ def safe_display_pct(x, digits: int = 1) -> str:
     except Exception:
         return "N/A"
 
-# EC-AI Banking Engine v0.8.8.1 - Readable dashboard with sidebar thresholds
-# Relationship Intelligence Prototype for Corporate & Investment Banking
-# Streamlit single-file app
-
-import math
-import io
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
-
-import numpy as np
-import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
