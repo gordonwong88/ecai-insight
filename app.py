@@ -1,4 +1,4 @@
-# EC-AI Banking Engine v0.8.8.9 - Readable dashboard with sidebar thresholds
+# EC-AI Banking Engine v0.8.9.0 - Readable dashboard with sidebar thresholds
 # Relationship Intelligence Prototype for Corporate & Investment Banking
 # Streamlit single-file app
 
@@ -49,7 +49,7 @@ import plotly.graph_objects as go
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="EC-AI Banking Engine v0.8.8.9",
+    page_title="EC-AI Banking Engine v0.8.9.0",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -593,7 +593,7 @@ def make_excel_download(data: Dict[str, pd.DataFrame]) -> bytes:
 with st.sidebar:
     st.markdown("<div class='sidebar-brand'>EC-AI</div>", unsafe_allow_html=True)
     st.markdown("<div class='sidebar-sub'>Banking Intelligence</div>", unsafe_allow_html=True)
-    st.markdown("<div class='sidebar-ver'>v0.8.8.9 Demo</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sidebar-ver'>v0.8.9.0 Demo</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='sidebar-section'>EXECUTIVE OVERVIEW</div>", unsafe_allow_html=True)
     page = st.radio(
@@ -644,9 +644,37 @@ top_filter_bar()
 # -----------------------------
 
 def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
-    """v0.8.8.9 executive-readable capital efficiency chart with larger labels."""
-    d = rel.copy().sort_values('Lending_Exposure', ascending=False).head(14)
-    d['Relationship_Wrapped'] = d['Relationship'].astype(str).apply(lambda x: '<br>'.join(textwrap.wrap(x, 11)))
+    """v0.8.9.0 executive-readable capital efficiency chart with larger labels."""
+    d = rel.copy()
+
+    # Defensive fallback for missing columns (prevents Streamlit crash)
+    if 'Lending_Exposure' not in d.columns:
+        fallback_cols = [c for c in d.columns if 'exposure' in str(c).lower() or 'lending' in str(c).lower()]
+        if fallback_cols:
+            d['Lending_Exposure'] = pd.to_numeric(d[fallback_cols[0]], errors='coerce').fillna(0)
+        else:
+            d['Lending_Exposure'] = 0
+
+    if 'LTM_Group_RoE' not in d.columns:
+        fallback_roe = [c for c in d.columns if 'roe' in str(c).lower()]
+        if fallback_roe:
+            d['LTM_Group_RoE'] = pd.to_numeric(d[fallback_roe[0]], errors='coerce').fillna(0)
+        else:
+            d['LTM_Group_RoE'] = 0
+
+    if 'Relationship' not in d.columns:
+        fallback_rel = [c for c in d.columns if 'client' in str(c).lower() or 'name' in str(c).lower()]
+        if fallback_rel:
+            d['Relationship'] = d[fallback_rel[0]].astype(str)
+        else:
+            d['Relationship'] = [f'Relationship {i+1}' for i in range(len(d))]
+
+    d = d.sort_values('Lending_Exposure', ascending=False).head(14)
+
+    d['Relationship_Wrapped'] = d['Relationship'].astype(str).apply(
+        lambda x: '<br>'.join(textwrap.wrap(x, 11))
+    )
+
     exposure = pd.to_numeric(d['Lending_Exposure'], errors='coerce').fillna(0)
     roe = pd.to_numeric(d['LTM_Group_RoE'], errors='coerce').fillna(0) * 100
 
@@ -979,7 +1007,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.8.9 STRATEGY UPGRADE LAYER
+# v0.8.9.0 STRATEGY UPGRADE LAYER
 # Stronger executive strategy, RM action engine, cleaner DSC,
 # richer wallet / product interpretation, and banker-grade tables.
 # =============================================================
@@ -1033,7 +1061,7 @@ def strategic_callout(title: str, bullets: List[str], tone: str = "blue") -> Non
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.34) -> go.Figure:
-    """v0.8.8.9 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
+    """v0.8.9.0 upgraded bar chart: horizontal labels, larger values, cleaner executive display."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1272,7 +1300,7 @@ def render_ai_banker_commentary():
 
 
 # =============================================================
-# v0.8.8.9 HOTFIX LAYER — readability, strategy and table fixes
+# v0.8.9.0 HOTFIX LAYER — readability, strategy and table fixes
 # =============================================================
 
 def _wrap_axis_label(label, max_len=13):
@@ -1321,7 +1349,7 @@ def _fmt_pct_1(x):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = "M", height: int = 260, width: float = 0.30) -> go.Figure:
-    """Final v0.8.8.9 chart style: horizontal wrapped labels, larger values, wider chart margins."""
+    """Final v0.8.9.0 chart style: horizontal wrapped labels, larger values, wider chart margins."""
     d = df.sort_values(y, ascending=False).copy()
     colors = [PALETTE[i] if i < len(PALETTE) else SLATE_2 for i in range(len(d))]
     suffix = "B" if unit == "B" else "M"
@@ -1580,7 +1608,7 @@ def render_portfolio_data():
 
 
 # =============================================================
-# v0.8.8.9 FINAL OVERRIDES — readability + red-error fixes
+# v0.8.9.0 FINAL OVERRIDES — readability + red-error fixes
 # =============================================================
 
 def _safe_float_v088(v, default=np.nan):
@@ -1640,7 +1668,7 @@ def _wrap_axis_label_v088(s: str, width: int = 12) -> str:
 
 
 def style_banking_table(df: pd.DataFrame):
-    """v0.8.8.9 safe table formatting — prevents red errors from mixed text/numeric fields."""
+    """v0.8.9.0 safe table formatting — prevents red errors from mixed text/numeric fields."""
     d = df.copy()
     fmt = {}
     for c in d.columns:
@@ -1677,7 +1705,7 @@ def competitor_table_format(df: pd.DataFrame):
 
 
 def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', height: int = 380, width: float = 0.26) -> go.Figure:
-    """v0.8.8.9: larger value labels + readable horizontal/wrapped x-axis + missing-column safe."""
+    """v0.8.9.0: larger value labels + readable horizontal/wrapped x-axis + missing-column safe."""
     d = df.copy()
     if y not in d.columns:
         alias_map = {
@@ -1733,7 +1761,7 @@ def bar_fig(df: pd.DataFrame, x: str, y: str, title: str, unit: str = 'M', heigh
 
 
 def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
-    """v0.8.8.9 centered donut with annotation exactly at donut centre."""
+    """v0.8.9.0 centered donut with annotation exactly at donut centre."""
     d = deposit.copy()
     total = float(pd.to_numeric(d['Deposit_Balance'], errors='coerce').fillna(0).sum())
     fig = go.Figure(data=[go.Pie(
@@ -1762,9 +1790,37 @@ def donut_deposit(deposit: pd.DataFrame) -> go.Figure:
 
 
 def combo_capital_fig(rel: pd.DataFrame, roe_floor: float) -> go.Figure:
-    """v0.8.8.9 executive-readable capital efficiency chart with larger labels."""
-    d = rel.copy().sort_values('Lending_Exposure', ascending=False).head(14)
-    d['Relationship_Wrapped'] = d['Relationship'].astype(str).apply(lambda x: '<br>'.join(textwrap.wrap(x, 11)))
+    """v0.8.9.0 executive-readable capital efficiency chart with larger labels."""
+    d = rel.copy()
+
+    # Defensive fallback for missing columns (prevents Streamlit crash)
+    if 'Lending_Exposure' not in d.columns:
+        fallback_cols = [c for c in d.columns if 'exposure' in str(c).lower() or 'lending' in str(c).lower()]
+        if fallback_cols:
+            d['Lending_Exposure'] = pd.to_numeric(d[fallback_cols[0]], errors='coerce').fillna(0)
+        else:
+            d['Lending_Exposure'] = 0
+
+    if 'LTM_Group_RoE' not in d.columns:
+        fallback_roe = [c for c in d.columns if 'roe' in str(c).lower()]
+        if fallback_roe:
+            d['LTM_Group_RoE'] = pd.to_numeric(d[fallback_roe[0]], errors='coerce').fillna(0)
+        else:
+            d['LTM_Group_RoE'] = 0
+
+    if 'Relationship' not in d.columns:
+        fallback_rel = [c for c in d.columns if 'client' in str(c).lower() or 'name' in str(c).lower()]
+        if fallback_rel:
+            d['Relationship'] = d[fallback_rel[0]].astype(str)
+        else:
+            d['Relationship'] = [f'Relationship {i+1}' for i in range(len(d))]
+
+    d = d.sort_values('Lending_Exposure', ascending=False).head(14)
+
+    d['Relationship_Wrapped'] = d['Relationship'].astype(str).apply(
+        lambda x: '<br>'.join(textwrap.wrap(x, 11))
+    )
+
     exposure = pd.to_numeric(d['Lending_Exposure'], errors='coerce').fillna(0)
     roe = pd.to_numeric(d['LTM_Group_RoE'], errors='coerce').fillna(0) * 100
 
@@ -2084,7 +2140,7 @@ def render_portfolio_data():
 
 
 def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
-    """v0.8.8.9 ordered deposit maturity ladder. On Demand = immediately withdrawable / sight deposits."""
+    """v0.8.9.0 ordered deposit maturity ladder. On Demand = immediately withdrawable / sight deposits."""
     d = maturity.copy()
     order = ["On Demand", "<= 3M", "3M – 12M", "1Y – 2Y", "2Y – 5Y", "> 5Y"]
     # Display short explanation in label for On Demand without cluttering source data
@@ -2113,7 +2169,7 @@ def maturity_fig(maturity: pd.DataFrame) -> go.Figure:
 
 
 def tenor_breakdown_fig(dsc: pd.DataFrame) -> go.Figure:
-    """v0.8.8.9 ordered lending tenor breakdown: shortest tenor shown at top."""
+    """v0.8.9.0 ordered lending tenor breakdown: shortest tenor shown at top."""
     order = ["< 1 Year", "1 – 3 Years", "3 – 5 Years", "5 – 10 Years", "10+ Years"]
     d = dsc.copy()
     if "Tenor_Bucket" not in d.columns:
@@ -2171,4 +2227,4 @@ elif page == "Portfolio Data":
 elif page == "AI Banker Commentary":
     render_ai_banker_commentary()
 
-st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.8.9 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
+st.markdown("<div class='footer'>EC-AI Banking Intelligence Platform v0.8.9.0 · Demo data only · Do not use confidential bank data in public environments.</div>", unsafe_allow_html=True)
