@@ -1,207 +1,254 @@
-
-# EC-AI Institutional Portfolio Dashboard v1.1
-# Correct file for: EC-AI Synthetic Institutional Portfolio Dataset v1
+# EC-AI Institutional Portfolio Dashboard v1.2
+# Executive Cognition Cleanup Version
 # Run:
-#   python -m streamlit run ecai_institutional_portfolio_dashboard_v1_1.py
+# python -m streamlit run ecai_institutional_portfolio_dashboard_v1_2.py
 
+import streamlit as st
 import pandas as pd
 import plotly.express as px
-import streamlit as st
+import plotly.graph_objects as go
 
 st.set_page_config(
-    page_title="EC-AI | Institutional Portfolio Dashboard",
+    page_title="EC-AI Institutional Portfolio Dashboard",
     page_icon="🏦",
-    layout="wide",
+    layout="wide"
 )
 
-# ----------------------------
-# Styling
-# ----------------------------
-NAVY = "#071B3A"
-BLUE = "#0F4C81"
-SLATE = "#526173"
-BORDER = "#D8DEE6"
-BG = "#F6F8FB"
+# =========================================================
+# STYLE
+# =========================================================
 
-st.markdown(
-    """
+st.markdown("""
 <style>
-.block-container {padding-top: 1.4rem; max-width: 1500px;}
-[data-testid="stSidebar"] {background: linear-gradient(180deg,#061A36 0%,#0B2C55 100%);}
-[data-testid="stSidebar"] * {color: white;}
-.ec-kicker {color:#526173;font-size:15px;margin-top:-8px;margin-bottom:16px;}
+
+.block-container {
+    padding-top: 1.2rem;
+    max-width: 1500px;
+}
+
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg,#081B33 0%, #0C315A 100%);
+}
+
+[data-testid="stSidebar"] * {
+    color: white;
+}
+
+.main-title {
+    font-size: 46px;
+    font-weight: 800;
+    color: #071B3A;
+    margin-bottom: 0px;
+}
+
+.sub-title {
+    color: #526173;
+    font-size: 15px;
+    margin-top: -6px;
+    margin-bottom: 20px;
+}
+
 .kpi-card {
-    background:white;border:1px solid #D8DEE6;border-radius:14px;
-    padding:16px 18px;box-shadow:0 1px 3px rgba(15,23,42,.06);
-    min-height:96px;
+    background: white;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.06);
 }
-.kpi-label {color:#526173;font-size:13px;font-weight:600;}
-.kpi-value {color:#071B3A;font-size:28px;font-weight:850;margin-top:8px;}
-.kpi-sub {color:#526173;font-size:12px;margin-top:2px;}
-.narrative {
-    background:#F8FAFC;border-left:5px solid #071B3A;border-radius:12px;
-    padding:18px 22px;color:#071B3A;font-size:16px;line-height:1.55;
-    margin-top:14px;margin-bottom:18px;
+
+.kpi-label {
+    font-size: 13px;
+    color: #526173;
+    font-weight: 600;
 }
-.section-card {
-    background:white;border:1px solid #D8DEE6;border-radius:14px;
-    padding:18px 18px;box-shadow:0 1px 3px rgba(15,23,42,.05);
+
+.kpi-value {
+    font-size: 28px;
+    color: #071B3A;
+    font-weight: 850;
+    margin-top: 8px;
 }
-.small-note {color:#526173;font-size:13px;}
+
+.kpi-sub {
+    font-size: 12px;
+    color: #7B8794;
+    margin-top: 4px;
+}
+
+.narrative-box {
+    background: #F8FAFC;
+    border-left: 5px solid #071B3A;
+    border-radius: 12px;
+    padding: 18px 22px;
+    margin-top: 16px;
+    margin-bottom: 18px;
+    color: #071B3A;
+    line-height: 1.6;
+    font-size: 16px;
+}
+
+.side-card {
+    background: white;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.05);
+}
+
+.side-title {
+    color: #071B3A;
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 14px;
+}
+
+.small-note {
+    color: #526173;
+    font-size: 13px;
+}
+
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-# ----------------------------
-# Data
-# ----------------------------
-ROWS = [
-["ABC Infrastructure","Infrastructure","Singapore",8.5,1.2,58,7.2,115,54,93,64,88,"Treasury Deepening"],
-["Sakura Financial","Financials","Japan",5.2,4.8,82,14.1,92,92,90,28,66,"Maintain Coverage"],
-["Oceanlink Shipping","Shipping","Hong Kong",6.4,0.8,41,4.9,98,35,42,88,39,"Risk Monitoring"],
-["Lion City REIT","Real Estate","Singapore",7.1,1.0,49,5.8,105,46,79,72,55,"Repricing Review"],
-["Zenith Manufacturing","Manufacturing","Thailand",3.8,1.9,63,10.8,132,68,76,44,91,"FX Monetization"],
-["Nippon Industrial","Industrials","Japan",2.9,3.5,85,11.2,126,88,58,35,61,"Treasury Anchor"],
-["Mekong Aviation","Aviation","Vietnam",4.6,0.5,33,3.8,92,28,51,91,42,"Portfolio Review"],
-["Pacific Energy","Energy","Australia",9.2,1.4,46,6.4,108,49,84,70,74,"Treasury Deepening"],
-["Dragon Telecom","Telecom","China",5.9,2.4,69,9.8,121,73,81,47,89,"Wallet Expansion"],
-["Atlas Logistics","Logistics","Hong Kong",2.4,2.9,81,10.5,119,87,61,32,58,"Treasury Anchor"],
-["Meridian Sovereign Fund","Sovereign","UAE",4.8,5.2,88,13.5,84,94,95,18,62,"Maintain Coverage"],
-["Harbor Manufacturing","Manufacturing","Korea",3.5,2.7,74,11.1,127,81,64,36,73,"Treasury Expansion"],
-["Global Trade Holdings","Trading","Singapore",4.2,3.8,79,10.7,118,85,69,41,77,"Maintain Coverage"],
-["Horizon Commodities","Commodities","Indonesia",5.5,0.9,39,5.2,103,34,48,83,57,"Portfolio Review"],
-["Bluewave Offshore","Offshore Services","Malaysia",4.1,0.7,36,4.7,96,31,44,86,40,"Risk Monitoring"],
-["ASEAN Retail Group","Retail","Thailand",2.8,1.8,67,12.2,137,71,73,38,90,"Wallet Expansion"],
-["Nova Mobility","Mobility","China",3.9,1.5,59,9.4,125,62,78,46,92,"Growth Focus"],
-["Quantum Semicon","Semiconductor","Taiwan",6.1,3.1,76,13.1,143,84,87,29,81,"Strategic Expansion"],
-["Eastern Development Bank","Financials","Korea",5.0,4.4,83,12.8,89,91,86,24,67,"Maintain Coverage"],
-["Crest Infrastructure","Infrastructure","Indonesia",7.4,1.1,52,7.0,112,51,88,63,82,"Treasury Deepening"],
-["Summit Petrochem","Chemicals","Singapore",4.6,1.3,55,8.1,116,57,72,54,76,"Wallet Expansion"],
-["Polaris Shipping","Shipping","Greece",5.7,0.6,29,4.2,90,25,38,92,34,"Portfolio Review"],
-["Orion Infrastructure","Infrastructure","India",8.0,2.0,61,8.5,118,65,91,57,84,"Treasury Expansion"],
-["Vertex Capital","Financials","Hong Kong",3.7,3.4,86,13.4,91,89,75,26,69,"Crown Jewel"],
-["Delta Aviation Leasing","Aviation","Ireland",6.8,0.8,37,5.0,95,33,59,85,51,"Risk Monitoring"],
-["Titan Energy Partners","Energy","Qatar",9.5,2.5,64,8.9,122,71,89,52,80,"Treasury Expansion"],
-["Evergreen Ports","Ports","Singapore",4.4,2.2,71,10.9,129,78,77,33,74,"Operational Deepening"],
-["Solaris Utilities","Utilities","Australia",5.3,1.7,60,8.7,114,63,80,49,79,"Treasury Expansion"],
-["Infinity Data Centers","Technology","Japan",3.3,2.1,73,12.5,138,79,83,27,86,"Growth Focus"],
-["Alpine Mining Group","Mining","Canada",7.0,0.9,42,5.5,101,38,55,81,48,"Portfolio Review"],
-["Metro Transit Holdings","Transportation","Hong Kong",6.2,1.6,57,7.9,111,59,82,58,77,"Treasury Deepening"],
-["Prime Healthcare Asia","Healthcare","Singapore",3.1,2.0,75,12.1,135,82,74,31,85,"Wallet Expansion"],
-["Unity Consumer Group","Consumer","China",2.7,1.9,69,11.3,131,74,71,39,88,"Growth Focus"],
-["Vertex Logistics Asia","Logistics","Vietnam",3.8,2.5,78,10.2,124,83,68,34,72,"Treasury Anchor"],
-["Sterling Real Assets","Real Estate","UK",6.5,1.0,48,6.1,106,44,76,74,58,"Repricing Review"],
-["Nexus Trade Finance","Trade Finance","Singapore",4.0,3.0,80,11.5,128,86,70,29,73,"Treasury Anchor"],
-["Falcon Marine Group","Marine","Norway",5.6,0.7,35,4.8,93,30,46,89,41,"Portfolio Review"],
-["Terra Renewable Energy","Renewables","Australia",7.8,1.9,62,8.8,118,66,90,45,83,"Strategic Expansion"],
-["BluePeak Telecom","Telecom","Malaysia",4.9,2.3,70,10.1,125,77,78,37,87,"Wallet Expansion"],
-["Quantum Infrastructure Fund","Infrastructure","UAE",8.9,3.2,77,12.9,101,88,94,22,79,"Crown Jewel"],
-["Horizon Payment Systems","Fintech","Singapore",3.6,2.8,84,13.0,136,90,81,24,92,"Growth Focus"],
-["Pacific Semiconductor","Semiconductor","Taiwan",6.3,3.0,75,12.7,142,83,88,30,84,"Strategic Expansion"],
-["Evergreen Aviation Services","Aviation","Japan",5.2,1.1,50,6.3,100,47,65,69,63,"Risk Monitoring"],
-["Atlas Consumer Brands","Consumer","Indonesia",2.9,1.7,66,10.9,130,72,67,41,85,"Wallet Expansion"],
-["Crest Capital Partners","Financials","Hong Kong",4.3,3.6,82,13.6,90,91,79,23,70,"Crown Jewel"],
-["Nova Infrastructure Holdings","Infrastructure","Vietnam",7.6,1.8,59,8.2,116,61,89,53,82,"Treasury Deepening"],
-["Vertex Industrial Asia","Industrials","Korea",3.4,2.6,79,11.7,127,84,66,32,71,"Treasury Anchor"],
-["Oceanic Bulk Carriers","Shipping","Greece",6.0,0.5,28,4.0,89,22,35,94,30,"Portfolio Review"],
-["Summit Digital Networks","Telecom","India",5.1,2.4,71,10.6,124,78,80,39,88,"Wallet Expansion"],
-["Titan Infrastructure Asia","Infrastructure","Philippines",8.2,1.5,56,7.8,113,58,92,61,81,"Treasury Deepening"],
+# =========================================================
+# SYNTHETIC DATASET
+# =========================================================
+
+rows = [
+["ABC Infrastructure","Infrastructure","Singapore",8.5,1.2,54,93,64,"Treasury Growth"],
+["Sakura Financial","Financials","Japan",5.2,4.8,92,90,28,"Crown Jewel"],
+["Oceanlink Shipping","Shipping","Hong Kong",6.4,0.8,35,42,88,"Portfolio Review"],
+["Pacific Energy","Energy","Australia",9.2,1.4,49,84,70,"Treasury Growth"],
+["Dragon Telecom","Telecom","China",5.9,2.4,73,81,47,"Strategic Growth"],
+["Meridian Sovereign Fund","Sovereign","UAE",4.8,5.2,94,95,18,"Crown Jewel"],
+["Quantum Infrastructure Fund","Infrastructure","UAE",8.9,3.2,88,94,22,"Crown Jewel"],
+["Orion Infrastructure","Infrastructure","India",8.0,2.0,65,91,57,"Treasury Growth"],
+["Titan Infrastructure Asia","Infrastructure","Philippines",8.2,1.5,58,92,61,"Treasury Growth"],
+["Terra Renewable Energy","Renewables","Australia",7.8,1.9,66,90,45,"Strategic Growth"],
+["Quantum Semicon","Semiconductor","Taiwan",6.1,3.1,84,87,29,"Strategic Growth"],
+["Pacific Semiconductor","Semiconductor","Taiwan",6.3,3.0,83,88,30,"Strategic Growth"],
+["Nova Infrastructure Holdings","Infrastructure","Vietnam",7.6,1.8,61,89,53,"Treasury Growth"],
+["Titan Energy Partners","Energy","Qatar",9.5,2.5,71,89,52,"Treasury Growth"],
+["Eastern Development Bank","Financials","Korea",5.0,4.4,91,86,24,"Crown Jewel"],
+["Vertex Capital","Financials","Hong Kong",3.7,3.4,89,75,26,"Crown Jewel"],
+["Crest Capital Partners","Financials","Hong Kong",4.3,3.6,91,79,23,"Crown Jewel"],
+["Bluewave Offshore","Offshore Services","Malaysia",4.1,0.7,31,44,86,"Portfolio Review"],
+["Polaris Shipping","Shipping","Greece",5.7,0.6,25,38,92,"Portfolio Review"],
+["Oceanic Bulk Carriers","Shipping","Greece",6.0,0.5,22,35,94,"Portfolio Review"],
 ]
 
-COLS = [
-    "Relationship","Sector","Country","Exposure_USD_B","Deposits_USD_B",
-    "CASA_pct","RoE_pct","Spread_bps","Treasury_Score","Strategic_Score",
-    "Risk_Score","Wallet_Score","Priority"
+cols = [
+    "Relationship",
+    "Sector",
+    "Country",
+    "Exposure_USD_B",
+    "Deposits_USD_B",
+    "Treasury_Score",
+    "Strategic_Score",
+    "Risk_Score",
+    "Priority"
 ]
 
-@st.cache_data
-def load_data():
-    return pd.DataFrame(ROWS, columns=COLS)
+df = pd.DataFrame(rows, columns=cols)
 
-df = load_data()
+# =========================================================
+# HELPERS
+# =========================================================
 
-def fmt_b(x): return f"USD {x:.1f}B"
-def fmt_pct(x): return f"{x:.1f}%"
+def fmt_b(x):
+    return f"USD {x:.1f}B"
+
+def fmt_pct(x):
+    return f"{x:.1f}%"
 
 def quadrant(row):
+
     if row["Strategic_Score"] >= 70 and row["Treasury_Score"] >= 70:
         return "Crown Jewel"
-    if row["Strategic_Score"] >= 70 and row["Treasury_Score"] < 70:
+
+    elif row["Strategic_Score"] >= 70:
         return "Optimization Focus"
-    if row["Strategic_Score"] < 70 and row["Treasury_Score"] >= 70:
+
+    elif row["Treasury_Score"] >= 70:
         return "Treasury Anchor"
+
     return "Portfolio Review"
 
 df["Quadrant"] = df.apply(quadrant, axis=1)
-df["Treasury_Penetration_pct"] = df["Deposits_USD_B"] / df["Exposure_USD_B"] * 100
 
-# ----------------------------
-# Sidebar
-# ----------------------------
+# =========================================================
+# SIDEBAR
+# =========================================================
+
 st.sidebar.markdown("## EC-AI")
-st.sidebar.markdown("Institutional Prototype")
-st.sidebar.markdown("v1.1")
-st.sidebar.markdown("---")
-st.sidebar.markdown("### Navigation")
-st.sidebar.radio("", ["Portfolio Overview", "Relationship Drilldown", "Treasury Analytics", "Risk & Concentration", "Management Actions"], index=0)
+st.sidebar.markdown("Institutional Relationship OS")
+st.sidebar.markdown("v1.2")
+
 st.sidebar.markdown("---")
 
-st.sidebar.markdown("### Filters")
-selected_priority = st.sidebar.multiselect("Priority", sorted(df["Priority"].unique()), default=sorted(df["Priority"].unique()))
-selected_country = st.sidebar.multiselect("Country", sorted(df["Country"].unique()), default=sorted(df["Country"].unique()))
-selected_sector = st.sidebar.multiselect("Sector", sorted(df["Sector"].unique()), default=sorted(df["Sector"].unique()))
+selected_priority = st.sidebar.multiselect(
+    "Priority",
+    sorted(df["Priority"].unique()),
+    default=sorted(df["Priority"].unique())
+)
 
-label_mode = st.sidebar.radio(
-    "Bubble labels",
-    ["Show only priority names", "Show all names", "Hide names"],
-    index=0,
-    help="Use 'Show only priority names' to prevent overcrowding."
+selected_country = st.sidebar.multiselect(
+    "Country",
+    sorted(df["Country"].unique()),
+    default=sorted(df["Country"].unique())
 )
 
 view = df[
     df["Priority"].isin(selected_priority)
     & df["Country"].isin(selected_country)
-    & df["Sector"].isin(selected_sector)
 ].copy()
 
-# Labels: solve overcrowding
-top_exposure_names = set(view.nlargest(10, "Exposure_USD_B")["Relationship"])
-priority_names = set(view[(view["Strategic_Score"] >= 85) | (view["Risk_Score"] >= 85) | (view["Exposure_USD_B"] >= 7.5)]["Relationship"])
-label_names = top_exposure_names.union(priority_names)
+# =========================================================
+# HEADER
+# =========================================================
 
-if label_mode == "Show all names":
-    view["Label"] = view["Relationship"]
-elif label_mode == "Hide names":
-    view["Label"] = ""
-else:
-    view["Label"] = view["Relationship"].where(view["Relationship"].isin(label_names), "")
+st.markdown(
+    '<div class="main-title">Portfolio Cognition Dashboard</div>',
+    unsafe_allow_html=True
+)
 
-# ----------------------------
-# Header
-# ----------------------------
-st.title("Portfolio Cognition Dashboard")
-st.markdown("<div class='ec-kicker'>Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v1</div>", unsafe_allow_html=True)
+st.markdown(
+    '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v1.2</div>',
+    unsafe_allow_html=True
+)
 
-# KPI calculations
+# =========================================================
+# KPI STRIP
+# =========================================================
+
 total_exposure = view["Exposure_USD_B"].sum()
 total_deposits = view["Deposits_USD_B"].sum()
-weighted_treasury = (view["Treasury_Score"] * view["Exposure_USD_B"]).sum() / total_exposure if total_exposure else 0
-weighted_strategic = (view["Strategic_Score"] * view["Exposure_USD_B"]).sum() / total_exposure if total_exposure else 0
-avg_penetration = total_deposits / total_exposure * 100 if total_exposure else 0
-high_priority = int(((view["Strategic_Score"] >= 85) | (view["Risk_Score"] >= 85)).sum())
+
+weighted_treasury = (
+    view["Treasury_Score"] * view["Exposure_USD_B"]
+).sum() / total_exposure
+
+weighted_strategic = (
+    view["Strategic_Score"] * view["Exposure_USD_B"]
+).sum() / total_exposure
+
+coverage = total_deposits / total_exposure * 100
 
 kpis = [
     ("Total Exposure", fmt_b(total_exposure), "Filtered portfolio"),
     ("Weighted Treasury Score", f"{weighted_treasury:.1f}", "Out of 100"),
     ("Weighted Strategic Score", f"{weighted_strategic:.1f}", "Out of 100"),
-    ("Avg. Treasury Penetration", fmt_pct(avg_penetration), "Deposits / exposure"),
-    ("High Priority Relationships", f"{high_priority}", "Strategic or risk-sensitive"),
+    ("Treasury Coverage", fmt_pct(coverage), "Deposits / exposure"),
+    ("Priority Relationships", str(len(view)), "Filtered names"),
 ]
 
-cols = st.columns(5)
-for col, (label, value, sub) in zip(cols, kpis):
+cols_kpi = st.columns(5)
+
+for col, (label, value, sub) in zip(cols_kpi, kpis):
+
     with col:
+
         st.markdown(f"""
         <div class="kpi-card">
             <div class="kpi-label">{label}</div>
@@ -210,42 +257,53 @@ for col, (label, value, sub) in zip(cols, kpis):
         </div>
         """, unsafe_allow_html=True)
 
-# ----------------------------
-# Narrative
-# ----------------------------
-st.markdown(
-    """
-<div class="narrative">
-The portfolio shows a clear split between crown-jewel relationships, treasury-anchor names, and strategic relationships requiring deeper wallet penetration.
-Management attention should focus on high strategic / low treasury relationships, while preserving deposit-rich relationships that support funding quality.
-</div>
-""",
-    unsafe_allow_html=True,
-)
+# =========================================================
+# EXECUTIVE NARRATIVE
+# =========================================================
 
-# ----------------------------
-# Quadrant + side panel
-# ----------------------------
-left, right = st.columns([4.7, 1.45], gap="large")
+st.markdown("""
+<div class="narrative-box">
+
+The portfolio shows concentration in strategic infrastructure and financial relationships requiring treasury penetration enhancement.
+
+Management attention should focus on strategic relationships with weak deposit linkage while protecting crown-jewel funding relationships.
+
+</div>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# MAIN LAYOUT
+# =========================================================
+
+left, right = st.columns([4.8, 1.4], gap="large")
+
+# =========================================================
+# QUADRANT
+# =========================================================
 
 with left:
-    st.markdown("### Portfolio Cognition Quadrant")
-    st.markdown("<div class='small-note'>X-axis: Treasury Score | Y-axis: Strategic Score | Bubble size: Exposure in USD billions</div>", unsafe_allow_html=True)
+
+    st.markdown("## Portfolio Cognition Quadrant")
+
+    st.markdown(
+        '<div class="small-note">X-axis: Treasury Score | Y-axis: Strategic Score | Bubble size: Exposure in USD billions</div>',
+        unsafe_allow_html=True
+    )
+
+    important_names = set(
+        view.nlargest(6, "Exposure_USD_B")["Relationship"]
+    )
+
+    view["Label"] = view["Relationship"].where(
+        view["Relationship"].isin(important_names),
+        ""
+    )
 
     color_map = {
-        "Crown Jewel": "#E53935",
-        "Treasury Deepening": "#1565C0",
-        "Treasury Expansion": "#1976D2",
-        "Maintain Coverage": "#2E7D32",
-        "Treasury Anchor": "#00897B",
+        "Treasury Growth": "#1565C0",
+        "Strategic Growth": "#5E35B1",
+        "Crown Jewel": "#D32F2F",
         "Portfolio Review": "#F57C00",
-        "Risk Monitoring": "#D32F2F",
-        "Repricing Review": "#8E24AA",
-        "Wallet Expansion": "#00ACC1",
-        "Growth Focus": "#7CB342",
-        "Strategic Expansion": "#5E35B1",
-        "FX Monetization": "#FB8C00",
-        "Operational Deepening": "#6D4C41",
     }
 
     fig = px.scatter(
@@ -254,124 +312,305 @@ with left:
         y="Strategic_Score",
         size="Exposure_USD_B",
         color="Priority",
-        color_discrete_map=color_map,
         text="Label",
         hover_name="Relationship",
+        size_max=36,
+        color_discrete_map=color_map,
         hover_data={
-            "Sector": True,
             "Country": True,
-            "Quadrant": True,
+            "Sector": True,
             "Exposure_USD_B": ":.1f",
             "Deposits_USD_B": ":.1f",
-            "Treasury_Penetration_pct": ":.1f",
-            "RoE_pct": ":.1f",
             "Risk_Score": True,
-            "Wallet_Score": True,
-            "Label": False,
-        },
-        size_max=44,
+            "Label": False
+        }
     )
 
-    # Quadrant shading
-    fig.add_shape(type="rect", x0=0, y0=70, x1=70, y1=100, fillcolor="rgba(255,152,0,0.10)", line_width=0, layer="below")
-    fig.add_shape(type="rect", x0=70, y0=70, x1=100, y1=100, fillcolor="rgba(76,175,80,0.10)", line_width=0, layer="below")
-    fig.add_shape(type="rect", x0=0, y0=0, x1=70, y1=70, fillcolor="rgba(244,67,54,0.08)", line_width=0, layer="below")
-    fig.add_shape(type="rect", x0=70, y0=0, x1=100, y1=70, fillcolor="rgba(33,150,243,0.08)", line_width=0, layer="below")
-    fig.add_vline(x=70, line_width=1, line_dash="dash", line_color="#9CA3AF")
-    fig.add_hline(y=70, line_width=1, line_dash="dash", line_color="#9CA3AF")
+    # Quadrants
 
-    fig.add_annotation(x=33, y=96, text="<b>OPTIMIZATION FOCUS</b><br>High Strategic / Low Treasury", showarrow=False, align="left", font=dict(size=13, color="#8A3B00"))
-    fig.add_annotation(x=88, y=96, text="<b>CROWN JEWEL</b><br>High Strategic / High Treasury", showarrow=False, align="right", font=dict(size=13, color="#0B6B2E"))
-    fig.add_annotation(x=33, y=8, text="<b>PORTFOLIO REVIEW</b><br>Low Strategic / Low Treasury", showarrow=False, align="left", font=dict(size=13, color="#8B1E1E"))
-    fig.add_annotation(x=88, y=8, text="<b>TREASURY ANCHOR</b><br>Low Strategic / High Treasury", showarrow=False, align="right", font=dict(size=13, color="#0B3D75"))
+    fig.add_shape(
+        type="rect",
+        x0=0,
+        y0=70,
+        x1=70,
+        y1=100,
+        fillcolor="rgba(255,152,0,0.10)",
+        line_width=0
+    )
+
+    fig.add_shape(
+        type="rect",
+        x0=70,
+        y0=70,
+        x1=100,
+        y1=100,
+        fillcolor="rgba(76,175,80,0.10)",
+        line_width=0
+    )
+
+    fig.add_shape(
+        type="rect",
+        x0=0,
+        y0=0,
+        x1=70,
+        y1=70,
+        fillcolor="rgba(244,67,54,0.06)",
+        line_width=0
+    )
+
+    fig.add_shape(
+        type="rect",
+        x0=70,
+        y0=0,
+        x1=100,
+        y1=70,
+        fillcolor="rgba(33,150,243,0.06)",
+        line_width=0
+    )
+
+    fig.add_vline(
+        x=70,
+        line_width=1,
+        line_dash="dash",
+        line_color="#9CA3AF"
+    )
+
+    fig.add_hline(
+        y=70,
+        line_width=1,
+        line_dash="dash",
+        line_color="#9CA3AF"
+    )
+
+    # Labels
+
+    fig.add_annotation(
+        x=22,
+        y=96,
+        text="<b>OPTIMIZATION FOCUS</b>",
+        showarrow=False,
+        font=dict(size=14)
+    )
+
+    fig.add_annotation(
+        x=87,
+        y=96,
+        text="<b>CROWN JEWEL</b>",
+        showarrow=False,
+        font=dict(size=14)
+    )
+
+    fig.add_annotation(
+        x=22,
+        y=8,
+        text="<b>PORTFOLIO REVIEW</b>",
+        showarrow=False,
+        font=dict(size=14)
+    )
+
+    fig.add_annotation(
+        x=87,
+        y=8,
+        text="<b>TREASURY ANCHOR</b>",
+        showarrow=False,
+        font=dict(size=14)
+    )
 
     fig.update_traces(
         textposition="top center",
-        textfont=dict(size=10, color="#111827"),
-        marker=dict(line=dict(width=1, color="white"), opacity=0.83),
+        textfont=dict(size=10),
+        marker=dict(
+            opacity=0.82,
+            line=dict(width=1, color="white")
+        )
     )
 
     fig.update_layout(
-        height=650,
         template="plotly_white",
-        margin=dict(l=20, r=20, t=30, b=20),
-        legend_title_text="Priority",
-        font=dict(family="Inter, Arial", size=12, color="#071B3A"),
-        xaxis=dict(title="Treasury Score", range=[0, 100], dtick=10, gridcolor="rgba(17,24,39,0.08)"),
-        yaxis=dict(title="Strategic Score", range=[0, 100], dtick=10, gridcolor="rgba(17,24,39,0.08)"),
+        height=650,
+        margin=dict(l=20, r=20, t=20, b=20),
+        showlegend=False,
+        font=dict(family="Inter, Arial", size=12),
+        xaxis=dict(
+            title="Treasury Score",
+            range=[0,100],
+            dtick=10
+        ),
+        yaxis=dict(
+            title="Strategic Score",
+            range=[0,100],
+            dtick=10
+        )
     )
 
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+    st.plotly_chart(fig, use_container_width=True)
+
+# =========================================================
+# RIGHT PANEL
+# =========================================================
 
 with right:
-    st.markdown("### Top Exposure")
-    top5 = view.nlargest(5, "Exposure_USD_B")[["Relationship", "Exposure_USD_B", "Priority"]].copy()
-    for _, r in top5.iterrows():
-        st.markdown(f"**{r['Relationship']}**  \n{fmt_b(r['Exposure_USD_B'])} · {r['Priority']}")
-        st.markdown("---")
 
-    st.markdown("### Interpretation Guide")
-    st.info(
-        "Top-right: protect and deepen.\n\n"
-        "Top-left: strategic relationships needing treasury penetration.\n\n"
-        "Bottom-right: funding anchors to maintain.\n\n"
-        "Bottom-left: review economics and resource allocation."
+    st.markdown(
+        '<div class="side-title">Portfolio Concentration</div>',
+        unsafe_allow_html=True
     )
 
-# ----------------------------
-# Tables
-# ----------------------------
-st.markdown("### Management Attention Priorities")
+    top5_pct = (
+        view.nlargest(5, "Exposure_USD_B")["Exposure_USD_B"].sum()
+        / total_exposure * 100
+    )
+
+    st.markdown(f"""
+    <div class="side-card">
+    <b>Top 5 Relationships</b><br>
+    {top5_pct:.1f}% of portfolio exposure
+    </div>
+    """, unsafe_allow_html=True)
+
+    infra_pct = (
+        view[view["Sector"]=="Infrastructure"]["Exposure_USD_B"].sum()
+        / total_exposure * 100
+    )
+
+    st.markdown(f"""
+    <div class="side-card">
+    <b>Infrastructure Concentration</b><br>
+    {infra_pct:.1f}% of total exposure
+    </div>
+    """, unsafe_allow_html=True)
+
+    ship_pct = (
+        view[
+            view["Sector"].isin(["Shipping","Aviation"])
+        ]["Exposure_USD_B"].sum()
+        / total_exposure * 100
+    )
+
+    st.markdown(f"""
+    <div class="side-card">
+    <b>Shipping & Aviation Risk</b><br>
+    {ship_pct:.1f}% of exposure
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="side-title">Top Management Actions</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown("""
+    <div class="side-card">
+
+    1. Deepen treasury linkage for infrastructure relationships<br><br>
+
+    2. Monitor refinancing-sensitive shipping exposures<br><br>
+
+    3. Protect crown-jewel deposit relationships<br><br>
+
+    4. Expand wallet penetration across strategic names
+
+    </div>
+    """, unsafe_allow_html=True)
+
+# =========================================================
+# MANAGEMENT TABLE
+# =========================================================
+
+st.markdown("## Management Attention Priorities")
 
 attention = view.sort_values(
-    ["Strategic_Score", "Risk_Score", "Exposure_USD_B"],
-    ascending=[False, False, False],
-).head(12).copy()
+    ["Strategic_Score","Risk_Score","Exposure_USD_B"],
+    ascending=[False,False,False]
+).copy()
 
 attention["Exposure"] = attention["Exposure_USD_B"].map(fmt_b)
 attention["Deposits"] = attention["Deposits_USD_B"].map(fmt_b)
-attention["Treasury Penetration"] = attention["Treasury_Penetration_pct"].map(fmt_pct)
 
 st.dataframe(
     attention[
         [
-            "Relationship","Quadrant","Priority","Country","Sector","Exposure","Deposits",
-            "Treasury_Score","Strategic_Score","Risk_Score","Treasury Penetration"
+            "Relationship",
+            "Quadrant",
+            "Priority",
+            "Country",
+            "Sector",
+            "Exposure",
+            "Deposits",
+            "Treasury_Score",
+            "Strategic_Score",
+            "Risk_Score"
         ]
     ],
     use_container_width=True,
-    hide_index=True,
+    hide_index=True
 )
 
-# ----------------------------
-# Drilldown
-# ----------------------------
-st.markdown("### Relationship Quick Drilldown")
-selected = st.selectbox("Select relationship", view["Relationship"].tolist())
-row = view[view["Relationship"] == selected].iloc[0]
+# =========================================================
+# RELATIONSHIP DRILLDOWN
+# =========================================================
+
+st.markdown("## Relationship Quick Drilldown")
+
+selected = st.selectbox(
+    "Select relationship",
+    view["Relationship"].tolist()
+)
+
+row = view[
+    view["Relationship"] == selected
+].iloc[0]
 
 d1, d2, d3, d4, d5 = st.columns(5)
+
 d1.metric("Exposure", fmt_b(row["Exposure_USD_B"]))
 d2.metric("Deposits", fmt_b(row["Deposits_USD_B"]))
 d3.metric("Treasury Score", int(row["Treasury_Score"]))
 d4.metric("Strategic Score", int(row["Strategic_Score"]))
-d5.metric("RoE", fmt_pct(row["RoE_pct"]))
+d5.metric("Risk Score", int(row["Risk_Score"]))
 
 if row["Quadrant"] == "Optimization Focus":
-    rel_text = "Strategically important relationship requiring treasury deepening and wallet penetration improvement."
+
+    msg = """
+    Strategically important relationship requiring treasury deepening
+    and stronger operational wallet linkage.
+    """
+
 elif row["Quadrant"] == "Crown Jewel":
-    rel_text = "High-quality relationship combining strategic relevance, funding linkage, and strong management importance."
+
+    msg = """
+    High-quality relationship combining strategic relevance with
+    strong treasury contribution.
+    """
+
 elif row["Quadrant"] == "Treasury Anchor":
-    rel_text = "Relationship is valuable from a deposit and funding contribution perspective; cross-sell selectively."
+
+    msg = """
+    Relationship remains valuable from a liquidity and funding perspective.
+    """
+
 else:
-    rel_text = "Relationship may warrant portfolio review given weaker strategic relevance and lower treasury contribution."
 
-st.markdown(f"<div class='narrative'>{rel_text}</div>", unsafe_allow_html=True)
+    msg = """
+    Relationship may warrant portfolio review given weaker economics
+    and strategic positioning.
+    """
 
-csv = df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "Download Synthetic Portfolio Dataset CSV",
-    csv,
-    "ecai_synthetic_institutional_portfolio_dataset_v1.csv",
-    "text/csv",
+st.markdown(
+    f'''
+    <div class="narrative-box">
+    {msg}
+    </div>
+    ''',
+    unsafe_allow_html=True
+)
+
+# =========================================================
+# FOOTER
+# =========================================================
+
+st.markdown("---")
+
+st.caption(
+    "EC-AI Institutional Portfolio Prototype v1.2 | Executive Cognition Cleanup"
 )
