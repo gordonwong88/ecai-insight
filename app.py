@@ -1,4 +1,4 @@
-# EC-AI Institutional Portfolio Dashboard v1.5
+# EC-AI Institutional Portfolio Dashboard v1.6
 # Locked v1.4 layout + header/drilldown polish fixes
 # Run:
 #   python -m streamlit run ecai_institutional_portfolio_dashboard_v1_5.py
@@ -19,7 +19,7 @@ st.set_page_config(
 st.markdown("""
 <style>
 .block-container {
-    padding-top: 2.2rem;
+    padding-top: 3.2rem;
     padding-left: 2rem;
     padding-right: 2rem;
     max-width: 1720px;
@@ -48,11 +48,12 @@ st.markdown("""
     margin-bottom: 18px;
 }
 .portfolio-card {
+    margin-top: 12px;
     background: white;
     border: 1px solid #D8DEE6;
     border-radius: 14px;
-    padding: 12px 18px;
-    min-width: 320px;
+    padding: 16px 20px;
+    min-width: 350px;
     overflow: visible;
     box-shadow: 0 1px 3px rgba(15,23,42,.05);
 }
@@ -204,7 +205,7 @@ df["Quadrant"] = df.apply(quadrant, axis=1)
 # =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("v1.5")
+st.sidebar.markdown("v1.6")
 st.sidebar.markdown("---")
 
 selected_priority = st.sidebar.multiselect(
@@ -235,7 +236,7 @@ header_left, header_right = st.columns([4.4, 1.45], gap="large")
 with header_left:
     st.markdown('<div class="main-title">Portfolio Cognition Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v1.5</div>',
+        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v1.6</div>',
         unsafe_allow_html=True,
     )
 
@@ -294,7 +295,7 @@ st.markdown(
 # =========================
 # MAIN GRID
 # =========================
-main_left, main_mid, main_right = st.columns([3.3, 1.45, 1.05], gap="large")
+main_left, main_mid, main_right = st.columns([3.75, 1.35, 1.05], gap="large")
 
 # Key map for chart numbers
 key_df = view.sort_values(
@@ -331,7 +332,7 @@ with main_left:
         color="Priority",
         text="Label",
         hover_name="Relationship",
-        size_max=31,
+        size_max=27,
         color_discrete_map=color_map,
         hover_data={
             "Country": True,
@@ -364,12 +365,12 @@ with main_left:
 
     fig.update_layout(
         template="plotly_white",
-        height=570,
-        margin=dict(l=10, r=10, t=20, b=20),
+        height=680,
+        margin=dict(l=10, r=10, t=28, b=20),
         showlegend=False,
         font=dict(family="Inter, Arial", size=11, color="#071B3A"),
-        xaxis=dict(title="Treasury Score", range=[0, 100], dtick=10, gridcolor="rgba(17,24,39,.08)"),
-        yaxis=dict(title="Strategic Score", range=[0, 100], dtick=10, gridcolor="rgba(17,24,39,.08)"),
+        xaxis=dict(title="Treasury Score", range=[0, 105], dtick=10, gridcolor="rgba(17,24,39,.08)"),
+        yaxis=dict(title="Strategic Score", range=[0, 105], dtick=10, gridcolor="rgba(17,24,39,.08)"),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
@@ -383,7 +384,7 @@ with main_mid:
     ref = key_df[["Chart_No", "Relationship", "Exposure_USD_B"]].copy()
     ref = ref.rename(columns={"Chart_No": "#", "Exposure_USD_B": "Exposure (USD B)"})
     ref["Exposure (USD B)"] = ref["Exposure (USD B)"].map(lambda x: f"{x:.1f}")
-    st.dataframe(ref, use_container_width=True, hide_index=True, height=570)
+    st.dataframe(ref, use_container_width=True, hide_index=True, height=680)
 
 # =========================
 # RIGHT PANEL
@@ -476,4 +477,4 @@ with lower_right:
     st.markdown(f'<div class="narrative-box">{msg}</div>', unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("EC-AI Institutional Portfolio Prototype v1.5 | Header and drilldown polish")
+st.caption("EC-AI Institutional Portfolio Prototype v1.6 | Header and drilldown polish")
