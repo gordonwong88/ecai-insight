@@ -1,7 +1,8 @@
-# EC-AI Institutional Portfolio Dashboard v1.6
-# Locked v1.4 layout + header/drilldown polish fixes
+
+# EC-AI Institutional Portfolio Dashboard v1.7
+# Locked v1.6 layout + AI Management Action Engine
 # Run:
-#   python -m streamlit run ecai_institutional_portfolio_dashboard_v1_5.py
+#   python -m streamlit run ecai_institutional_portfolio_dashboard_v1_7.py
 
 import pandas as pd
 import plotly.express as px
@@ -13,17 +14,13 @@ st.set_page_config(
     layout="wide",
 )
 
-# =========================
-# STYLE
-# =========================
 st.markdown("""
 <style>
 .block-container {
-    padding-top: 3.2rem;
+    padding-top: 2.0rem;
     padding-left: 2rem;
     padding-right: 2rem;
-    max-width: 1720px;
-    overflow: visible;
+    max-width: 1760px;
 }
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg,#061A36 0%,#0B2C55 100%);
@@ -32,44 +29,42 @@ st.markdown("""
     color: white;
 }
 .main-title {
-    font-size: 48px;
+    font-size: 44px;
     font-weight: 850;
     color: #071B3A;
-    margin-bottom: 2px;
-    padding-top: 6px;
-    line-height: 1.12;
+    line-height: 1.15;
+    margin: 10px 0 4px 0;
+    padding-top: 8px;
     letter-spacing: -0.02em;
     overflow: visible;
 }
 .sub-title {
     color: #526173;
     font-size: 15px;
-    margin-top: 2px;
     margin-bottom: 18px;
 }
 .portfolio-card {
-    margin-top: 12px;
     background: white;
     border: 1px solid #D8DEE6;
     border-radius: 14px;
     padding: 16px 20px;
-    min-width: 350px;
-    overflow: visible;
+    margin-top: 8px;
+    min-height: 92px;
     box-shadow: 0 1px 3px rgba(15,23,42,.05);
+    overflow: visible;
 }
 .portfolio-label {
     font-size: 12px;
     color: #526173;
-    font-weight: 700;
+    font-weight: 800;
     text-transform: uppercase;
 }
 .portfolio-name {
-    font-size: 22px;
+    font-size: 23px;
     color: #071B3A;
     font-weight: 850;
-    margin-top: 2px;
-    line-height: 1.18;
-    white-space: normal;
+    margin-top: 4px;
+    line-height: 1.25;
 }
 .portfolio-date {
     font-size: 12px;
@@ -81,7 +76,7 @@ st.markdown("""
     border: 1px solid #D8DEE6;
     border-radius: 14px;
     padding: 16px 18px;
-    min-height: 106px;
+    min-height: 104px;
     box-shadow: 0 1px 3px rgba(15,23,42,.06);
 }
 .kpi-label {
@@ -111,6 +106,16 @@ st.markdown("""
     margin-top: 16px;
     margin-bottom: 16px;
 }
+.ai-box {
+    background: #F8FAFC;
+    border-left: 5px solid #1565C0;
+    border-radius: 12px;
+    padding: 16px 22px;
+    color: #071B3A;
+    line-height: 1.6;
+    font-size: 14px;
+    margin-top: 14px;
+}
 .side-card {
     background: white;
     border: 1px solid #D8DEE6;
@@ -129,25 +134,32 @@ st.markdown("""
     color: #526173;
     font-size: 13px;
 }
-.drill-metric {
-    background:#ffffff;
-    padding:10px 4px;
-    border-radius:10px;
-    min-width: 0;
+.small-metric-card {
+    background: #ffffff;
+    border: 1px solid #E5E7EB;
+    padding: 10px 8px;
+    border-radius: 10px;
+    min-height: 66px;
 }
-.drill-label {
-    font-size:11px;
-    color:#6B7280;
-    margin-bottom:6px;
-    white-space:nowrap;
+.small-metric-label {
+    font-size: 11px;
+    color: #6B7280;
+    margin-bottom: 5px;
+    font-weight: 700;
 }
-.drill-value {
-    font-size:18px;
-    font-weight:750;
-    color:#0B1F3B;
-    white-space:nowrap;
-    overflow:visible;
-    line-height:1.15;
+.small-metric-value {
+    font-size: 17px;
+    font-weight: 800;
+    color: #0B1F3B;
+    white-space: nowrap;
+    overflow: visible;
+}
+.badge {
+    color: white;
+    padding: 3px 8px;
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 700;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -184,10 +196,10 @@ cols = [
 df = pd.DataFrame(rows, columns=cols)
 
 def fmt_b(x):
-    return f"USD {x:.1f}B"
+    return f"USD {float(x):.1f}B"
 
 def fmt_pct(x):
-    return f"{x:.1f}%"
+    return f"{float(x):.1f}%"
 
 def quadrant(row):
     if row["Strategic_Score"] >= 70 and row["Treasury_Score"] >= 70:
@@ -198,14 +210,65 @@ def quadrant(row):
         return "Treasury Anchor"
     return "Portfolio Review"
 
+def generate_management_action(row):
+    treasury = row["Treasury_Score"]
+    strategic = row["Strategic_Score"]
+    risk = row["Risk_Score"]
+    exposure = row["Exposure_USD_B"]
+    deposits = row["Deposits_USD_B"]
+    sector = row["Sector"]
+    priority = row["Priority"]
+
+    actions = []
+
+    if strategic >= 80 and treasury < 70:
+        actions.append("Increase treasury penetration and operating wallet linkage.")
+
+    if treasury >= 85 and strategic >= 85:
+        actions.append("Protect crown-jewel funding relationship and maintain pricing discipline.")
+
+    if risk >= 75:
+        actions.append("Enhanced monitoring recommended due to elevated portfolio risk profile.")
+
+    if exposure >= 8:
+        actions.append("Senior management coverage recommended given material exposure size.")
+
+    deposit_ratio = deposits / exposure if exposure else 0
+    if deposit_ratio < 0.25 and strategic >= 75:
+        actions.append("Relationship under-monetized from liquidity and deposit perspective.")
+
+    if sector in ["Shipping", "Offshore Services"]:
+        actions.append("Monitor refinancing and cyclical sector concentration risk.")
+
+    if priority == "Strategic Growth" and treasury >= 70:
+        actions.append("Expand wallet penetration through FX, cash management, and flow products.")
+
+    if len(actions) == 0:
+        actions.append("Relationship remains stable under current portfolio strategy.")
+
+    return " ".join(actions)
+
+def action_category(row):
+    if row["Risk_Score"] >= 80:
+        return "Risk Monitoring"
+    if row["Strategic_Score"] >= 80 and row["Treasury_Score"] < 70:
+        return "Treasury Deepening"
+    if row["Treasury_Score"] >= 85 and row["Strategic_Score"] >= 80:
+        return "Protect & Defend"
+    if row["Exposure_USD_B"] >= 8:
+        return "Senior Coverage"
+    return "Maintain"
+
 df["Quadrant"] = df.apply(quadrant, axis=1)
+df["AI_Management_Action"] = df.apply(generate_management_action, axis=1)
+df["AI_Action_Category"] = df.apply(action_category, axis=1)
 
 # =========================
 # SIDEBAR
 # =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("v1.6")
+st.sidebar.markdown("v1.7")
 st.sidebar.markdown("---")
 
 selected_priority = st.sidebar.multiselect(
@@ -221,7 +284,7 @@ selected_country = st.sidebar.multiselect(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("Hover over bubbles for detailed relationship information. Chart labels use number keys to preserve readability.")
+st.sidebar.info("Hover over bubbles for details. Chart labels use number keys; relationship names are shown in the reference table.")
 
 view = df[df["Priority"].isin(selected_priority) & df["Country"].isin(selected_country)].copy()
 
@@ -232,11 +295,11 @@ if view.empty:
 # =========================
 # HEADER
 # =========================
-header_left, header_right = st.columns([4.4, 1.45], gap="large")
+header_left, header_right = st.columns([4.6, 1.4], gap="large")
 with header_left:
     st.markdown('<div class="main-title">Portfolio Cognition Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v1.6</div>',
+        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v1.7</div>',
         unsafe_allow_html=True,
     )
 
@@ -260,13 +323,14 @@ total_deposits = view["Deposits_USD_B"].sum()
 weighted_treasury = (view["Treasury_Score"] * view["Exposure_USD_B"]).sum() / total_exposure
 weighted_strategic = (view["Strategic_Score"] * view["Exposure_USD_B"]).sum() / total_exposure
 coverage = total_deposits / total_exposure * 100
+risk_alerts = int((view["Risk_Score"] >= 80).sum())
 
 kpis = [
     ("Total Exposure", fmt_b(total_exposure), "Filtered portfolio"),
     ("Weighted Treasury Score", f"{weighted_treasury:.1f}", "Out of 100"),
     ("Weighted Strategic Score", f"{weighted_strategic:.1f}", "Out of 100"),
     ("Treasury Coverage", fmt_pct(coverage), "Deposits / exposure"),
-    ("Priority Relationships", str(len(view)), "Filtered names"),
+    ("AI Risk Alerts", str(risk_alerts), "Risk score ≥ 80"),
 ]
 
 for col, (label, value, sub) in zip(st.columns(5), kpis):
@@ -286,7 +350,7 @@ st.markdown(
     """
     <div class="narrative-box">
     The portfolio shows concentration in strategic infrastructure and financial relationships requiring treasury penetration enhancement.
-    Management attention should focus on strategic relationships with weak deposit linkage while protecting crown-jewel funding relationships.
+    The AI Management Action Engine highlights where management should deepen treasury linkage, protect funding relationships, and monitor elevated risk names.
     </div>
     """,
     unsafe_allow_html=True,
@@ -295,9 +359,8 @@ st.markdown(
 # =========================
 # MAIN GRID
 # =========================
-main_left, main_mid, main_right = st.columns([3.75, 1.35, 1.05], gap="large")
+main_left, main_mid, main_right = st.columns([3.4, 1.5, 1.05], gap="large")
 
-# Key map for chart numbers
 key_df = view.sort_values(
     ["Exposure_USD_B", "Strategic_Score", "Risk_Score"],
     ascending=[False, False, False],
@@ -332,7 +395,7 @@ with main_left:
         color="Priority",
         text="Label",
         hover_name="Relationship",
-        size_max=27,
+        size_max=28,
         color_discrete_map=color_map,
         hover_data={
             "Country": True,
@@ -340,6 +403,7 @@ with main_left:
             "Exposure_USD_B": ":.1f",
             "Deposits_USD_B": ":.1f",
             "Risk_Score": True,
+            "AI_Action_Category": True,
             "Chart_No": False,
             "Label": False,
         },
@@ -359,18 +423,18 @@ with main_left:
 
     fig.update_traces(
         textposition="middle center",
-        textfont=dict(size=11, color="white", family="Arial Black"),
+        textfont=dict(size=10, color="white", family="Arial Black"),
         marker=dict(opacity=0.78, line=dict(width=1, color="white")),
     )
 
     fig.update_layout(
         template="plotly_white",
-        height=680,
-        margin=dict(l=10, r=10, t=28, b=20),
+        height=640,
+        margin=dict(l=10, r=10, t=20, b=20),
         showlegend=False,
         font=dict(family="Inter, Arial", size=11, color="#071B3A"),
-        xaxis=dict(title="Treasury Score", range=[0, 105], dtick=10, gridcolor="rgba(17,24,39,.08)"),
-        yaxis=dict(title="Strategic Score", range=[0, 105], dtick=10, gridcolor="rgba(17,24,39,.08)"),
+        xaxis=dict(title="Treasury Score", range=[0, 100], dtick=10, gridcolor="rgba(17,24,39,.08)"),
+        yaxis=dict(title="Strategic Score", range=[0, 100], dtick=10, gridcolor="rgba(17,24,39,.08)"),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
@@ -384,7 +448,7 @@ with main_mid:
     ref = key_df[["Chart_No", "Relationship", "Exposure_USD_B"]].copy()
     ref = ref.rename(columns={"Chart_No": "#", "Exposure_USD_B": "Exposure (USD B)"})
     ref["Exposure (USD B)"] = ref["Exposure (USD B)"].map(lambda x: f"{x:.1f}")
-    st.dataframe(ref, use_container_width=True, hide_index=True, height=680)
+    st.dataframe(ref, use_container_width=True, hide_index=True, height=640)
 
 # =========================
 # RIGHT PANEL
@@ -429,7 +493,7 @@ with lower_left:
             [
                 "Relationship","Quadrant","Priority","Country","Sector",
                 "Exposure (USD B)","Deposits (USD B)",
-                "Treasury_Score","Strategic_Score","Risk_Score",
+                "Treasury_Score","Strategic_Score","Risk_Score","AI_Action_Category",
             ]
         ],
         use_container_width=True,
@@ -445,15 +509,15 @@ with lower_right:
     def small_metric(label, value):
         st.markdown(
             f"""
-            <div class="drill-metric">
-                <div class="drill-label">{label}</div>
-                <div class="drill-value">{value}</div>
+            <div class="small-metric-card">
+                <div class="small-metric-label">{label}</div>
+                <div class="small-metric-value">{value}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    d1, d2, d3, d4, d5 = st.columns([1.22, 1.18, 0.9, 0.95, 0.8])
+    d1, d2, d3, d4, d5 = st.columns(5)
     with d1:
         small_metric("Exposure", fmt_b(row["Exposure_USD_B"]))
     with d2:
@@ -476,5 +540,34 @@ with lower_right:
 
     st.markdown(f'<div class="narrative-box">{msg}</div>', unsafe_allow_html=True)
 
+    st.markdown("### AI Management Action Engine")
+    st.markdown(
+        f"""
+        <div class="ai-box">
+        <b>Recommended Management Action</b><br><br>
+        {row["AI_Management_Action"]}<br><br>
+        <b>Action Category:</b> {row["AI_Action_Category"]}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =========================
+# ACTION ENGINE SUMMARY
+# =========================
+st.markdown("## AI Management Action Summary")
+summary = view["AI_Action_Category"].value_counts().reset_index()
+summary.columns = ["Action Category", "Relationship Count"]
+s1, s2 = st.columns([1.2, 3.8], gap="large")
+
+with s1:
+    st.dataframe(summary, use_container_width=True, hide_index=True, height=220)
+
+with s2:
+    engine_table = view[[
+        "Relationship", "AI_Action_Category", "AI_Management_Action"
+    ]].sort_values(["AI_Action_Category", "Relationship"])
+    st.dataframe(engine_table, use_container_width=True, hide_index=True, height=220)
+
 st.markdown("---")
-st.caption("EC-AI Institutional Portfolio Prototype v1.6 | Header and drilldown polish")
+st.caption("EC-AI Institutional Portfolio Prototype v1.7 | AI Management Action Engine")
