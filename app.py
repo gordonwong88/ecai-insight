@@ -804,36 +804,28 @@ strategic_view, wallet_view, treasury_view, risk_view, sector_view, wallet_ratio
 rcol1, rcol2 = st.columns([2.55, 1.45], gap="large")
 
 with rcol1:
-    st.markdown(
-        f"""
-        <div class="profile-card">
-            <div class="profile-title">{r360["Relationship"]}</div>
-            <div class="profile-subtitle">{r360["Country"]} · {r360["Sector"]} · {r360["Priority"]}</div>
-
-            <span class="strategy-pill">{strategic_view}</span>
-            <span class="strategy-pill">{wallet_view}</span>
-            <span class="strategy-pill">{risk_view}</span>
-
-            <br><br>
-
-            <b>Executive Relationship Summary</b><br><br>
-            {r360["Relationship"]} is positioned as a <b>{r360["Priority"]}</b> relationship with
-            <b>USD {r360["Exposure_USD_B"]:.1f}B</b> exposure and
-            <b>USD {r360["Deposits_USD_B"]:.1f}B</b> deposits.
-            The relationship has a <b>{int(r360["Strategic_Score"])}</b> strategic score,
-            <b>{int(r360["Treasury_Score"])}</b> treasury score, and
-            <b>{int(r360["Risk_Score"])}</b> risk score.
-
-            <br><br>
-
-            <b>Sector View:</b> {sector_view}<br><br>
-
-            <b>AI Recommended Action:</b><br>
-            <span style="color:#1565C0;font-weight:750;">{r360["AI_Management_Action"]}</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    profile_html = (
+        '<div class="profile-card">'
+        f'<div class="profile-title">{r360["Relationship"]}</div>'
+        f'<div class="profile-subtitle">{r360["Country"]} · {r360["Sector"]} · {r360["Priority"]}</div>'
+        f'<span class="strategy-pill">{strategic_view}</span>'
+        f'<span class="strategy-pill">{wallet_view}</span>'
+        f'<span class="strategy-pill">{risk_view}</span>'
+        '<br><br>'
+        '<b>Executive Relationship Summary</b><br><br>'
+        f'{r360["Relationship"]} is positioned as a <b>{r360["Priority"]}</b> relationship with '
+        f'<b>USD {r360["Exposure_USD_B"]:.1f}B</b> exposure and '
+        f'<b>USD {r360["Deposits_USD_B"]:.1f}B</b> deposits. '
+        f'The relationship has a <b>{int(r360["Strategic_Score"])}</b> strategic score, '
+        f'<b>{int(r360["Treasury_Score"])}</b> treasury score, and '
+        f'<b>{int(r360["Risk_Score"])}</b> risk score.'
+        '<br><br>'
+        f'<b>Sector View:</b> {sector_view}<br><br>'
+        '<b>AI Recommended Action:</b><br>'
+        f'<span style="color:#1565C0;font-weight:750;">{r360["AI_Management_Action"]}</span>'
+        '</div>'
     )
+    st.markdown(profile_html, unsafe_allow_html=True)
 
     st.markdown("### Banker Coverage Strategy")
 
@@ -954,4 +946,4 @@ with memo_col2:
 
 
 st.markdown("---")
-st.caption("EC-AI Institutional Portfolio Prototype v1.9 | AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
+st.caption("EC-AI Institutional Portfolio Prototype v1.9 Fixed | AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
