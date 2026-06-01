@@ -499,6 +499,34 @@ if view.empty:
     st.warning("No relationships match the selected filters.")
     st.stop()
 
+
+# =========================
+# HOMEPAGE INTRODUCTION
+# =========================
+st.markdown("""
+# EC-AI Institutional Relationship OS
+
+### AI-Powered Executive Relationship Intelligence
+
+EC-AI transforms institutional portfolio data into:
+
+• **Portfolio Cognition**  
+• **AI Management Action Engine**  
+• **Relationship 360 Intelligence**  
+• **Executive Management Memo Generation**
+
+Traditional dashboards show data.  
+**EC-AI is designed to show management actions.**
+""")
+
+st.info("""
+🎬 Product Demo is now available on the EC AI LinkedIn page.
+
+Explore the live platform below.
+""")
+
+st.divider()
+
 # =========================
 # HEADER
 # =========================
@@ -928,14 +956,14 @@ with memo_col1:
     st.download_button(
         "Download Management Memo",
         data=memo_text.encode("utf-8"),
-        file_name="ecai_institutional_portfolio_management_memo_v1_8.md",
+        file_name="ecai_institutional_portfolio_management_memo_v1_9.md",
         mime="text/markdown",
         use_container_width=True,
     )
     st.download_button(
         "Download Action Table CSV",
         data=view[["Relationship", "Country", "Sector", "Exposure_USD_B", "Deposits_USD_B", "Treasury_Score", "Strategic_Score", "Risk_Score", "AI_Action_Category", "AI_Management_Action"]].to_csv(index=False).encode("utf-8"),
-        file_name="ecai_ai_management_action_table_v1_8.csv",
+        file_name="ecai_ai_management_action_table_v1_9.csv",
         mime="text/csv",
         use_container_width=True,
     )
