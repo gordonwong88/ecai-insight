@@ -521,9 +521,30 @@ Traditional dashboards show data.
 
 st.markdown("## 🎬 Product Demo")
 
-st.video("https://youtu.be/Cc5pDDt0nMY")
+demo_left, demo_right = st.columns([1.9, 1.1], gap="large")
 
-st.caption("Watch a short overview of EC-AI Institutional Relationship OS.")
+with demo_left:
+    st.video("https://youtu.be/Cc5pDDt0nMY")
+    st.caption("Watch a short overview of EC-AI Institutional Relationship OS.")
+
+with demo_right:
+    st.markdown(
+        """
+        <div class="narrative-box">
+        <b>What EC-AI does</b><br><br>
+        EC-AI turns institutional portfolio data into executive relationship intelligence.
+        It helps identify treasury opportunities, strategic relationship priorities,
+        concentration risk, and banker coverage actions.
+        <br><br>
+        <b>Core engines</b><br>
+        • Portfolio Cognition<br>
+        • AI Management Action Engine<br>
+        • Relationship 360 Intelligence<br>
+        • Management Memo Generator
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.success("""
 Explore the live platform below.
