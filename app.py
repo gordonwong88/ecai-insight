@@ -519,9 +519,13 @@ Traditional dashboards show data.
 **EC-AI is designed to show management actions.**
 """)
 
-st.info("""
-🎬 Product Demo is now available on the EC AI LinkedIn page.
+st.markdown("## 🎬 Product Demo")
 
+st.video("https://youtu.be/Cc5pDDt0nMY")
+
+st.caption("Watch a short overview of EC-AI Institutional Relationship OS.")
+
+st.success("""
 Explore the live platform below.
 """)
 
