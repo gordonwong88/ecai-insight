@@ -975,9 +975,23 @@ st.markdown(
 
 memo_text = build_management_memo(view)
 
-memo_col1, memo_col2 = st.columns([1.2, 3.8], gap="large")
+memo_col1, memo_col2 = st.columns([3.8, 1.2], gap="large")
 
 with memo_col1:
+    with st.expander("Preview Management Memo", expanded=True):
+        st.markdown(build_management_memo_html(view), unsafe_allow_html=True)
+
+with memo_col2:
+    st.markdown(
+        """
+        <div class="side-card">
+        <b>Export Tools</b><br><br>
+        Download the executive memo or export the underlying AI action table for further review.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.download_button(
         "Download Management Memo",
         data=memo_text.encode("utf-8"),
@@ -992,10 +1006,6 @@ with memo_col1:
         mime="text/csv",
         use_container_width=True,
     )
-
-with memo_col2:
-    with st.expander("Preview Management Memo", expanded=True):
-        st.markdown(build_management_memo_html(view), unsafe_allow_html=True)
 
 
 st.markdown("---")
