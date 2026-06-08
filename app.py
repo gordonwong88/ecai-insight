@@ -1,6 +1,6 @@
 
-# EC-AI Institutional Portfolio Dashboard v1.9
-# Locked v1.9 layout + Relationship 360 Intelligence
+# EC-AI Institutional Relationship OS v2.0
+# v2.0: Executive Action Queue + Executive Agenda Generator + Priority Score styling
 # Run:
 #   python -m streamlit run ecai_institutional_portfolio_dashboard_v1_9.py
 
@@ -343,6 +343,125 @@ def management_priority_rationale(row):
 
     return ", ".join(rationale).capitalize() + "."
 
+
+def priority_color(score):
+    if score >= 75:
+        return "#FEE2E2"  # red tint
+    if score >= 65:
+        return "#FFEDD5"  # orange tint
+    if score >= 50:
+        return "#DBEAFE"  # blue tint
+    return "#DCFCE7"      # green tint
+
+
+def priority_text_color(score):
+    if score >= 75:
+        return "#991B1B"
+    if score >= 65:
+        return "#9A3412"
+    if score >= 50:
+        return "#1E3A8A"
+    return "#166534"
+
+
+def executive_action_type(row):
+    score = row["Management_Priority_Score"]
+    risk = row["Risk_Score"]
+    treasury = row["Treasury_Score"]
+    strategic = row["Strategic_Score"]
+    exposure = row["Exposure_USD_B"]
+    sector = row["Sector"]
+
+    if risk >= 85 and treasury < 70:
+        return "Senior Risk & Treasury Review"
+    if score >= 65 and sector in ["Shipping", "Offshore Services"]:
+        return "Cyclical Exposure Review"
+    if exposure >= 8 and strategic >= 80:
+        return "Senior Coverage Agenda"
+    if strategic >= 80 and treasury < 70:
+        return "Treasury Deepening Plan"
+    if risk >= 80:
+        return "Risk Monitoring Escalation"
+    if treasury < 70 and strategic < 70:
+        return "Relationship Repositioning"
+    return "Portfolio Monitoring"
+
+
+def executive_action_recommendation(row):
+    action_type = executive_action_type(row)
+    name = row["Relationship"]
+    sector = row["Sector"]
+
+    if action_type == "Senior Risk & Treasury Review":
+        return f"Schedule senior review with RM and Risk; agree treasury deepening plan and exposure monitoring for {name}."
+    if action_type == "Cyclical Exposure Review":
+        return f"Review refinancing risk and treasury wallet opportunity across {sector}; assign RM follow-up within 2 weeks."
+    if action_type == "Senior Coverage Agenda":
+        return f"Place {name} on senior coverage agenda; protect strategic relationship and identify wallet expansion opportunities."
+    if action_type == "Treasury Deepening Plan":
+        return f"Launch treasury deepening discussion covering deposits, cash management, FX and liquidity solutions."
+    if action_type == "Risk Monitoring Escalation":
+        return f"Move to enhanced monitoring cadence and request updated credit / sector view from coverage team."
+    if action_type == "Relationship Repositioning":
+        return f"Reassess relationship strategy; clarify target wallet, risk appetite and expected return contribution."
+    return f"Maintain portfolio monitoring and update relationship action plan during next business review."
+
+
+def build_executive_action_queue(data):
+    q = data.sort_values("Management_Priority_Score", ascending=False).copy().head(8)
+    q["Priority Rank"] = range(1, len(q) + 1)
+    q["Priority Score"] = q["Management_Priority_Score"].map(lambda x: f"{x:.1f}")
+    q["Why Management Should Care"] = q["Management_Priority_Rationale"]
+    q["Executive Action Type"] = q.apply(executive_action_type, axis=1)
+    q["Recommended Next Action"] = q.apply(executive_action_recommendation, axis=1)
+    q["Owner"] = q["Executive Action Type"].map(lambda x: "RM + Risk" if "Risk" in x else ("Senior Coverage" if "Senior" in x else "RM + Treasury"))
+    q["Timing"] = q["Management_Priority_Score"].map(lambda s: "This week" if s >= 65 else "Next review cycle")
+    return q
+
+
+def build_executive_agenda(data):
+    q = build_executive_action_queue(data)
+    high = q[q["Management_Priority_Score"] >= 65]
+    risk_names = q[q["Risk_Score"] >= 80]["Relationship"].tolist()
+    treasury_names = q[q["Treasury_Score"] < 70]["Relationship"].tolist()
+    senior_names = q[q["Exposure_USD_B"] >= 8]["Relationship"].tolist()
+
+    agenda = []
+    if not high.empty:
+        top = high.iloc[0]
+        agenda.append(f"1. Open management review with {top['Relationship']} as the top priority relationship due to {top['Management_Priority_Rationale'].lower()}")
+    else:
+        agenda.append("1. No immediate high-priority relationship identified; maintain current portfolio monitoring cadence.")
+
+    if treasury_names:
+        agenda.append(f"2. Launch treasury deepening follow-up for {', '.join(treasury_names[:3])} to improve deposits, cash management and wallet penetration.")
+    else:
+        agenda.append("2. Treasury linkage appears stable across the filtered portfolio; focus on protecting existing wallet.")
+
+    if risk_names:
+        agenda.append(f"3. Request enhanced risk monitoring for {', '.join(risk_names[:3])}, particularly cyclical or refinancing-sensitive exposures.")
+    else:
+        agenda.append("3. No elevated risk alert above threshold; continue standard quarterly review cadence.")
+
+    if senior_names:
+        agenda.append(f"4. Add {', '.join(senior_names[:3])} to senior coverage discussion given material exposure size.")
+    else:
+        agenda.append("4. No material exposure concentration above senior-coverage threshold in the filtered view.")
+
+    agenda.append("5. Ask each RM to return with a 30-day relationship action plan for high-priority names.")
+    return agenda
+
+
+def style_priority_table(styler):
+    def score_style(v):
+        try:
+            s = float(v)
+        except Exception:
+            return ""
+        return f"background-color: {priority_color(s)}; color: {priority_text_color(s)}; font-weight: 800;"
+
+    return styler.applymap(score_style, subset=["Priority Score"])
+
 def build_management_memo(data):
     total_exposure = data["Exposure_USD_B"].sum()
     total_deposits = data["Deposits_USD_B"].sum()
@@ -401,7 +520,7 @@ def build_management_memo(data):
     lines.append("5. Use relationship-level action categories to guide banker follow-up and management committee discussion.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v1.9")
+    lines.append("Generated by EC-AI Institutional Relationship OS v2.0")
     return "\\n".join(lines)
 
 
@@ -509,7 +628,7 @@ def build_relationship_360_memo(row):
     lines.append("- Identify FX, hedging, liquidity, and transaction banking cross-sell opportunities.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v1.9")
+    lines.append("Generated by EC-AI Institutional Relationship OS v2.0")
     return "\n".join(lines)
 
 df["Quadrant"] = df.apply(quadrant, axis=1)
@@ -532,7 +651,7 @@ df["Management_Priority_Rationale"] = df.apply(management_priority_rationale, ax
 # =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("v1.9")
+st.sidebar.markdown("v2.0")
 st.sidebar.markdown("---")
 
 selected_priority = st.sidebar.multiselect(
@@ -616,7 +735,7 @@ header_left, header_right = st.columns([4.6, 1.4], gap="large")
 with header_left:
     st.markdown('<div class="main-title">Portfolio Cognition Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v1.9</div>',
+        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v2.0</div>',
         unsafe_allow_html=True,
     )
 
@@ -954,11 +1073,110 @@ with pcol2:
 st.markdown(
     """
     <div class="ai-box">
-    <b>Management Priority Score v1 Formula</b><br><br>
-    40% Exposure Importance + 25% Treasury Opportunity + 20% Relationship Weakness + 15% Risk Alert
+    <b>Management Priority Score v2.0 Formula</b><br><br>
+    40% Exposure Importance + 25% Treasury Opportunity + 20% Relationship Weakness + 15% Risk Alert<br><br>
+    <b>Score Colours:</b> Red ≥ 75 | Orange 65–74.9 | Blue 50–64.9 | Green &lt; 50
     </div>
     """,
     unsafe_allow_html=True,
+)
+
+
+# =========================
+# EXECUTIVE ACTION QUEUE
+# =========================
+st.markdown("## Executive Action Queue")
+st.markdown(
+    """
+    <div class="narrative-box">
+    The Executive Action Queue translates priority scores into management-ready actions.
+    This moves EC-AI from portfolio diagnosis to decision support: what changed, why it matters,
+    who should act, and when follow-up is required.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+action_queue = build_executive_action_queue(view)
+
+q_left, q_right = st.columns([3.7, 1.3], gap="large")
+with q_left:
+    queue_display = action_queue[
+        [
+            "Priority Rank",
+            "Relationship",
+            "Priority Score",
+            "Management_Priority_Band",
+            "Why Management Should Care",
+            "Executive Action Type",
+            "Recommended Next Action",
+            "Owner",
+            "Timing",
+        ]
+    ].copy()
+    queue_display = queue_display.rename(columns={"Management_Priority_Band": "Priority Band"})
+    st.dataframe(
+        style_priority_table(queue_display.style),
+        use_container_width=True,
+        hide_index=True,
+        height=360,
+    )
+
+with q_right:
+    immediate_count = int((action_queue["Management_Priority_Score"] >= 75).sum())
+    this_week_count = int((action_queue["Management_Priority_Score"] >= 65).sum())
+    top_action_type = action_queue.iloc[0]["Executive Action Type"]
+
+    st.markdown(
+        f"""
+        <div class="side-card">
+        <b>Immediate Actions</b><br>
+        <span style="font-size:28px;font-weight:850;color:#991B1B;">{immediate_count}</span><br>
+        score ≥ 75
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="side-card">
+        <b>This Week Queue</b><br>
+        <span style="font-size:28px;font-weight:850;color:#9A3412;">{this_week_count}</span><br>
+        score ≥ 65
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="side-card">
+        <b>Top Action Theme</b><br>
+        <span style="font-size:18px;font-weight:850;color:#071B3A;">{top_action_type}</span><br>
+        based on highest priority signal
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.markdown("### EC-AI Recommended Management Agenda")
+agenda = build_executive_agenda(view)
+agenda_html = "<br><br>".join(agenda)
+st.markdown(
+    f"""
+    <div class="ai-box">
+    <b>Executive Agenda for Management Review</b><br><br>
+    {agenda_html}
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.download_button(
+    "Download Executive Action Queue CSV",
+    data=queue_display.to_csv(index=False).encode("utf-8"),
+    file_name="ecai_executive_action_queue_v2_0.csv",
+    mime="text/csv",
+    use_container_width=False,
 )
 
 
@@ -1103,7 +1321,7 @@ r360_memo = build_relationship_360_memo(r360)
 st.download_button(
     "Download Relationship 360 Memo",
     data=r360_memo.encode("utf-8"),
-    file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v1_9.md",
+    file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v2_0.md",
     mime="text/markdown",
     use_container_width=False,
 )
@@ -1145,18 +1363,18 @@ with memo_col2:
     st.download_button(
         "Download Management Memo",
         data=memo_text.encode("utf-8"),
-        file_name="ecai_institutional_portfolio_management_memo_v1_9.md",
+        file_name="ecai_institutional_portfolio_management_memo_v2_0.md",
         mime="text/markdown",
         use_container_width=True,
     )
     st.download_button(
         "Download Action Table CSV",
         data=view[["Relationship", "Country", "Sector", "Exposure_USD_B", "Deposits_USD_B", "Treasury_Score", "Strategic_Score", "Risk_Score", "Management_Priority_Score", "Management_Priority_Band", "Management_Priority_Rationale", "AI_Action_Category", "AI_Management_Action"]].to_csv(index=False).encode("utf-8"),
-        file_name="ecai_ai_management_action_table_v1_9.csv",
+        file_name="ecai_ai_management_action_table_v2_0.csv",
         mime="text/csv",
         use_container_width=True,
     )
 
 
 st.markdown("---")
-st.caption("EC-AI Institutional Portfolio Prototype v1.9.2 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
+st.caption("EC-AI Institutional Relationship OS v2.0 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
