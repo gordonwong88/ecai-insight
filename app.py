@@ -460,6 +460,9 @@ def style_priority_table(styler):
             return ""
         return f"background-color: {priority_color(s)}; color: {priority_text_color(s)}; font-weight: 800;"
 
+    # pandas 3 removed Styler.applymap; use Styler.map when available.
+    if hasattr(styler, "map"):
+        return styler.map(score_style, subset=["Priority Score"])
     return styler.applymap(score_style, subset=["Priority Score"])
 
 def build_management_memo(data):
