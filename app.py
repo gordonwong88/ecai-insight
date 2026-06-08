@@ -1,8 +1,8 @@
 
-# EC-AI Institutional Relationship OS v2.3
-# v2.3: Executive Action Queue + PDF memo export + improved readability
+# EC-AI Institutional Relationship OS v3.0
+# v3.0: Executive Action Queue + PDF memo export + improved readability
 # Run:
-#   python -m streamlit run ecai_institutional_relationship_os_v2_3.py
+#   python -m streamlit run ecai_institutional_relationship_os_v3_0.py
 
 import io
 import re
@@ -202,7 +202,7 @@ st.markdown("""
     font-weight: 700;
 }
 
-/* v2.3 readability polish */
+/* v3.0 readability polish */
 html, body, [class*="css"] { font-size: 16px; }
 p, li, div { line-height: 1.45; }
 [data-testid="stDataFrame"] div { font-size: 14px !important; }
@@ -213,14 +213,14 @@ p, li, div { line-height: 1.45; }
 .side-card { font-size: 14px; }
 
 
-/* v2.3 readability upgrade */
+/* v3.0 readability upgrade */
 html, body, [class*="css"] { font-size: 16px; }
 div[data-testid="stDataFrame"] { font-size: 15px; }
 .stDataFrame, .stTable { font-size: 15px; }
 button, .stButton button, .stDownloadButton button { font-size: 15px !important; }
 
 
-/* v2.3 readability upgrade */
+/* v3.0 readability upgrade */
 html, body, [class*="css"] { font-size: 18px !important; }
 p, li, div, span, label { font-size: 16px !important; line-height: 1.55 !important; }
 h1 { font-size: 42px !important; }
@@ -502,6 +502,68 @@ def style_priority_table(styler):
         return styler.map(score_style, subset=["Priority Score"])
     return styler.applymap(score_style, subset=["Priority Score"])
 
+
+def build_ai_reasoning_narrative(row):
+    """Rule-based AI reasoning narrative v3.0: explains why management should care."""
+    relationship = row["Relationship"]
+    score = row["Management_Priority_Score"]
+    band = row["Management_Priority_Band"]
+    rationale = row["Management_Priority_Rationale"].replace(".", "").lower()
+    action_type = row.get("Executive_Action_Type", row.get("AI_Action_Category", "Management Review"))
+
+    if score >= 75:
+        urgency = "requires immediate senior management attention"
+    elif score >= 65:
+        urgency = "should be included in this week's management review"
+    elif score >= 50:
+        urgency = "should remain on the active monitoring list"
+    else:
+        urgency = "appears stable under the current portfolio view"
+
+    narrative = (
+        f"{relationship} {urgency}. "
+        f"The relationship has a Management Priority Score of {score:.1f}, classified as {band}. "
+        f"The main management signal is {rationale}. "
+        f"Recommended focus: {action_type}."
+    )
+    return narrative
+
+
+def build_ai_reasoning_summary(data):
+    """Executive-level reasoning summary across filtered portfolio."""
+    if data.empty:
+        return "No relationships available under current filters."
+
+    top = data.sort_values("Management_Priority_Score", ascending=False).iloc[0]
+    high_priority = data[data["Management_Priority_Score"] >= 65]
+    risk_names = data[data["Risk_Score"] >= 80]
+    treasury_gap = data[data["Treasury_Score"] < 70]
+
+    lines = []
+    lines.append(
+        f"The highest management attention signal is {top['Relationship']} "
+        f"with a priority score of {top['Management_Priority_Score']:.1f}."
+    )
+
+    lines.append(
+        f"{len(high_priority)} relationships are classified as high priority, "
+        f"indicating a near-term management review queue."
+    )
+
+    lines.append(
+        f"{len(risk_names)} relationships show elevated risk indicators, "
+        f"while {len(treasury_gap)} relationships show treasury monetization gaps."
+    )
+
+    lines.append(
+        "The key management implication is to move from portfolio diagnosis to targeted relationship action: "
+        "review high-priority names, assign banker follow-up, and track management closure."
+    )
+
+    return " ".join(lines)
+
+
+
 def build_management_memo(data):
     total_exposure = data["Exposure_USD_B"].sum()
     total_deposits = data["Deposits_USD_B"].sum()
@@ -552,6 +614,12 @@ def build_management_memo(data):
         for _, r in crown_jewels.head(6).iterrows():
             lines.append(f"- {r['Relationship']}: {r['AI_Management_Action']}")
     lines.append("")
+    lines.append("## AI Reasoning Summary")
+    try:
+        lines.append(build_ai_reasoning_summary(data))
+    except Exception:
+        lines.append("AI reasoning summary unavailable under current data view.")
+    lines.append("")
     lines.append("## Recommended Management Agenda")
     lines.append("1. Prioritize treasury deepening for strategic relationships with weak deposit linkage.")
     lines.append("2. Review large exposure names for senior coverage and portfolio concentration.")
@@ -560,7 +628,7 @@ def build_management_memo(data):
     lines.append("5. Use relationship-level action categories to guide banker follow-up and management committee discussion.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v2.3")
+    lines.append("Generated by EC-AI Institutional Relationship OS v3.0")
     return "\n".join(lines)
 
 
@@ -623,7 +691,7 @@ def build_management_memo_pdf(data) -> bytes:
             story.append(Paragraph(safe, styles["ECBody"]))
         elif safe.startswith("---"):
             story.append(Spacer(1, 0.10 * inch))
-            story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v2.3", styles["ECSmall"]))
+            story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v3.0", styles["ECSmall"]))
         else:
             story.append(Paragraph(safe, styles["ECBody"]))
 
@@ -773,7 +841,7 @@ def build_relationship_360_memo(row):
     lines.append("- Identify FX, hedging, liquidity, and transaction banking cross-sell opportunities.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v2.3")
+    lines.append("Generated by EC-AI Institutional Relationship OS v3.0")
     return "\n".join(lines)
 
 df["Quadrant"] = df.apply(quadrant, axis=1)
@@ -796,7 +864,7 @@ df["Management_Priority_Rationale"] = df.apply(management_priority_rationale, ax
 # =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("v2.3")
+st.sidebar.markdown("v3.0")
 st.sidebar.markdown("---")
 
 selected_priority = st.sidebar.multiselect(
@@ -880,7 +948,7 @@ header_left, header_right = st.columns([4.6, 1.4], gap="large")
 with header_left:
     st.markdown('<div class="main-title">Portfolio Cognition Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v2.3</div>',
+        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v3.0</div>',
         unsafe_allow_html=True,
     )
 
@@ -1218,7 +1286,7 @@ with pcol2:
 st.markdown(
     """
     <div class="ai-box">
-    <b>Management Priority Score v2.3 Formula</b><br><br>
+    <b>Management Priority Score v3.0 Formula</b><br><br>
     40% Exposure Importance + 25% Treasury Opportunity + 20% Relationship Weakness + 15% Risk Alert<br><br>
     <b>Score Colours:</b> Red ≥ 75 | Orange 65–74.9 | Blue 50–64.9 | Green &lt; 50
     </div>
@@ -1319,10 +1387,88 @@ st.markdown(
 st.download_button(
     "Download Executive Action Queue CSV",
     data=queue_display.to_csv(index=False).encode("utf-8"),
-    file_name="ecai_executive_action_queue_v2_3.csv",
+    file_name="ecai_executive_action_queue_v3_0.csv",
     mime="text/csv",
     use_container_width=False,
 )
+
+
+
+# =========================
+# AI REASONING LAYER v3.0
+# =========================
+st.markdown("## AI Reasoning Layer")
+st.markdown(
+    """
+    <div class="narrative-box">
+    EC-AI Reasoning Layer translates priority signals into executive interpretation.
+    This layer explains why management should care, what the main signal is, and what action should follow.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+reasoning_view = priority_view.copy()
+
+if "Executive_Action_Type" not in reasoning_view.columns:
+    reasoning_view["Executive_Action_Type"] = reasoning_view["AI_Action_Category"]
+
+reasoning_view["AI_Reasoning_Narrative"] = reasoning_view.apply(build_ai_reasoning_narrative, axis=1)
+
+rcol1, rcol2 = st.columns([1.25, 3.75], gap="large")
+
+with rcol1:
+    top_reasoning = reasoning_view.iloc[0]
+    st.markdown(
+        f"""
+        <div class="side-card">
+        <b>Top AI Reasoning Signal</b><br>
+        <span style="font-size:20px;font-weight:850;color:#071B3A;">{top_reasoning["Relationship"]}</span><br>
+        score {top_reasoning["Management_Priority_Score"]:.1f}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="side-card">
+        <b>Reasoning Theme</b><br>
+        <span style="font-size:18px;font-weight:850;color:#071B3A;">{top_reasoning.get("Executive_Action_Type", top_reasoning["AI_Action_Category"])}</span><br>
+        generated from priority signals
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with rcol2:
+    st.markdown("### Executive Reasoning Summary")
+    st.markdown(
+        f"""
+        <div class="ai-box">
+        {build_ai_reasoning_summary(reasoning_view)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Relationship-Level AI Reasoning")
+    reasoning_table = reasoning_view[
+        [
+            "Relationship",
+            "Priority Score",
+            "Management_Priority_Band",
+            "AI_Reasoning_Narrative",
+        ]
+    ].head(8)
+
+    st.dataframe(
+        reasoning_table,
+        use_container_width=True,
+        hide_index=True,
+        height=320,
+    )
+
 
 
 # =========================
@@ -1471,7 +1617,7 @@ try:
     st.download_button(
         "Download Relationship 360 Memo PDF",
         data=r360_pdf,
-        file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v2_3.pdf",
+        file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v3_0.pdf",
         mime="application/pdf",
         use_container_width=False,
     )
@@ -1480,7 +1626,7 @@ except Exception as e:
     st.download_button(
         "Download Relationship 360 Memo Text",
         data=r360_memo.encode("utf-8"),
-        file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v2_3.txt",
+        file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v3_0.txt",
         mime="text/plain",
         use_container_width=False,
     )
@@ -1524,7 +1670,7 @@ with memo_col2:
         st.download_button(
             "Download Management Memo PDF",
             data=memo_pdf,
-            file_name="ecai_institutional_portfolio_management_memo_v2_3.pdf",
+            file_name="ecai_institutional_portfolio_management_memo_v3_0.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
@@ -1533,18 +1679,18 @@ with memo_col2:
         st.download_button(
             "Download Management Memo Text",
             data=memo_text.encode("utf-8"),
-            file_name="ecai_institutional_portfolio_management_memo_v2_3.txt",
+            file_name="ecai_institutional_portfolio_management_memo_v3_0.txt",
             mime="text/plain",
             use_container_width=True,
         )
     st.download_button(
         "Download Action Table CSV",
         data=view[["Relationship", "Country", "Sector", "Exposure_USD_B", "Deposits_USD_B", "Treasury_Score", "Strategic_Score", "Risk_Score", "Management_Priority_Score", "Management_Priority_Band", "Management_Priority_Rationale", "AI_Action_Category", "AI_Management_Action"]].to_csv(index=False).encode("utf-8"),
-        file_name="ecai_ai_management_action_table_v2_3.csv",
+        file_name="ecai_ai_management_action_table_v3_0.csv",
         mime="text/csv",
         use_container_width=True,
     )
 
 
 st.markdown("---")
-st.caption("EC-AI Institutional Relationship OS v2.3 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
+st.caption("EC-AI Institutional Relationship OS v3.0 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
