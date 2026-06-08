@@ -297,6 +297,52 @@ def action_category(row):
         return "Senior Coverage"
     return "Maintain"
 
+def management_priority_score(row, max_exposure):
+    """EC-AI Intelligence Layer v1: Management Priority Score."""
+    exposure_importance = (row["Exposure_USD_B"] / max_exposure * 100) if max_exposure else 0
+    treasury_opportunity = max(0, 100 - row["Treasury_Score"])
+    relationship_weakness = max(0, 100 - row["Strategic_Score"])
+    risk_alert = row["Risk_Score"]
+
+    score = (
+        0.40 * exposure_importance
+        + 0.25 * treasury_opportunity
+        + 0.20 * relationship_weakness
+        + 0.15 * risk_alert
+    )
+    return round(score, 1)
+
+
+def management_priority_band(score):
+    if score >= 80:
+        return "Immediate Management Attention"
+    if score >= 65:
+        return "High Priority"
+    if score >= 50:
+        return "Monitor"
+    return "Stable"
+
+
+def management_priority_rationale(row):
+    rationale = []
+
+    if row["Exposure_USD_B"] >= 8:
+        rationale.append("material exposure size")
+
+    if row["Treasury_Score"] < 70:
+        rationale.append("treasury opportunity")
+
+    if row["Strategic_Score"] < 70:
+        rationale.append("relationship strength gap")
+
+    if row["Risk_Score"] >= 80:
+        rationale.append("elevated risk signal")
+
+    if not rationale:
+        rationale.append("stable relationship profile")
+
+    return ", ".join(rationale).capitalize() + "."
+
 def build_management_memo(data):
     total_exposure = data["Exposure_USD_B"].sum()
     total_deposits = data["Deposits_USD_B"].sum()
@@ -469,6 +515,17 @@ def build_relationship_360_memo(row):
 df["Quadrant"] = df.apply(quadrant, axis=1)
 df["AI_Management_Action"] = df.apply(generate_management_action, axis=1)
 df["AI_Action_Category"] = df.apply(action_category, axis=1)
+
+# =========================
+# EC-AI INTELLIGENCE LAYER v1
+# =========================
+max_exposure_for_priority = df["Exposure_USD_B"].max()
+df["Management_Priority_Score"] = df.apply(
+    lambda r: management_priority_score(r, max_exposure_for_priority),
+    axis=1,
+)
+df["Management_Priority_Band"] = df["Management_Priority_Score"].apply(management_priority_band)
+df["Management_Priority_Rationale"] = df.apply(management_priority_rationale, axis=1)
 
 # =========================
 # SIDEBAR
@@ -813,6 +870,99 @@ with lower_right:
     )
 
 # =========================
+# EXECUTIVE INTELLIGENCE LAYER
+# =========================
+st.markdown("## Executive Intelligence Layer")
+st.markdown(
+    """
+    <div class="narrative-box">
+    EC-AI Intelligence Layer converts portfolio metrics into an executive attention signal.
+    The Management Priority Score combines exposure importance, treasury opportunity,
+    relationship weakness, and risk alert indicators.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+priority_view = view.sort_values("Management_Priority_Score", ascending=False).copy()
+priority_view["Exposure (USD B)"] = priority_view["Exposure_USD_B"].map(lambda x: f"{x:.1f}")
+priority_view["Deposits (USD B)"] = priority_view["Deposits_USD_B"].map(lambda x: f"{x:.1f}")
+priority_view["Priority Score"] = priority_view["Management_Priority_Score"].map(lambda x: f"{x:.1f}")
+
+pcol1, pcol2 = st.columns([1.35, 3.65], gap="large")
+
+with pcol1:
+    avg_priority_score = priority_view["Management_Priority_Score"].mean()
+    top_priority_name = priority_view.iloc[0]["Relationship"]
+    high_priority_count = int((priority_view["Management_Priority_Score"] >= 65).sum())
+
+    st.markdown(
+        f"""
+        <div class="side-card">
+        <b>Average Priority Score</b><br>
+        <span style="font-size:28px;font-weight:850;color:#071B3A;">{avg_priority_score:.1f}</span><br>
+        across filtered relationships
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="side-card">
+        <b>Top Management Priority</b><br>
+        <span style="font-size:18px;font-weight:850;color:#071B3A;">{top_priority_name}</span><br>
+        requires management review
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="side-card">
+        <b>High Priority Relationships</b><br>
+        <span style="font-size:28px;font-weight:850;color:#071B3A;">{high_priority_count}</span><br>
+        score >= 65
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with pcol2:
+    st.markdown("### Top Relationships Requiring Management Attention")
+    st.dataframe(
+        priority_view[
+            [
+                "Relationship",
+                "Country",
+                "Sector",
+                "Exposure (USD B)",
+                "Treasury_Score",
+                "Strategic_Score",
+                "Risk_Score",
+                "Priority Score",
+                "Management_Priority_Band",
+                "Management_Priority_Rationale",
+            ]
+        ].head(10),
+        use_container_width=True,
+        hide_index=True,
+        height=360,
+    )
+
+st.markdown(
+    """
+    <div class="ai-box">
+    <b>Management Priority Score v1 Formula</b><br><br>
+    40% Exposure Importance + 25% Treasury Opportunity + 20% Relationship Weakness + 15% Risk Alert
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# =========================
 # ACTION ENGINE SUMMARY
 # =========================
 st.markdown("## AI Management Action Summary")
@@ -1001,7 +1151,7 @@ with memo_col2:
     )
     st.download_button(
         "Download Action Table CSV",
-        data=view[["Relationship", "Country", "Sector", "Exposure_USD_B", "Deposits_USD_B", "Treasury_Score", "Strategic_Score", "Risk_Score", "AI_Action_Category", "AI_Management_Action"]].to_csv(index=False).encode("utf-8"),
+        data=view[["Relationship", "Country", "Sector", "Exposure_USD_B", "Deposits_USD_B", "Treasury_Score", "Strategic_Score", "Risk_Score", "Management_Priority_Score", "Management_Priority_Band", "Management_Priority_Rationale", "AI_Action_Category", "AI_Management_Action"]].to_csv(index=False).encode("utf-8"),
         file_name="ecai_ai_management_action_table_v1_9.csv",
         mime="text/csv",
         use_container_width=True,
@@ -1009,4 +1159,4 @@ with memo_col2:
 
 
 st.markdown("---")
-st.caption("EC-AI Institutional Portfolio Prototype v1.9 Fixed | AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
+st.caption("EC-AI Institutional Portfolio Prototype v1.9.2 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
