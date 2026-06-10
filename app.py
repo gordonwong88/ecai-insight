@@ -1,8 +1,8 @@
 
-# EC-AI Institutional Relationship OS v6.6
-# v6.6: Executive Action Queue + PDF memo export + improved readability
+# EC-AI Institutional Relationship OS v6.7
+# v6.7: Executive Action Queue + PDF memo export + improved readability
 # Run:
-#   python -m streamlit run ecai_institutional_relationship_os_v6_6.py
+#   python -m streamlit run ecai_institutional_relationship_os_v6_7.py
 
 import io
 import re
@@ -202,7 +202,7 @@ st.markdown("""
     font-weight: 700;
 }
 
-/* v6.6 readability polish */
+/* v6.7 readability polish */
 html, body, [class*="css"] { font-size: 16px; }
 p, li, div { line-height: 1.45; }
 [data-testid="stDataFrame"] div { font-size: 14px !important; }
@@ -213,14 +213,14 @@ p, li, div { line-height: 1.45; }
 .side-card { font-size: 14px; }
 
 
-/* v6.6 readability upgrade */
+/* v6.7 readability upgrade */
 html, body, [class*="css"] { font-size: 16px; }
 div[data-testid="stDataFrame"] { font-size: 15px; }
 .stDataFrame, .stTable { font-size: 15px; }
 button, .stButton button, .stDownloadButton button { font-size: 15px !important; }
 
 
-/* v6.6 readability upgrade */
+/* v6.7 readability upgrade */
 html, body, [class*="css"] { font-size: 18px !important; }
 p, li, div, span, label { font-size: 16px !important; line-height: 1.55 !important; }
 h1 { font-size: 42px !important; }
@@ -237,7 +237,7 @@ h3 { font-size: 24px !important; }
 .stDownloadButton button, .stButton button { font-size: 16px !important; padding: 0.65rem 1rem !important; }
 
 
-/* v6.6 executive section header upgrade */
+/* v6.7 executive section header upgrade */
 .ec-section-title {
     font-size: 34px !important;
     font-weight: 900 !important;
@@ -254,7 +254,7 @@ h3 { font-size: 24px !important; }
 }
 
 
-/* v6.6 layout polish */
+/* v6.7 layout polish */
 .hero-title {
     font-size: 48px !important;
     font-weight: 950 !important;
@@ -316,7 +316,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 Executive Layout Refactor */
+/* v6.7 Executive Layout Refactor */
 .ec-kpi-row {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -383,7 +383,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 lower grid alignment polish */
+/* v6.7 lower grid alignment polish */
 [data-testid="stDataFrame"] {
     min-height: auto !important;
 }
@@ -392,7 +392,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 Relationship 360 cleanup */
+/* v6.7 Relationship 360 cleanup */
 .r360-hero-card {
     background: #ffffff;
     border: 1px solid #D8DEE6;
@@ -455,7 +455,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 Portfolio Cognition layout cleanup */
+/* v6.7 Portfolio Cognition layout cleanup */
 .pc-summary-row {
     display:grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -502,7 +502,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 Executive Command Center */
+/* v6.7 Executive Command Center */
 .ecc-hero {
     background: linear-gradient(135deg, #071B3A 0%, #0B2C55 58%, #123E70 100%);
     border-radius: 22px;
@@ -636,10 +636,10 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 card spacing */
+/* v6.7 card spacing */
 .ecc-action-card { margin-bottom: 18px; }
 
-/* v6.6 Executive Command Center redesign */
+/* v6.7 Executive Command Center redesign */
 .block-container {
     padding-top: 1.3rem !important;
     padding-left: 3.2rem !important;
@@ -739,7 +739,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 emergency UI fixes */
+/* v6.7 emergency UI fixes */
 .hero-title {
     font-size: 40px !important;
     line-height: 1.22 !important;
@@ -759,7 +759,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 multi-tab shell */
+/* v6.7 multi-tab shell */
 [data-baseweb="tab-list"] {
     gap: 8px;
     background: #F8FAFC;
@@ -789,7 +789,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 combined hero */
+/* v6.7 combined hero */
 .os-hero {
     background: linear-gradient(135deg, #061A36 0%, #0B2C55 60%, #123E70 100%);
     border-radius: 22px;
@@ -819,7 +819,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 stable landscape compact mode */
+/* v6.7 stable landscape compact mode */
 .block-container {
     padding-top: 0.55rem !important;
     padding-left: 1.25rem !important;
@@ -1041,7 +1041,7 @@ div[data-testid="stDataFrame"] {
 }
 
 
-/* v6.6 Clean Command Center Mode */
+/* v6.7 Clean Command Center Mode */
 .block-container {
     padding-top: 0.7rem !important;
     padding-left: 1.4rem !important;
@@ -1196,6 +1196,165 @@ div[data-testid="stDataFrame"] {
     padding: 12px 14px !important;
     min-height: 88px !important;
     border-radius: 13px !important;
+}
+
+
+/* v6.7 Executive Readability Upgrade */
+
+/* Wider page */
+.block-container {
+    padding-top: 0.9rem !important;
+    padding-left: 1.8rem !important;
+    padding-right: 1.8rem !important;
+    max-width: 1920px !important;
+}
+
+/* Cleaner sidebar */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg,#061A36 0%,#0B2C55 100%) !important;
+    width: 230px !important;
+    min-width: 230px !important;
+}
+[data-testid="stSidebar"] * {
+    color: white !important;
+}
+[data-testid="stSidebar"] [data-baseweb="tag"] {
+    background: rgba(255,255,255,.14) !important;
+    border: 1px solid rgba(255,255,255,.25) !important;
+    border-radius: 8px !important;
+    color: white !important;
+    font-size: 12px !important;
+    max-width: 170px !important;
+}
+[data-testid="stSidebar"] label {
+    font-size: 14px !important;
+    font-weight: 800 !important;
+}
+[data-testid="stSidebar"] .stMultiSelect {
+    font-size: 13px !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+}
+
+/* Header */
+.os-hero-title {
+    font-size: 42px !important;
+    line-height: 1.12 !important;
+    margin-bottom: 6px !important;
+}
+.os-hero-sub {
+    font-size: 23px !important;
+    margin-bottom: 7px !important;
+}
+.os-hero-body {
+    font-size: 16px !important;
+    line-height: 1.45 !important;
+}
+
+/* Tabs */
+[data-baseweb="tab"] {
+    height: 46px !important;
+    padding: 0 18px !important;
+    font-size: 15px !important;
+}
+
+/* General section readability */
+.ec-section-title {
+    font-size: 34px !important;
+    margin-top: 20px !important;
+    margin-bottom: 8px !important;
+}
+.ec-section-subtitle {
+    font-size: 16px !important;
+    margin-bottom: 12px !important;
+}
+.narrative-box, .ai-box, .ec-module-note {
+    font-size: 16px !important;
+    line-height: 1.55 !important;
+    padding: 14px 18px !important;
+}
+
+/* Portfolio chart readability */
+.main-title {
+    font-size: 34px !important;
+}
+.sub-title, .small-note {
+    font-size: 14px !important;
+}
+.kpi-card {
+    min-height: 112px !important;
+    padding: 16px 18px !important;
+}
+.kpi-label {
+    font-size: 14px !important;
+}
+.kpi-value {
+    font-size: 30px !important;
+}
+.kpi-sub {
+    font-size: 13px !important;
+}
+
+/* Relationship Workspace readability */
+.r360-name {
+    font-size: 34px !important;
+    line-height: 1.15 !important;
+}
+.r360-meta {
+    font-size: 16px !important;
+}
+.r360-summary {
+    font-size: 17px !important;
+    line-height: 1.65 !important;
+}
+.r360-action {
+    font-size: 18px !important;
+    line-height: 1.6 !important;
+}
+.r360-kpi {
+    min-height: 110px !important;
+    padding: 16px 18px !important;
+}
+.r360-kpi-label {
+    font-size: 14px !important;
+}
+.r360-kpi-value {
+    font-size: 28px !important;
+}
+.strategy-pill {
+    font-size: 13px !important;
+    padding: 7px 12px !important;
+}
+
+/* AI Reasoning readability */
+.ec-kpi-wide-row .ec-kpi-tile {
+    min-height: 118px !important;
+}
+.ec-kpi-tile-label {
+    font-size: 15px !important;
+}
+.ec-kpi-tile-value {
+    font-size: 28px !important;
+}
+.ec-kpi-tile-sub {
+    font-size: 14px !important;
+}
+[data-testid="stDataFrame"] div,
+[data-testid="stDataFrame"] span,
+[data-testid="stDataFrame"] th,
+[data-testid="stDataFrame"] td {
+    font-size: 14px !important;
+}
+.ec-table-title {
+    font-size: 22px !important;
+}
+
+/* Executive Memo readability */
+.stDownloadButton button, .stButton button {
+    font-size: 14px !important;
+    padding: 0.55rem 0.8rem !important;
 }
 
 </style>
@@ -1472,7 +1631,7 @@ def style_priority_table(styler):
 
 
 def build_ai_reasoning_narrative(row):
-    """Rule-based AI reasoning narrative v6.6: explains why management should care."""
+    """Rule-based AI reasoning narrative v6.7: explains why management should care."""
     relationship = row["Relationship"]
     score = row["Management_Priority_Score"]
     band = row["Management_Priority_Band"]
@@ -1534,7 +1693,7 @@ def build_ai_reasoning_summary(data):
 
 
 def executive_command_center_action_type(row):
-    """v6.6: simplified executive action type for command center cards."""
+    """v6.7: simplified executive action type for command center cards."""
     score = row["Management_Priority_Score"]
     risk = row["Risk_Score"]
     treasury = row["Treasury_Score"]
@@ -1553,7 +1712,7 @@ def executive_command_center_action_type(row):
 
 
 def executive_command_center_next_action(row):
-    """v6.6: concise action recommendation for executive command center."""
+    """v6.7: concise action recommendation for executive command center."""
     rel = row["Relationship"]
     action_type = executive_command_center_action_type(row)
 
@@ -1569,7 +1728,7 @@ def executive_command_center_next_action(row):
 
 
 def build_command_center_agenda(data):
-    """v6.6: management agenda based on top priority relationships."""
+    """v6.7: management agenda based on top priority relationships."""
     top = data.sort_values("Management_Priority_Score", ascending=False).head(5).copy()
     if top.empty:
         return []
@@ -1653,7 +1812,7 @@ def build_management_memo(data):
     lines.append("5. Use relationship-level action categories to guide banker follow-up and management committee discussion.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v6.6")
+    lines.append("Generated by EC-AI Institutional Relationship OS v6.7")
     return "\n".join(lines)
 
 
@@ -1716,7 +1875,7 @@ def build_management_memo_pdf(data) -> bytes:
             story.append(Paragraph(safe, styles["ECBody"]))
         elif safe.startswith("---"):
             story.append(Spacer(1, 0.10 * inch))
-            story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v6.6", styles["ECSmall"]))
+            story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v6.7", styles["ECSmall"]))
         else:
             story.append(Paragraph(safe, styles["ECBody"]))
 
@@ -1866,7 +2025,7 @@ def build_relationship_360_memo(row):
     lines.append("- Identify FX, hedging, liquidity, and transaction banking cross-sell opportunities.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v6.6")
+    lines.append("Generated by EC-AI Institutional Relationship OS v6.7")
     return "\n".join(lines)
 
 df["Quadrant"] = df.apply(quadrant, axis=1)
@@ -1889,7 +2048,12 @@ df["Management_Priority_Rationale"] = df.apply(management_priority_rationale, ax
 # =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("v6.6")
+st.sidebar.markdown("v6.7")
+st.sidebar.markdown("---")
+st.sidebar.markdown("### Portfolio Summary")
+st.sidebar.markdown("**Total Exposure**  \nUSD 131.2B")
+st.sidebar.markdown("**Relationships**  \n20")
+st.sidebar.markdown("**Priority Names**  \n4")
 st.sidebar.markdown("---")
 
 selected_priority = st.sidebar.multiselect(
@@ -1905,7 +2069,7 @@ selected_country = st.sidebar.multiselect(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("Hover over bubbles for details. Chart labels use number keys; relationship names are shown in the reference table.")
+st.sidebar.info("Chart labels use number keys. Relationship names are in the reference table.")
 
 view = df[df["Priority"].isin(selected_priority) & df["Country"].isin(selected_country)].copy()
 
@@ -1931,7 +2095,7 @@ st.markdown(
 )
 
 # =========================
-# EC-AI OS v6.6 MULTI-TAB SHELL
+# EC-AI OS v6.7 MULTI-TAB SHELL
 # =========================
 tab_command, tab_portfolio, tab_actions, tab_relationship, tab_reasoning, tab_memo = st.tabs(
     [
@@ -1946,7 +2110,7 @@ tab_command, tab_portfolio, tab_actions, tab_relationship, tab_reasoning, tab_me
 
 with tab_command:
     # =========================
-    # EXECUTIVE COMMAND CENTER v6.6
+    # EXECUTIVE COMMAND CENTER v6.7
     # =========================
     command_view = view.sort_values("Management_Priority_Score", ascending=False).copy()
     command_view["Executive_Action_Type"] = command_view.apply(executive_command_center_action_type, axis=1)
@@ -1967,7 +2131,7 @@ with tab_command:
     st.markdown(
         f"""
         <div class="ecc-hero">
-            <div class="ecc-kicker">EC-AI v6.6 · Executive Command Center</div>
+            <div class="ecc-kicker">EC-AI v6.7 · Executive Command Center</div>
             <div class="ecc-title">What should management act on next?</div>
             <div class="ecc-subtitle">
             EC-AI converts institutional relationship data into executive actions:
@@ -2079,7 +2243,7 @@ with tab_command:
         ]].copy()
         ecc_table["Exposure_USD_B"] = ecc_table["Exposure_USD_B"].map(lambda x: f"{x:.1f}")
         ecc_table["Management_Priority_Score"] = ecc_table["Management_Priority_Score"].map(lambda x: f"{x:.1f}")
-        st.dataframe(ecc_table, use_container_width=True, hide_index=True, height=220)
+        st.dataframe(ecc_table, use_container_width=True, hide_index=True, height=300)
 
 
 with tab_portfolio:
@@ -2097,7 +2261,7 @@ with tab_portfolio:
     # =========================
     st.markdown('<div class="main-title">Portfolio Cognition Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v6.6</div>',
+        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v6.7</div>',
         unsafe_allow_html=True,
     )
 
@@ -2208,8 +2372,8 @@ with tab_portfolio:
     )
 
     fig.update_layout(
-        template="plotly_white",
-        height=300,
+    template="plotly_white",
+    height=620,
         margin=dict(l=10, r=10, t=20, b=20),
         showlegend=False,
         font=dict(family="Inter, Arial", size=13, color="#071B3A"),
@@ -2266,7 +2430,7 @@ with tab_portfolio:
     ref = key_df[["Chart_No", "Relationship", "Country", "Sector", "Exposure_USD_B"]].copy()
     ref = ref.rename(columns={"Chart_No": "#", "Exposure_USD_B": "Exposure (USD B)"})
     ref["Exposure (USD B)"] = ref["Exposure (USD B)"].map(lambda x: f"{x:.1f}")
-    st.dataframe(ref, use_container_width=True, hide_index=True, height=220)
+    st.dataframe(ref, use_container_width=True, hide_index=True, height=300)
 
 
 with tab_actions:
@@ -2426,7 +2590,7 @@ with tab_actions:
     st.markdown(
         """
         <div class="ai-box">
-        <b>Management Priority Score v6.6 Formula</b><br><br>
+        <b>Management Priority Score v6.7 Formula</b><br><br>
         40% Exposure Importance + 25% Treasury Opportunity + 20% Relationship Weakness + 15% Risk Alert<br><br>
         <b>Score Colours:</b> Red ≥ 75 | Orange 65–74.9 | Blue 50–64.9 | Green &lt; 50
         </div>
@@ -2576,10 +2740,10 @@ with tab_relationship:
     tcol1, tcol2 = st.columns(2, gap="large")
     with tcol1:
         st.markdown('<div class="ec-table-title">Relationship Metrics</div>', unsafe_allow_html=True)
-        st.dataframe(metrics_table, use_container_width=True, hide_index=True, height=190)
+        st.dataframe(metrics_table, use_container_width=True, hide_index=True, height=260)
     with tcol2:
         st.markdown('<div class="ec-table-title">360 Assessment</div>', unsafe_allow_html=True)
-        st.dataframe(assessment_table, use_container_width=True, hide_index=True, height=190)
+        st.dataframe(assessment_table, use_container_width=True, hide_index=True, height=260)
 
     strategy_table = pd.DataFrame({
         "Coverage Area": [
@@ -2611,7 +2775,7 @@ with tab_relationship:
         st.download_button(
             "Download Relationship 360 Memo PDF",
             data=r360_pdf,
-            file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v6_6.pdf",
+            file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v6_7.pdf",
             mime="application/pdf",
             use_container_width=False,
         )
@@ -2620,7 +2784,7 @@ with tab_relationship:
         st.download_button(
             "Download Relationship 360 Memo Text",
             data=r360_memo.encode("utf-8"),
-            file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v6_6.txt",
+            file_name=f"ecai_relationship_360_{selected_360.replace(' ', '_').lower()}_v6_7.txt",
             mime="text/plain",
             use_container_width=False,
         )
@@ -2629,7 +2793,7 @@ with tab_relationship:
 
 with tab_reasoning:
     # =========================
-    # AI REASONING LAYER v6.6
+    # AI REASONING LAYER v6.7
     # =========================
     section_title("AI Reasoning Layer", "Priority signals translated into executive interpretation and management logic.")
     st.markdown(
@@ -2736,7 +2900,7 @@ with tab_memo:
         st.download_button(
             "Download Management Memo PDF",
             data=memo_pdf,
-            file_name="ecai_institutional_portfolio_management_memo_v6_6.pdf",
+            file_name="ecai_institutional_portfolio_management_memo_v6_7.pdf",
             mime="application/pdf",
             use_container_width=True,
         )
@@ -2744,7 +2908,7 @@ with tab_memo:
         st.download_button(
             "Download Action Table CSV",
             data=view[["Relationship", "Country", "Sector", "Exposure_USD_B", "Deposits_USD_B", "Treasury_Score", "Strategic_Score", "Risk_Score", "Management_Priority_Score", "Management_Priority_Band", "Management_Priority_Rationale", "AI_Action_Category", "AI_Management_Action"]].to_csv(index=False).encode("utf-8"),
-            file_name="ecai_ai_management_action_table_v6_6.csv",
+            file_name="ecai_ai_management_action_table_v6_7.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -2752,7 +2916,7 @@ with tab_memo:
         st.download_button(
             "Download Memo Text",
             data=memo_text.encode("utf-8"),
-            file_name="ecai_institutional_portfolio_management_memo_v6_6.txt",
+            file_name="ecai_institutional_portfolio_management_memo_v6_7.txt",
             mime="text/plain",
             use_container_width=True,
         )
@@ -2763,4 +2927,4 @@ with tab_memo:
 
 
 st.markdown("---")
-st.caption("EC-AI Institutional Relationship OS v6.6 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
+st.caption("EC-AI Institutional Relationship OS v6.7 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
