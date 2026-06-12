@@ -1506,6 +1506,9 @@ div[data-testid="stDataFrame"] {
     line-height: 1.65 !important;
     color: #071B3A;
 }
+.rw-body p {
+    margin: 0 0 18px 0 !important;
+}
 .rw-evidence-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1595,9 +1598,73 @@ div[data-testid="stDataFrame"] {
     line-height:1.35 !important;
 }
 
+
+/* v8.1.4 AI Reasoning Cards */
+.reasoning-card {
+    background: #FFFFFF;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 18px 20px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 4px rgba(15,23,42,.05);
+}
+.reasoning-card-title {
+    font-size: 20px !important;
+    font-weight: 950 !important;
+    color: #071B3A;
+    margin-bottom: 8px;
+}
+.reasoning-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.reasoning-pill {
+    display: inline-block;
+    background: #EEF4FF;
+    border: 1px solid #C7D7FE;
+    color: #0B3D75;
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 13px !important;
+    font-weight: 850;
+}
+.reasoning-body {
+    font-size: 15px !important;
+    line-height: 1.6 !important;
+    color: #071B3A;
+}
+.reasoning-action {
+    margin-top: 12px;
+    background: #F8FAFC;
+    border-left: 4px solid #1565C0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+    color: #071B3A;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
+
+
+
+# v8.1.1 cleanup: remove dev noise, improve portfolio summary cards, left-align # reference IDs
+st.markdown("""
+<style>
+.pc-summary-row .pc-action-card {
+    min-height: 126px !important;
+    padding: 22px 24px !important;
+}
+[data-testid="stDataFrame"] th:first-child,
+[data-testid="stDataFrame"] td:first-child {
+    text-align: left !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 def section_title(title, subtitle=None):
     st.markdown(f'<div class="ec-section-title">{title}</div>', unsafe_allow_html=True)
@@ -2288,7 +2355,6 @@ st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
 st.sidebar.markdown("v8.1")
 st.sidebar.markdown("---")
-st.sidebar.info("Full portfolio view enabled. Filters removed for cleaner executive presentation.")
 
 view = df.copy()
 
@@ -2610,19 +2676,19 @@ with tab_portfolio:
         f"""
         <div class="pc-summary-row">
             <div class="pc-action-card">
-                <div class="pc-action-title">REMOVED_Top 5 Relationships</div>
-                <div class="pc-action-value">{top5_pct:.1f}%</div>
-                <div class="pc-action-sub">of portfolio exposure</div>
+                <div class="pc-action-title" style="font-size:18px !important; line-height:1.25 !important;">Top 5 Relationships</div>
+                <div class="pc-action-value" style="font-size:30px !important; line-height:1.15 !important;">{top5_pct:.1f}%</div>
+                <div class="pc-action-sub" style="font-size:14px !important;">of portfolio exposure</div>
             </div>
             <div class="pc-action-card">
-                <div class="pc-action-title">REMOVED_Infrastructure Concentration</div>
-                <div class="pc-action-value">{infra_pct:.1f}%</div>
-                <div class="pc-action-sub">of total exposure</div>
+                <div class="pc-action-title" style="font-size:18px !important; line-height:1.25 !important;">Infrastructure Concentration</div>
+                <div class="pc-action-value" style="font-size:30px !important; line-height:1.15 !important;">{infra_pct:.1f}%</div>
+                <div class="pc-action-sub" style="font-size:14px !important;">of total exposure</div>
             </div>
             <div class="pc-action-card">
-                <div class="pc-action-title">REMOVED_Shipping & Aviation Risk</div>
-                <div class="pc-action-value">{shipping_pct:.1f}%</div>
-                <div class="pc-action-sub">of exposure</div>
+                <div class="pc-action-title" style="font-size:18px !important; line-height:1.25 !important;">Shipping & Aviation Risk</div>
+                <div class="pc-action-value" style="font-size:30px !important; line-height:1.15 !important;">{shipping_pct:.1f}%</div>
+                <div class="pc-action-sub" style="font-size:14px !important;">of exposure</div>
             </div>
         </div>
         """,
@@ -2648,6 +2714,7 @@ with tab_portfolio:
     st.caption("By chart number")
     ref = key_df[["Chart_No", "Relationship", "Country", "Sector", "Exposure_USD_B"]].copy()
     ref = ref.rename(columns={"Chart_No": "#", "Exposure_USD_B": "Exposure (USD B)"})
+    ref["#"] = ref["#"].astype(str)
     ref["Exposure (USD B)"] = ref["Exposure (USD B)"].map(lambda x: f"{x:.1f}")
     st.dataframe(ref, use_container_width=True, hide_index=True, height=300)
 
@@ -2665,78 +2732,152 @@ with tab_actions:
     # =========================
     # LOWER GRID
     # =========================
-    with st.expander("Portfolio Relationship Workbench", expanded=False):
-        lower_left, lower_right = st.columns([3.75, 1.45], gap="large")
+    with st.expander("Portfolio Relationship Workbench", expanded=True):
+        st.markdown(
+            """
+            <style>
+            .wb-metric-row {
+                display: grid;
+                grid-template-columns: repeat(5, minmax(0, 1fr));
+                gap: 14px;
+                margin-top: 14px;
+                margin-bottom: 16px;
+            }
+            .wb-metric-card {
+                background: #FFFFFF;
+                border: 1px solid #D8DEE6;
+                border-radius: 14px;
+                padding: 15px 16px;
+                min-height: 96px;
+                box-shadow: 0 1px 3px rgba(15,23,42,.05);
+            }
+            .wb-metric-label {
+                font-size: 13px !important;
+                color: #526173;
+                font-weight: 850;
+                margin-bottom: 8px;
+                white-space: nowrap;
+            }
+            .wb-metric-value {
+                font-size: 24px !important;
+                font-weight: 950;
+                color: #071B3A;
+                line-height: 1.1 !important;
+                white-space: nowrap;
+            }
+            .wb-panel {
+                background: #FFFFFF;
+                border: 1px solid #D8DEE6;
+                border-radius: 14px;
+                padding: 18px 20px;
+                min-height: 150px;
+                box-shadow: 0 1px 3px rgba(15,23,42,.05);
+                margin-bottom: 14px;
+            }
+            .wb-panel-title {
+                font-size: 17px !important;
+                font-weight: 950;
+                color: #071B3A;
+                margin-bottom: 10px;
+            }
+            .wb-panel-body {
+                font-size: 15px !important;
+                line-height: 1.55 !important;
+                color: #071B3A;
+            }
+            .wb-action-panel {
+                border-left: 5px solid #2563EB;
+                background: #F8FAFC;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        with lower_left:
-            section_title("Management Attention Priorities", "Relationship-level management focus based on exposure, strategic importance and risk.")
-            attention = view.sort_values(["Strategic_Score", "Risk_Score", "Exposure_USD_B"], ascending=[False, False, False]).copy()
-            attention["Exposure (USD B)"] = attention["Exposure_USD_B"].map(lambda x: f"{x:.1f}")
-            attention["Deposits (USD B)"] = attention["Deposits_USD_B"].map(lambda x: f"{x:.1f}")
+        section_title("Relationship Quick Drilldown", "Single relationship view with action recommendation.")
+        selected = st.selectbox("Select relationship", view["Relationship"].tolist(), key="workbench_relationship_select")
+        row = view[view["Relationship"] == selected].iloc[0]
 
-            st.dataframe(
-                attention[
-                    [
-                        "Relationship","Quadrant","Priority","Country","Sector",
-                        "Exposure (USD B)","Deposits (USD B)",
-                        "Treasury_Score","Strategic_Score","Risk_Score","AI_Action_Category",
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True,
-                height=260,
-            )
+        st.markdown(
+            f"""
+            <div class="wb-metric-row">
+                <div class="wb-metric-card">
+                    <div class="wb-metric-label">Exposure</div>
+                    <div class="wb-metric-value">{fmt_b(row["Exposure_USD_B"])}</div>
+                </div>
+                <div class="wb-metric-card">
+                    <div class="wb-metric-label">Deposits</div>
+                    <div class="wb-metric-value">{fmt_b(row["Deposits_USD_B"])}</div>
+                </div>
+                <div class="wb-metric-card">
+                    <div class="wb-metric-label">Treasury</div>
+                    <div class="wb-metric-value">{int(row["Treasury_Score"])}</div>
+                </div>
+                <div class="wb-metric-card">
+                    <div class="wb-metric-label">Strategic</div>
+                    <div class="wb-metric-value">{int(row["Strategic_Score"])}</div>
+                </div>
+                <div class="wb-metric-card">
+                    <div class="wb-metric-label">Risk</div>
+                    <div class="wb-metric-value">{int(row["Risk_Score"])}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        with lower_right:
-            section_title("Relationship Quick Drilldown", "Single relationship view with action recommendation.")
-            selected = st.selectbox("Select relationship", view["Relationship"].tolist())
-            row = view[view["Relationship"] == selected].iloc[0]
+        if row["Quadrant"] == "Optimization Focus":
+            msg = "Strategically important relationship requiring treasury deepening and stronger operational wallet linkage."
+        elif row["Quadrant"] == "Crown Jewel":
+            msg = "High-quality relationship combining strategic relevance with strong treasury contribution."
+        elif row["Quadrant"] == "Treasury Anchor":
+            msg = "Relationship remains valuable from a liquidity and funding perspective."
+        else:
+            msg = "Relationship may warrant portfolio review given weaker economics and strategic positioning."
 
-            def small_metric(label, value):
-                st.markdown(
-                    f"""
-                    <div class="small-metric-card">
-                        <div class="small-metric-label">{label}</div>
-                        <div class="small-metric-value">{value}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-            d1, d2, d3, d4, d5 = st.columns(5)
-            with d1:
-                small_metric("Exposure", fmt_b(row["Exposure_USD_B"]))
-            with d2:
-                small_metric("Deposits", fmt_b(row["Deposits_USD_B"]))
-            with d3:
-                small_metric("Treasury", int(row["Treasury_Score"]))
-            with d4:
-                small_metric("Strategic", int(row["Strategic_Score"]))
-            with d5:
-                small_metric("Risk", int(row["Risk_Score"]))
-
-            if row["Quadrant"] == "Optimization Focus":
-                msg = "Strategically important relationship requiring treasury deepening and stronger operational wallet linkage."
-            elif row["Quadrant"] == "Crown Jewel":
-                msg = "High-quality relationship combining strategic relevance with strong treasury contribution."
-            elif row["Quadrant"] == "Treasury Anchor":
-                msg = "Relationship remains valuable from a liquidity and funding perspective."
-            else:
-                msg = "Relationship may warrant portfolio review given weaker economics and strategic positioning."
-
-            st.markdown(f'<div class="narrative-box">{msg}</div>', unsafe_allow_html=True)
-
-            st.markdown("### AI Management Action Engine")
+        wb_col1, wb_col2 = st.columns(2, gap="large")
+        with wb_col1:
             st.markdown(
                 f"""
-                <div class="ai-box" style="min-height:150px;">
-                <b>Recommended Management Action</b><br><br>
-                {row["AI_Management_Action"]}<br><br>
-                <b>Action Category:</b> {row["AI_Action_Category"]}
+                <div class="wb-panel">
+                    <div class="wb-panel-title">Relationship Interpretation</div>
+                    <div class="wb-panel-body">{msg}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+        with wb_col2:
+            st.markdown(
+                f"""
+                <div class="wb-panel wb-action-panel">
+                    <div class="wb-panel-title">AI Management Action Engine</div>
+                    <div class="wb-panel-body">
+                        <b>Recommended Management Action</b><br><br>
+                        {row["AI_Management_Action"]}<br><br>
+                        <b>Action Category:</b> {row["AI_Action_Category"]}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        section_title("Management Attention Priorities", "Relationship-level management focus based on exposure, strategic importance and risk.")
+        attention = view.sort_values(["Strategic_Score", "Risk_Score", "Exposure_USD_B"], ascending=[False, False, False]).copy()
+        attention["Exposure (USD B)"] = attention["Exposure_USD_B"].map(lambda x: f"{x:.1f}")
+        attention["Deposits (USD B)"] = attention["Deposits_USD_B"].map(lambda x: f"{x:.1f}")
+
+        st.dataframe(
+            attention[
+                [
+                    "Relationship","Quadrant","Priority","Country","Sector",
+                    "Exposure (USD B)","Deposits (USD B)",
+                    "Treasury_Score","Strategic_Score","Risk_Score","AI_Action_Category",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+            height=320,
+        )
 
     # =========================
     # EXECUTIVE INTELLIGENCE LAYER
@@ -2914,21 +3055,23 @@ def rw_timeline_events(row):
 
 
 def rw_situation_report(row, strategic_view, wallet_view, treasury_view, risk_view, sector_view):
-    rel = row["Relationship"]
-    return f"""
-    <b>Executive Assessment</b><br>
-    {rel} is assessed as <b>{strategic_view}</b> with <b>{wallet_view.lower()}</b> and <b>{treasury_view.lower()}</b>.
-    The relationship carries <b>USD {row['Exposure_USD_B']:.1f}B</b> exposure and <b>USD {row['Deposits_USD_B']:.1f}B</b> deposits.
-    <br><br>
-    <b>Growth Opportunities</b><br>
-    Management should focus on operating wallet penetration, treasury dialogue, FX / cash management linkage and senior coverage where appropriate.
-    <br><br>
-    <b>Risk Observations</b><br>
-    Current risk view: <b>{risk_view}</b>. Sector context: <b>{sector_view}</b>.
-    <br><br>
-    <b>Strategic Recommendation</b><br>
-    The recommended management action is <b>{row['AI_Action_Category']}</b>: {row['AI_Management_Action']}
+    """Build clean HTML for the AI Situation Report.
+    Keep this as compact HTML to avoid Streamlit rendering stray closing tags.
     """
+    rel = row["Relationship"]
+    return (
+        f"<p><b>Executive Assessment</b><br>"
+        f"{rel} is assessed as <b>{strategic_view}</b> with <b>{wallet_view.lower()}</b> "
+        f"and <b>{treasury_view.lower()}</b>. The relationship carries "
+        f"<b>USD {row['Exposure_USD_B']:.1f}B</b> exposure and "
+        f"<b>USD {row['Deposits_USD_B']:.1f}B</b> deposits.</p>"
+        f"<p><b>Growth Opportunities</b><br>"
+        f"Management should focus on operating wallet penetration, treasury dialogue, FX / cash management linkage and senior coverage where appropriate.</p>"
+        f"<p><b>Risk Observations</b><br>"
+        f"Current risk view: <b>{risk_view}</b>. Sector context: <b>{sector_view}</b>.</p>"
+        f"<p><b>Strategic Recommendation</b><br>"
+        f"The recommended management action is <b>{row['AI_Action_Category']}</b>: {row['AI_Management_Action']}</p>"
+    )
 
 
 with tab_relationship:
@@ -3028,15 +3171,9 @@ with tab_relationship:
     # AI Situation Report + Recommended Action
     left_col, right_col = st.columns([1.55, 1.0], gap="large")
     with left_col:
+        situation_html = rw_situation_report(r360, strategic_view, wallet_view, treasury_view, risk_view, sector_view)
         st.markdown(
-            f"""
-            <div class="rw-section-card">
-                <div class="rw-section-heading">AI Situation Report</div>
-                <div class="rw-body">
-                    {rw_situation_report(r360, strategic_view, wallet_view, treasury_view, risk_view, sector_view)}
-                </div>
-            </div>
-            """,
+            f'<div class="rw-section-card"><div class="rw-section-heading">AI Situation Report</div><div class="rw-body">{situation_html}</div></div>',
             unsafe_allow_html=True,
         )
     with right_col:
@@ -3274,21 +3411,44 @@ with tab_reasoning:
     )
 
     st.markdown('<div class="ec-table-title">Relationship-Level AI Reasoning</div>', unsafe_allow_html=True)
-    reasoning_table = reasoning_view[
-        [
-            "Relationship",
-            "Priority Score",
-            "Management_Priority_Band",
-            "AI_Reasoning_Narrative",
-        ]
-    ].head(8)
-
-    st.dataframe(
-        reasoning_table,
-        use_container_width=True,
-        hide_index=True,
-        height=220,
+    st.markdown(
+        """
+        <div class="small-note">
+        Narrative reasoning is shown as executive cards instead of spreadsheet cells so the full recommendation can be read without horizontal scrolling.
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+
+    reasoning_cards = reasoning_view.head(8).copy()
+    for idx, rr in reasoning_cards.iterrows():
+        score = float(rr["Management_Priority_Score"])
+        band = rr["Management_Priority_Band"]
+        action_theme = rr.get("Executive_Action_Type", rr.get("AI_Action_Category", "Management Review"))
+        narrative = rr["AI_Reasoning_Narrative"]
+        rationale = rr.get("Management_Priority_Rationale", "")
+        relationship = rr["Relationship"]
+
+        expanded_default = True if idx == reasoning_cards.index[0] else False
+        with st.expander(f"{relationship} · Score {score:.1f} · {band}", expanded=expanded_default):
+            reasoning_html = f"""
+            <div class="reasoning-card">
+                <div class="reasoning-card-title">{relationship}</div>
+                <div class="reasoning-meta-row">
+                    <span class="reasoning-pill">Priority Score: {score:.1f}</span>
+                    <span class="reasoning-pill">{band}</span>
+                    <span class="reasoning-pill">Theme: {action_theme}</span>
+                </div>
+                <div class="reasoning-body">
+                    <b>AI Reasoning</b><br>
+                    {narrative}
+                </div>
+                <div class="reasoning-action">
+                    <b>Why management should care:</b> {rationale}
+                </div>
+            </div>
+            """
+            st.markdown(reasoning_html, unsafe_allow_html=True)
 
 
 
@@ -3357,4 +3517,4 @@ with tab_memo:
 
 
 st.markdown("---")
-st.caption("EC-AI Institutional Relationship OS v8.1 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
+st.caption("EC-AI Institutional Relationship OS v8.1.4 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
