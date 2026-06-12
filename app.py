@@ -1,313 +1,2128 @@
-# EC-AI Institutional Relationship OS v8.0
-# v8.0: Relationship Workspace becomes the primary operating environment
+
+# EC-AI Institutional Relationship OS v8.1
+# v8.1: v7.0 foundation preserved + enhanced Relationship Workspace decision support
 # Run:
-#   python -m streamlit run ecai_institutional_relationship_os_v8_0.py
+#   python -m streamlit run ecai_institutional_relationship_os_v8_1_preserve_v7.py
 
 import io
 import re
-from datetime import date
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Institutional Relationship OS v8.0",
+    page_title="EC-AI Institutional Portfolio Dashboard",
     page_icon="🏦",
     layout="wide",
 )
 
-# -----------------------------
-# CSS — executive workspace style
-# -----------------------------
-st.markdown(
-    """
+st.markdown("""
 <style>
-.block-container {padding-top: 1.0rem; padding-left: 1.8rem; padding-right: 1.8rem; max-width: 1920px;}
-[data-testid="stSidebar"] {background: linear-gradient(180deg,#061A36 0%,#0B2C55 100%);} 
-[data-testid="stSidebar"] * {color: white !important;}
-[data-baseweb="tab-list"] {gap: 7px; background:#F8FAFC; padding:7px; border:1px solid #D8DEE6; border-radius:14px;}
-[data-baseweb="tab"] {height:44px; padding:0 16px; border-radius:10px; font-weight:850; font-size:14px;}
-[data-baseweb="tab"][aria-selected="true"] {background:#071B3A; color:white;}
-.ec-hero {background: transparent; margin-bottom: 12px;}
-.ec-title {font-size: 42px; line-height:1.12; font-weight:950; color:#071B3A; letter-spacing:-0.035em;}
-.ec-sub {font-size: 20px; color:#0B2C55; font-weight:850; margin-top:4px;}
-.ec-body {font-size: 15px; color:#526173; line-height:1.45; margin-top:5px; max-width:1280px;}
-.section-title {font-size: 30px; font-weight: 950; color:#071B3A; margin-top:18px; margin-bottom:5px; letter-spacing:-0.02em;}
-.section-sub {font-size: 15px; color:#526173; margin-bottom:12px;}
-.workspace-header {background:linear-gradient(135deg,#071B3A 0%,#0B2C55 70%,#123E70 100%); color:white; border-radius:20px; padding:24px 28px; margin-top:12px; margin-bottom:16px; box-shadow:0 12px 26px rgba(7,27,58,.16);}
-.workspace-name {font-size:38px; font-weight:950; line-height:1.1; letter-spacing:-0.03em;}
-.workspace-meta {font-size:15px; color:#DCEBFF; margin-top:8px;}
-.priority-badge {display:inline-block; border-radius:999px; padding:7px 12px; font-size:13px; font-weight:900; margin-top:14px;}
-.card {background:white; border:1px solid #D8DEE6; border-radius:16px; padding:18px 20px; box-shadow:0 3px 10px rgba(15,23,42,.045); margin-bottom:14px;}
-.card-title {font-size:19px; font-weight:950; color:#071B3A; margin-bottom:9px;}
-.card-kicker {font-size:12px; color:#526173; font-weight:850; text-transform:uppercase; letter-spacing:.04em; margin-bottom:5px;}
-.card-body {font-size:15.5px; line-height:1.55; color:#071B3A;}
-.kpi-grid {display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; margin-top:15px;}
-.kpi {background:white; border:1px solid rgba(255,255,255,.30); border-radius:14px; padding:13px 14px; background:rgba(255,255,255,.10);}
-.kpi-label {font-size:12px; color:#DCEBFF; font-weight:800; margin-bottom:5px;}
-.kpi-value {font-size:22px; color:white; font-weight:950; line-height:1.1;}
-.metric-card {background:#FFFFFF; border:1px solid #D8DEE6; border-radius:14px; padding:14px 16px; min-height:86px;}
-.metric-label {font-size:13px; color:#526173; font-weight:850; margin-bottom:5px;}
-.metric-value {font-size:25px; color:#071B3A; font-weight:950; line-height:1.1;}
-.metric-sub {font-size:12px; color:#526173; margin-top:6px;}
-.action-card {background:#F8FAFC; border-left:6px solid #1565C0; border-radius:16px; padding:18px 20px; margin-bottom:14px;}
-.action-type {font-size:28px; font-weight:950; color:#071B3A; line-height:1.1;}
-.action-row {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:14px;}
-.action-mini {background:white; border:1px solid #D8DEE6; border-radius:12px; padding:12px 14px;}
-.action-mini-label {font-size:12px; color:#526173; font-weight:850; margin-bottom:4px;}
-.action-mini-value {font-size:16px; color:#071B3A; font-weight:950;}
-.evidence-grid {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px;}
-.outcome-grid {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px;}
-.memo-box {background:#FFFFFF; border:1px solid #D8DEE6; border-radius:16px; padding:18px 20px; font-size:14.5px; line-height:1.55; color:#071B3A; max-height:520px; overflow:auto;}
-.small-note {font-size:13px; color:#526173; line-height:1.45;}
-.alert-high {background:#FEE2E2; color:#991B1B;}
-.alert-med {background:#FFEDD5; color:#9A3412;}
-.alert-low {background:#DCFCE7; color:#166534;}
-[data-testid="stDataFrame"] div, [data-testid="stDataFrame"] span, [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td {font-size:13px !important;}
-.stDownloadButton button, .stButton button {font-size:14px !important; padding:.58rem .9rem !important;}
-@media (max-width: 1200px) {.kpi-grid,.evidence-grid,.outcome-grid,.action-row {grid-template-columns:repeat(2,minmax(0,1fr));}.ec-title{font-size:34px}.workspace-name{font-size:30px}}
-</style>
-""",
-    unsafe_allow_html=True,
-)
+.block-container {
+    padding-top: 2.0rem;
+    padding-left: 2rem;
+    padding-right: 2rem;
+    max-width: 1760px;
+}
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg,#061A36 0%,#0B2C55 100%);
+}
+[data-testid="stSidebar"] * {
+    color: white;
+}
+.main-title {
+    font-size: 44px;
+    font-weight: 850;
+    color: #071B3A;
+    line-height: 1.15;
+    margin: 10px 0 4px 0;
+    padding-top: 8px;
+    letter-spacing: -0.02em;
+    overflow: visible;
+}
+.sub-title {
+    color: #526173;
+    font-size: 15px;
+    margin-bottom: 18px;
+}
+.portfolio-card {
+    background: white;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 16px 20px;
+    margin-top: 8px;
+    min-height: 92px;
+    box-shadow: 0 1px 3px rgba(15,23,42,.05);
+    overflow: visible;
+}
+.portfolio-label {
+    font-size: 12px;
+    color: #526173;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+.portfolio-name {
+    font-size: 23px;
+    color: #071B3A;
+    font-weight: 850;
+    margin-top: 4px;
+    line-height: 1.25;
+}
+.portfolio-date {
+    font-size: 12px;
+    color: #526173;
+    margin-top: 6px;
+}
+.kpi-card {
+    background: white;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 16px 18px;
+    min-height: 104px;
+    box-shadow: 0 1px 3px rgba(15,23,42,.06);
+}
+.kpi-label {
+    color: #526173;
+    font-size: 13px;
+    font-weight: 700;
+}
+.kpi-value {
+    color: #071B3A;
+    font-size: 27px;
+    font-weight: 850;
+    margin-top: 8px;
+}
+.kpi-sub {
+    color: #526173;
+    font-size: 12px;
+    margin-top: 4px;
+}
+.narrative-box {
+    background: #F8FAFC;
+    border-left: 5px solid #071B3A;
+    border-radius: 12px;
+    padding: 16px 22px;
+    color: #071B3A;
+    line-height: 1.6;
+    font-size: 15px;
+    margin-top: 16px;
+    margin-bottom: 16px;
+}
+.ai-box {
+    background: #F8FAFC;
+    border-left: 5px solid #1565C0;
+    border-radius: 12px;
+    padding: 16px 22px;
+    color: #071B3A;
+    line-height: 1.6;
+    font-size: 14px;
+    margin-top: 14px;
+}
+.memo-card {
+    background: #ffffff;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 18px 22px;
+    box-shadow: 0 1px 3px rgba(15,23,42,.05);
+}
+.profile-card {
+    background: #ffffff;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 18px 22px;
+    box-shadow: 0 1px 3px rgba(15,23,42,.05);
+    margin-bottom: 14px;
+}
+.profile-title {
+    color: #071B3A;
+    font-size: 22px;
+    font-weight: 850;
+    margin-bottom: 10px;
+}
+.profile-subtitle {
+    color: #526173;
+    font-size: 13px;
+    margin-bottom: 12px;
+}
+.strategy-pill {
+    display: inline-block;
+    background: #EEF4FF;
+    border: 1px solid #C7D7FE;
+    color: #0B3D75;
+    padding: 5px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 750;
+    margin-right: 6px;
+    margin-bottom: 6px;
+}
+.side-card {
+    background: white;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 3px rgba(15,23,42,.05);
+}
+.side-title {
+    color: #071B3A;
+    font-size: 19px;
+    font-weight: 800;
+    margin-bottom: 10px;
+}
+.small-note {
+    color: #526173;
+    font-size: 13px;
+}
+.small-metric-card {
+    background: #ffffff;
+    border: 1px solid #E5E7EB;
+    padding: 10px 8px;
+    border-radius: 10px;
+    min-height: 66px;
+}
+.small-metric-label {
+    font-size: 11px;
+    color: #6B7280;
+    margin-bottom: 5px;
+    font-weight: 700;
+}
+.small-metric-value {
+    font-size: 17px;
+    font-weight: 800;
+    color: #0B1F3B;
+    white-space: nowrap;
+    overflow: visible;
+}
+.badge {
+    color: white;
+    padding: 3px 8px;
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 700;
+}
 
-# -----------------------------
-# Synthetic institutional portfolio data
-# -----------------------------
+/* v7.0 readability polish */
+html, body, [class*="css"] { font-size: 16px; }
+p, li, div { line-height: 1.45; }
+[data-testid="stDataFrame"] div { font-size: 14px !important; }
+[data-testid="stDataFrame"] th { font-size: 14px !important; font-weight: 800 !important; }
+[data-testid="stDataFrame"] td { font-size: 14px !important; }
+.stDownloadButton button, .stButton button { font-size: 14px !important; padding: 0.55rem 0.8rem !important; }
+.narrative-box { font-size: 15px; }
+.side-card { font-size: 14px; }
+
+
+/* v7.0 readability upgrade */
+html, body, [class*="css"] { font-size: 16px; }
+div[data-testid="stDataFrame"] { font-size: 15px; }
+.stDataFrame, .stTable { font-size: 15px; }
+button, .stButton button, .stDownloadButton button { font-size: 15px !important; }
+
+
+/* v7.0 readability upgrade */
+html, body, [class*="css"] { font-size: 18px !important; }
+p, li, div, span, label { font-size: 16px !important; line-height: 1.55 !important; }
+h1 { font-size: 42px !important; }
+h2 { font-size: 30px !important; }
+h3 { font-size: 24px !important; }
+.narrative-box, .ai-box, .side-card, .profile-card { font-size: 16px !important; }
+.profile-title { font-size: 24px !important; }
+.profile-subtitle, .small-note, .kpi-sub { font-size: 14px !important; }
+.strategy-pill { font-size: 13px !important; padding: 7px 12px !important; }
+[data-testid="stDataFrame"] div,
+[data-testid="stDataFrame"] span,
+[data-testid="stDataFrame"] th,
+[data-testid="stDataFrame"] td { font-size: 15.5px !important; }
+.stDownloadButton button, .stButton button { font-size: 16px !important; padding: 0.65rem 1rem !important; }
+
+
+/* v7.0 executive section header upgrade */
+.ec-section-title {
+    font-size: 34px !important;
+    font-weight: 900 !important;
+    color: #071B3A !important;
+    margin-top: 34px !important;
+    margin-bottom: 12px !important;
+    letter-spacing: -0.02em !important;
+    line-height: 1.18 !important;
+}
+.ec-section-subtitle {
+    font-size: 16px !important;
+    color: #526173 !important;
+    margin-bottom: 14px !important;
+}
+
+
+/* v7.0 layout polish */
+.hero-title {
+    font-size: 48px !important;
+    font-weight: 950 !important;
+    color: #071B3A !important;
+    letter-spacing: -0.035em !important;
+    line-height: 1.08 !important;
+    margin-top: 10px !important;
+    margin-bottom: 10px !important;
+}
+.hero-subtitle {
+    font-size: 22px !important;
+    font-weight: 760 !important;
+    color: #0B2C55 !important;
+    margin-bottom: 18px !important;
+}
+.hero-body {
+    font-size: 18px !important;
+    line-height: 1.65 !important;
+    color: #071B3A !important;
+}
+.hero-bullet {
+    font-size: 17px !important;
+    line-height: 1.55 !important;
+    color: #071B3A !important;
+}
+.ec-section-title {
+    font-size: 36px !important;
+    margin-top: 42px !important;
+}
+.side-card {
+    min-height: 96px !important;
+}
+.side-card b {
+    font-size: 16px !important;
+}
+.side-card span {
+    line-height: 1.2 !important;
+}
+div[data-testid="stDataFrame"] {
+    border-radius: 12px !important;
+}
+[data-testid="stDataFrame"] div,
+[data-testid="stDataFrame"] span,
+[data-testid="stDataFrame"] th,
+[data-testid="stDataFrame"] td {
+    font-size: 16px !important;
+}
+.kpi-card {
+    min-height: 120px !important;
+}
+.kpi-label {
+    font-size: 15px !important;
+}
+.kpi-value {
+    font-size: 30px !important;
+}
+.kpi-sub {
+    font-size: 14px !important;
+}
+
+
+/* v7.0 Executive Layout Refactor */
+.ec-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 18px;
+    margin-bottom: 22px;
+}
+.ec-kpi-wide-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 18px;
+    margin-bottom: 22px;
+}
+.ec-kpi-tile {
+    background: #FFFFFF;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 18px 20px;
+    min-height: 112px;
+    box-shadow: 0 1px 3px rgba(15,23,42,.06);
+}
+.ec-kpi-tile-label {
+    font-size: 15px !important;
+    color: #071B3A;
+    font-weight: 800;
+    margin-bottom: 8px;
+}
+.ec-kpi-tile-value {
+    font-size: 28px !important;
+    color: #071B3A;
+    font-weight: 950;
+    line-height: 1.1 !important;
+}
+.ec-kpi-tile-sub {
+    font-size: 14px !important;
+    color: #526173;
+    margin-top: 8px;
+}
+.ec-export-row {
+    display: grid;
+    grid-template-columns: 1.5fr 1fr 1fr;
+    gap: 16px;
+    align-items: stretch;
+    margin-top: 14px;
+    margin-bottom: 18px;
+}
+.ec-export-card {
+    background: #FFFFFF;
+    border: 1px solid #D8DEE6;
+    border-radius: 14px;
+    padding: 16px 18px;
+    min-height: 88px;
+}
+.ec-table-title {
+    font-size: 22px !important;
+    font-weight: 900;
+    color: #071B3A;
+    margin-top: 12px;
+    margin-bottom: 10px;
+}
+.ec-full-width-box {
+    width: 100%;
+}
+
+
+/* v7.0 lower grid alignment polish */
+[data-testid="stDataFrame"] {
+    min-height: auto !important;
+}
+.relationship-drilldown-card {
+    min-height: 560px !important;
+}
+
+
+/* v7.0 Relationship 360 cleanup */
+.r360-hero-card {
+    background: #ffffff;
+    border: 1px solid #D8DEE6;
+    border-radius: 16px;
+    padding: 22px 26px;
+    margin-top: 14px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(15,23,42,.06);
+}
+.r360-name {
+    font-size: 28px !important;
+    font-weight: 950 !important;
+    color: #071B3A;
+    margin-bottom: 6px;
+}
+.r360-meta {
+    font-size: 15px !important;
+    color: #526173;
+    margin-bottom: 14px;
+}
+.r360-summary {
+    font-size: 16px !important;
+    line-height: 1.65 !important;
+    color: #071B3A;
+    margin-top: 16px;
+}
+.r360-action {
+    background:#F8FAFC;
+    border-left:5px solid #1565C0;
+    border-radius:12px;
+    padding:16px 18px;
+    margin-top:16px;
+    font-size:16px !important;
+    line-height:1.55 !important;
+}
+.r360-kpi-row {
+    display:grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap:14px;
+    margin-top: 12px;
+    margin-bottom: 20px;
+}
+.r360-kpi {
+    background:#ffffff;
+    border:1px solid #D8DEE6;
+    border-radius:14px;
+    padding:14px 16px;
+    min-height:88px;
+}
+.r360-kpi-label {
+    font-size:14px !important;
+    color:#526173;
+    font-weight:800;
+    margin-bottom:8px;
+}
+.r360-kpi-value {
+    font-size:22px !important;
+    font-weight:950;
+    color:#071B3A;
+}
+
+
+/* v7.0 Portfolio Cognition layout cleanup */
+.pc-summary-row {
+    display:grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap:18px;
+    margin-top:18px;
+    margin-bottom:18px;
+}
+.pc-action-card {
+    background:#ffffff;
+    border:1px solid #D8DEE6;
+    border-radius:14px;
+    padding:18px 20px;
+    min-height:120px;
+    box-shadow:0 1px 3px rgba(15,23,42,.06);
+}
+.pc-action-title {
+    font-size:16px !important;
+    font-weight:900;
+    color:#071B3A;
+    margin-bottom:8px;
+}
+.pc-action-value {
+    font-size:28px !important;
+    font-weight:950;
+    color:#071B3A;
+    line-height:1.1 !important;
+}
+.pc-action-sub {
+    font-size:14px !important;
+    color:#526173;
+    margin-top:8px;
+}
+.pc-actions-list {
+    background:#ffffff;
+    border:1px solid #D8DEE6;
+    border-radius:14px;
+    padding:18px 22px;
+    margin-top:10px;
+    margin-bottom:20px;
+}
+.pc-actions-list li {
+    font-size:16px !important;
+    margin-bottom:8px;
+}
+
+
+/* v7.0 Executive Command Center */
+.ecc-hero {
+    background: linear-gradient(135deg, #071B3A 0%, #0B2C55 58%, #123E70 100%);
+    border-radius: 22px;
+    padding: 32px 36px;
+    color: #FFFFFF;
+    margin-top: 18px;
+    margin-bottom: 24px;
+    box-shadow: 0 8px 24px rgba(7,27,58,.18);
+}
+.ecc-kicker {
+    font-size: 14px !important;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #BFD7FF;
+    margin-bottom: 10px;
+}
+.ecc-title {
+    font-size: 46px !important;
+    font-weight: 950;
+    letter-spacing: -0.035em;
+    line-height: 1.05 !important;
+    margin-bottom: 12px;
+}
+.ecc-subtitle {
+    font-size: 18px !important;
+    line-height: 1.55 !important;
+    color: #EAF2FF;
+    max-width: 980px;
+}
+.ecc-metric-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 20px;
+    margin-bottom: 24px;
+}
+.ecc-metric {
+    background: #FFFFFF;
+    border: 1px solid #D8DEE6;
+    border-radius: 16px;
+    padding: 20px 22px;
+    min-height: 122px;
+    box-shadow: 0 2px 6px rgba(15,23,42,.06);
+}
+.ecc-metric-label {
+    font-size: 14px !important;
+    color: #526173;
+    font-weight: 850;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    margin-bottom: 8px;
+}
+.ecc-metric-value {
+    font-size: 32px !important;
+    font-weight: 950;
+    color: #071B3A;
+    line-height: 1.1 !important;
+}
+.ecc-metric-sub {
+    font-size: 14px !important;
+    color: #526173;
+    margin-top: 8px;
+    line-height: 1.35 !important;
+}
+.ecc-action-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 14px;
+    margin-bottom: 20px;
+}
+.ecc-action-card {
+    background: #FFFFFF;
+    border: 1px solid #D8DEE6;
+    border-radius: 16px;
+    padding: 20px 22px;
+    box-shadow: 0 2px 6px rgba(15,23,42,.06);
+    min-height: 190px;
+}
+.ecc-action-rank {
+    display: inline-block;
+    background: #EEF4FF;
+    color: #0B3D75;
+    border: 1px solid #C7D7FE;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 13px !important;
+    font-weight: 850;
+    margin-bottom: 10px;
+}
+.ecc-action-name {
+    font-size: 22px !important;
+    font-weight: 950;
+    color: #071B3A;
+    margin-bottom: 8px;
+}
+.ecc-action-type {
+    font-size: 15px !important;
+    font-weight: 850;
+    color: #1565C0;
+    margin-bottom: 10px;
+}
+.ecc-action-text {
+    font-size: 15px !important;
+    line-height: 1.5 !important;
+    color: #071B3A;
+}
+.ecc-agenda {
+    background: #F8FAFC;
+    border-left: 6px solid #1565C0;
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin-top: 16px;
+    margin-bottom: 24px;
+}
+.ecc-agenda-title {
+    font-size: 20px !important;
+    font-weight: 950;
+    color: #071B3A;
+    margin-bottom: 10px;
+}
+.ecc-agenda li {
+    font-size: 16px !important;
+    margin-bottom: 8px;
+    line-height: 1.45 !important;
+}
+.ecc-small-link {
+    font-size: 14px !important;
+    color: #526173;
+}
+
+
+/* v7.0 card spacing */
+.ecc-action-card { margin-bottom: 18px; }
+
+/* v7.0 Executive Command Center redesign */
+.block-container {
+    padding-top: 1.3rem !important;
+    padding-left: 3.2rem !important;
+    padding-right: 3.2rem !important;
+    max-width: 1680px !important;
+}
+.ecc-hero {
+    background:
+      radial-gradient(circle at 82% 20%, rgba(74,144,226,.28) 0%, rgba(74,144,226,0) 34%),
+      linear-gradient(135deg, #061A36 0%, #0B2C55 52%, #123E70 100%) !important;
+    border-radius: 26px !important;
+    padding: 42px 46px !important;
+    margin-top: 22px !important;
+    margin-bottom: 26px !important;
+    box-shadow: 0 14px 36px rgba(7,27,58,.22) !important;
+}
+.ecc-title {
+    font-size: 56px !important;
+    max-width: 980px;
+}
+.ecc-subtitle {
+    font-size: 20px !important;
+    max-width: 1080px !important;
+}
+.ecc-metric-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 20px !important;
+    margin-top: 18px !important;
+    margin-bottom: 30px !important;
+}
+.ecc-metric {
+    border: 1px solid rgba(216,222,230,.95) !important;
+    border-radius: 18px !important;
+    min-height: 140px !important;
+    padding: 22px 24px !important;
+    box-shadow: 0 8px 18px rgba(15,23,42,.055) !important;
+}
+.ecc-metric-value {
+    font-size: 36px !important;
+}
+.ecc-action-grid {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 18px !important;
+}
+.ecc-action-card {
+    min-height: 285px !important;
+    border-radius: 18px !important;
+    padding: 20px 22px !important;
+    box-shadow: 0 8px 18px rgba(15,23,42,.055) !important;
+}
+.ecc-action-name {
+    font-size: 22px !important;
+    line-height: 1.15 !important;
+}
+.ecc-action-text {
+    font-size: 15px !important;
+}
+.ecc-agenda {
+    border-radius: 18px !important;
+    padding: 24px 28px !important;
+}
+.ec-section-title {
+    font-size: 38px !important;
+    margin-top: 46px !important;
+}
+.ec-section-subtitle {
+    font-size: 17px !important;
+}
+.command-strip {
+    display:grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 20px;
+    margin-bottom: 24px;
+}
+.command-panel {
+    background:#FFFFFF;
+    border:1px solid #D8DEE6;
+    border-radius:18px;
+    padding:22px 24px;
+    box-shadow:0 8px 18px rgba(15,23,42,.055);
+}
+.command-panel-title {
+    font-size:20px !important;
+    font-weight:950;
+    color:#071B3A;
+    margin-bottom:8px;
+}
+.command-panel-body {
+    font-size:16px !important;
+    color:#071B3A;
+    line-height:1.55 !important;
+}
+.demo-wrap {
+    margin-top: 12px;
+    margin-bottom: 28px;
+}
+
+
+/* v7.0 emergency UI fixes */
+.hero-title {
+    font-size: 40px !important;
+    line-height: 1.22 !important;
+    letter-spacing: -0.025em !important;
+    overflow: visible !important;
+    padding-top: 4px !important;
+    padding-bottom: 6px !important;
+}
+.ecc-title {
+    font-size: 48px !important;
+    line-height: 1.16 !important;
+    overflow: visible !important;
+}
+.ecc-action-card {
+    min-height: 245px !important;
+    margin-bottom: 18px !important;
+}
+
+
+/* v7.0 multi-tab shell */
+[data-baseweb="tab-list"] {
+    gap: 8px;
+    background: #F8FAFC;
+    padding: 8px;
+    border-radius: 14px;
+    border: 1px solid #D8DEE6;
+}
+[data-baseweb="tab"] {
+    height: 48px;
+    padding: 0 18px;
+    border-radius: 10px;
+    font-weight: 800;
+}
+[data-baseweb="tab"][aria-selected="true"] {
+    background: #071B3A;
+    color: white;
+}
+.ec-module-note {
+    background: #F8FAFC;
+    border-left: 5px solid #1565C0;
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-top: 14px;
+    margin-bottom: 18px;
+    color: #071B3A;
+    font-size: 16px !important;
+}
+
+
+/* v7.0 combined hero */
+.os-hero {
+    background: linear-gradient(135deg, #061A36 0%, #0B2C55 60%, #123E70 100%);
+    border-radius: 22px;
+    padding: 30px 36px;
+    color: white;
+    margin-top: 8px;
+    margin-bottom: 22px;
+    box-shadow: 0 10px 26px rgba(7,27,58,.18);
+}
+.os-hero-title {
+    font-size: 42px !important;
+    font-weight: 950 !important;
+    line-height: 1.12 !important;
+    letter-spacing: -0.03em !important;
+    margin-bottom: 8px;
+}
+.os-hero-sub {
+    font-size: 20px !important;
+    font-weight: 800 !important;
+    color: #DCEBFF;
+    margin-bottom: 10px;
+}
+.os-hero-body {
+    font-size: 16px !important;
+    color: #EAF2FF;
+    line-height: 1.55 !important;
+}
+
+
+/* v7.0 stable landscape compact mode */
+.block-container {
+    padding-top: 0.55rem !important;
+    padding-left: 1.25rem !important;
+    padding-right: 1.25rem !important;
+    max-width: 1780px !important;
+}
+[data-testid="stSidebar"] {
+    width: 200px !important;
+    min-width: 200px !important;
+}
+.os-hero {
+    padding: 10px 16px !important;
+    border-radius: 13px !important;
+    margin-top: 0 !important;
+    margin-bottom: 8px !important;
+    box-shadow: none !important;
+}
+.os-hero-title {
+    font-size: 24px !important;
+    line-height: 1.08 !important;
+    margin-bottom: 2px !important;
+}
+.os-hero-sub {
+    font-size: 13px !important;
+    margin-bottom: 2px !important;
+}
+.os-hero-body {
+    font-size: 11.5px !important;
+    line-height: 1.2 !important;
+}
+[data-baseweb="tab-list"] {
+    padding: 4px !important;
+    gap: 4px !important;
+    margin-bottom: 6px !important;
+}
+[data-baseweb="tab"] {
+    height: 34px !important;
+    padding: 0 10px !important;
+    font-size: 11.5px !important;
+}
+.ec-section-title {
+    font-size: 22px !important;
+    margin-top: 8px !important;
+    margin-bottom: 3px !important;
+    line-height: 1.08 !important;
+}
+.ec-section-subtitle {
+    font-size: 11px !important;
+    margin-bottom: 5px !important;
+}
+.ecc-hero {
+    padding: 12px 18px !important;
+    border-radius: 13px !important;
+    margin-top: 5px !important;
+    margin-bottom: 7px !important;
+    box-shadow: none !important;
+}
+.ecc-kicker {
+    font-size: 9.5px !important;
+    margin-bottom: 2px !important;
+}
+.ecc-title {
+    font-size: 26px !important;
+    line-height: 1.08 !important;
+    margin-bottom: 3px !important;
+}
+.ecc-subtitle {
+    font-size: 11.5px !important;
+    line-height: 1.22 !important;
+    max-width: 1200px !important;
+}
+.ecc-metric-row {
+    gap: 7px !important;
+    margin-top: 6px !important;
+    margin-bottom: 7px !important;
+}
+.ecc-metric {
+    min-height: 64px !important;
+    padding: 8px 10px !important;
+    border-radius: 10px !important;
+}
+.ecc-metric-label {
+    font-size: 9px !important;
+    margin-bottom: 2px !important;
+}
+.ecc-metric-value {
+    font-size: 20px !important;
+    line-height: 1.05 !important;
+}
+.ecc-metric-sub {
+    font-size: 9px !important;
+    margin-top: 2px !important;
+    line-height: 1.08 !important;
+}
+.command-strip {
+    gap: 7px !important;
+    margin-bottom: 6px !important;
+}
+.command-panel {
+    padding: 9px 11px !important;
+    border-radius: 10px !important;
+    min-height: 64px !important;
+}
+.command-panel-title {
+    font-size: 12.5px !important;
+    margin-bottom: 2px !important;
+}
+.command-panel-body {
+    font-size: 10px !important;
+    line-height: 1.18 !important;
+}
+.ecc-action-card {
+    min-height: 135px !important;
+    padding: 9px 10px !important;
+    border-radius: 10px !important;
+    margin-bottom: 6px !important;
+}
+.ecc-action-rank {
+    font-size: 9px !important;
+    padding: 2px 6px !important;
+    margin-bottom: 4px !important;
+}
+.ecc-action-name {
+    font-size: 14px !important;
+    margin-bottom: 2px !important;
+    line-height: 1.08 !important;
+}
+.ecc-action-type {
+    font-size: 10px !important;
+    margin-bottom: 3px !important;
+}
+.ecc-action-text {
+    font-size: 9.5px !important;
+    line-height: 1.16 !important;
+}
+.ecc-agenda {
+    padding: 8px 11px !important;
+    border-radius: 10px !important;
+    margin-top: 5px !important;
+    margin-bottom: 5px !important;
+}
+.ecc-agenda-title {
+    font-size: 12.5px !important;
+    margin-bottom: 3px !important;
+}
+.ecc-agenda li {
+    font-size: 10px !important;
+    margin-bottom: 2px !important;
+    line-height: 1.14 !important;
+}
+.kpi-card, .ec-kpi-tile, .pc-action-card, .r360-kpi {
+    padding: 7px 9px !important;
+    min-height: 58px !important;
+    border-radius: 10px !important;
+}
+.kpi-label, .ec-kpi-tile-label, .pc-action-title, .r360-kpi-label {
+    font-size: 9px !important;
+    margin-bottom: 2px !important;
+}
+.kpi-value, .ec-kpi-tile-value, .pc-action-value, .r360-kpi-value {
+    font-size: 16px !important;
+    line-height: 1.06 !important;
+}
+.kpi-sub, .ec-kpi-tile-sub, .pc-action-sub {
+    font-size: 9px !important;
+    margin-top: 2px !important;
+}
+.narrative-box, .ai-box, .ec-module-note {
+    padding: 7px 10px !important;
+    font-size: 10px !important;
+    line-height: 1.2 !important;
+    margin-top: 5px !important;
+    margin-bottom: 5px !important;
+}
+.ec-table-title {
+    font-size: 14px !important;
+    margin-top: 5px !important;
+    margin-bottom: 3px !important;
+}
+[data-testid="stDataFrame"] div,
+[data-testid="stDataFrame"] span,
+[data-testid="stDataFrame"] th,
+[data-testid="stDataFrame"] td {
+    font-size: 10px !important;
+}
+.main-title {
+    font-size: 22px !important;
+    margin-top: 0 !important;
+}
+.sub-title, .small-note {
+    font-size: 10px !important;
+    margin-bottom: 3px !important;
+}
+.r360-hero-card {
+    padding: 9px 11px !important;
+    border-radius: 11px !important;
+    margin-top: 5px !important;
+    margin-bottom: 6px !important;
+}
+.r360-name {
+    font-size: 17px !important;
+}
+.r360-meta {
+    font-size: 10px !important;
+    margin-bottom: 4px !important;
+}
+.r360-summary, .r360-action {
+    font-size: 10px !important;
+    line-height: 1.18 !important;
+}
+.r360-kpi-row, .pc-summary-row, .ec-kpi-row, .ec-kpi-wide-row {
+    gap: 7px !important;
+    margin-top: 5px !important;
+    margin-bottom: 6px !important;
+}
+.strategy-pill {
+    font-size: 9px !important;
+    padding: 3px 6px !important;
+}
+
+
+/* v7.0 Clean Command Center Mode */
+.block-container {
+    padding-top: 0.7rem !important;
+    padding-left: 1.4rem !important;
+    padding-right: 1.4rem !important;
+    max-width: 1900px !important;
+}
+.os-hero {
+    background: transparent !important;
+    color: #071B3A !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    margin: 0 0 10px 0 !important;
+    box-shadow: none !important;
+}
+.os-hero-title {
+    font-size: 34px !important;
+    color: #071B3A !important;
+    line-height: 1.1 !important;
+    margin-bottom: 5px !important;
+}
+.os-hero-sub {
+    font-size: 17px !important;
+    color: #0B2C55 !important;
+    font-weight: 850 !important;
+    margin-bottom: 5px !important;
+}
+.os-hero-body {
+    font-size: 14px !important;
+    color: #526173 !important;
+    line-height: 1.35 !important;
+}
+.ecc-hero {
+    display: none !important;
+}
+[data-baseweb="tab-list"] {
+    padding: 6px !important;
+    gap: 6px !important;
+    margin-bottom: 14px !important;
+    border-radius: 14px !important;
+}
+[data-baseweb="tab"] {
+    height: 42px !important;
+    padding: 0 16px !important;
+    font-size: 14px !important;
+}
+.ec-section-title {
+    font-size: 30px !important;
+    margin-top: 14px !important;
+    margin-bottom: 5px !important;
+    line-height: 1.1 !important;
+}
+.ec-section-subtitle {
+    font-size: 14px !important;
+    margin-bottom: 10px !important;
+}
+.ecc-metric-row {
+    gap: 14px !important;
+    margin-top: 8px !important;
+    margin-bottom: 14px !important;
+}
+.ecc-metric {
+    min-height: 105px !important;
+    padding: 16px 18px !important;
+    border-radius: 14px !important;
+    box-shadow: 0 2px 8px rgba(15,23,42,.06) !important;
+}
+.ecc-metric-label {
+    font-size: 12px !important;
+    margin-bottom: 5px !important;
+}
+.ecc-metric-value {
+    font-size: 30px !important;
+    line-height: 1.08 !important;
+}
+.ecc-metric-sub {
+    font-size: 12px !important;
+    margin-top: 6px !important;
+    line-height: 1.25 !important;
+}
+.command-strip {
+    grid-template-columns: 2.4fr 1fr !important;
+    gap: 14px !important;
+    margin-bottom: 16px !important;
+}
+.command-panel {
+    padding: 16px 18px !important;
+    border-radius: 14px !important;
+    min-height: 110px !important;
+    box-shadow: 0 2px 8px rgba(15,23,42,.06) !important;
+}
+.command-panel-title {
+    font-size: 18px !important;
+    margin-bottom: 7px !important;
+}
+.command-panel-body {
+    font-size: 14px !important;
+    line-height: 1.45 !important;
+}
+.ecc-action-card {
+    min-height: 220px !important;
+    padding: 16px 18px !important;
+    border-radius: 14px !important;
+    margin-bottom: 14px !important;
+}
+.ecc-action-rank {
+    font-size: 12px !important;
+    padding: 4px 9px !important;
+    margin-bottom: 8px !important;
+}
+.ecc-action-name {
+    font-size: 20px !important;
+    margin-bottom: 5px !important;
+    line-height: 1.15 !important;
+}
+.ecc-action-type {
+    font-size: 14px !important;
+    margin-bottom: 7px !important;
+}
+.ecc-action-text {
+    font-size: 13.5px !important;
+    line-height: 1.35 !important;
+}
+.ecc-agenda {
+    padding: 16px 18px !important;
+    border-radius: 14px !important;
+    margin-top: 8px !important;
+    margin-bottom: 12px !important;
+}
+.ecc-agenda-title {
+    font-size: 18px !important;
+    margin-bottom: 7px !important;
+}
+.ecc-agenda li {
+    font-size: 13.5px !important;
+    margin-bottom: 5px !important;
+    line-height: 1.3 !important;
+}
+[data-testid="stDataFrame"] div,
+[data-testid="stDataFrame"] span,
+[data-testid="stDataFrame"] th,
+[data-testid="stDataFrame"] td {
+    font-size: 13px !important;
+}
+.narrative-box, .ai-box, .ec-module-note {
+    padding: 12px 16px !important;
+    font-size: 14px !important;
+    line-height: 1.45 !important;
+    margin-top: 8px !important;
+    margin-bottom: 10px !important;
+}
+.kpi-card, .ec-kpi-tile, .pc-action-card, .r360-kpi {
+    padding: 12px 14px !important;
+    min-height: 88px !important;
+    border-radius: 13px !important;
+}
+
+
+/* v7.0 Executive Readability Upgrade */
+
+/* Wider page */
+.block-container {
+    padding-top: 0.9rem !important;
+    padding-left: 1.8rem !important;
+    padding-right: 1.8rem !important;
+    max-width: 1920px !important;
+}
+
+/* Cleaner sidebar */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg,#061A36 0%,#0B2C55 100%) !important;
+    width: 230px !important;
+    min-width: 230px !important;
+}
+[data-testid="stSidebar"] * {
+    color: white !important;
+}
+[data-testid="stSidebar"] [data-baseweb="tag"] {
+    background: rgba(255,255,255,.14) !important;
+    border: 1px solid rgba(255,255,255,.25) !important;
+    border-radius: 8px !important;
+    color: white !important;
+    font-size: 12px !important;
+    max-width: 170px !important;
+}
+[data-testid="stSidebar"] label {
+    font-size: 14px !important;
+    font-weight: 800 !important;
+}
+[data-testid="stSidebar"] .stMultiSelect {
+    font-size: 13px !important;
+}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+    font-size: 13px !important;
+    line-height: 1.35 !important;
+}
+
+/* Header */
+.os-hero-title {
+    font-size: 42px !important;
+    line-height: 1.12 !important;
+    margin-bottom: 6px !important;
+}
+.os-hero-sub {
+    font-size: 23px !important;
+    margin-bottom: 7px !important;
+}
+.os-hero-body {
+    font-size: 16px !important;
+    line-height: 1.45 !important;
+}
+
+/* Tabs */
+[data-baseweb="tab"] {
+    height: 46px !important;
+    padding: 0 18px !important;
+    font-size: 15px !important;
+}
+
+/* General section readability */
+.ec-section-title {
+    font-size: 34px !important;
+    margin-top: 20px !important;
+    margin-bottom: 8px !important;
+}
+.ec-section-subtitle {
+    font-size: 16px !important;
+    margin-bottom: 12px !important;
+}
+.narrative-box, .ai-box, .ec-module-note {
+    font-size: 16px !important;
+    line-height: 1.55 !important;
+    padding: 14px 18px !important;
+}
+
+/* Portfolio chart readability */
+.main-title {
+    font-size: 34px !important;
+}
+.sub-title, .small-note {
+    font-size: 14px !important;
+}
+.kpi-card {
+    min-height: 112px !important;
+    padding: 16px 18px !important;
+}
+.kpi-label {
+    font-size: 14px !important;
+}
+.kpi-value {
+    font-size: 30px !important;
+}
+.kpi-sub {
+    font-size: 13px !important;
+}
+
+/* Relationship Workspace readability */
+.r360-name {
+    font-size: 34px !important;
+    line-height: 1.15 !important;
+}
+.r360-meta {
+    font-size: 16px !important;
+}
+.r360-summary {
+    font-size: 17px !important;
+    line-height: 1.65 !important;
+}
+.r360-action {
+    font-size: 18px !important;
+    line-height: 1.6 !important;
+}
+.r360-kpi {
+    min-height: 110px !important;
+    padding: 16px 18px !important;
+}
+.r360-kpi-label {
+    font-size: 14px !important;
+}
+.r360-kpi-value {
+    font-size: 28px !important;
+}
+.strategy-pill {
+    font-size: 13px !important;
+    padding: 7px 12px !important;
+}
+
+/* AI Reasoning readability */
+.ec-kpi-wide-row .ec-kpi-tile {
+    min-height: 118px !important;
+}
+.ec-kpi-tile-label {
+    font-size: 15px !important;
+}
+.ec-kpi-tile-value {
+    font-size: 28px !important;
+}
+.ec-kpi-tile-sub {
+    font-size: 14px !important;
+}
+[data-testid="stDataFrame"] div,
+[data-testid="stDataFrame"] span,
+[data-testid="stDataFrame"] th,
+[data-testid="stDataFrame"] td {
+    font-size: 14px !important;
+}
+.ec-table-title {
+    font-size: 22px !important;
+}
+
+/* Executive Memo readability */
+.stDownloadButton button, .stButton button {
+    font-size: 14px !important;
+    padding: 0.55rem 0.8rem !important;
+}
+
+
+/* v7.0 header/sidebar fixes */
+.block-container {
+    padding-top: 1.7rem !important;
+    padding-left: 1.9rem !important;
+    padding-right: 1.9rem !important;
+    max-width: 1920px !important;
+    overflow: visible !important;
+}
+.os-hero {
+    overflow: visible !important;
+    padding-top: 8px !important;
+    margin-top: 4px !important;
+}
+.os-hero-title {
+    font-size: 38px !important;
+    line-height: 1.28 !important;
+    padding-top: 6px !important;
+    padding-bottom: 4px !important;
+    overflow: visible !important;
+    white-space: normal !important;
+}
+.os-hero-sub {
+    font-size: 22px !important;
+    line-height: 1.25 !important;
+}
+.os-hero-body {
+    font-size: 15px !important;
+    line-height: 1.45 !important;
+}
+[data-testid="stSidebar"] {
+    width: 275px !important;
+    min-width: 275px !important;
+    overflow: visible !important;
+}
+[data-testid="stSidebar"] section {
+    overflow: visible !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.85rem !important;
+}
+[data-testid="stSidebar"] label {
+    font-size: 15px !important;
+    font-weight: 850 !important;
+}
+[data-testid="stSidebar"] [data-baseweb="tag"] {
+    max-width: 230px !important;
+    font-size: 12.5px !important;
+    padding: 4px 8px !important;
+}
+[data-testid="stSidebar"] .stMultiSelect {
+    min-height: 70px !important;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] {
+    background: rgba(255,255,255,.08) !important;
+    border-radius: 10px !important;
+}
+
+
+/* v7.0 clean sidebar */
+[data-testid="stSidebar"] {
+    width: 225px !important;
+    min-width: 225px !important;
+}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.8rem !important;
+}
+[data-testid="stSidebar"] .stMultiSelect,
+[data-testid="stSidebar"] [data-baseweb="select"] {
+    display: none !important;
+}
+[data-testid="stSidebar"] [data-testid="stAlert"] {
+    background: rgba(21,101,192,.25) !important;
+    border-radius: 12px !important;
+}
+
+
+/* v8.1 Relationship Workspace Enhancement - preserve v7 intelligence */
+.block-container {
+    padding-top: 2.25rem !important;
+    overflow: visible !important;
+}
+.os-hero-title {
+    line-height: 1.35 !important;
+    padding-top: 12px !important;
+    padding-bottom: 8px !important;
+    overflow: visible !important;
+    white-space: normal !important;
+}
+.rw-alert {
+    background: linear-gradient(135deg, #FFF7ED 0%, #FFFBEB 100%);
+    border: 1px solid #FDBA74;
+    border-left: 8px solid #EA580C;
+    border-radius: 16px;
+    padding: 20px 24px;
+    margin-top: 16px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 8px rgba(15,23,42,.06);
+}
+.rw-alert-title {
+    font-size: 24px !important;
+    font-weight: 950;
+    color: #7C2D12;
+    margin-bottom: 8px;
+}
+.rw-alert-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr 1fr;
+    gap: 14px;
+    margin-top: 12px;
+}
+.rw-alert-metric {
+    background: rgba(255,255,255,.78);
+    border: 1px solid rgba(251,146,60,.45);
+    border-radius: 12px;
+    padding: 12px 14px;
+}
+.rw-alert-label {
+    font-size: 12px !important;
+    color: #9A3412;
+    font-weight: 850;
+    text-transform: uppercase;
+    margin-bottom: 5px;
+}
+.rw-alert-value {
+    font-size: 18px !important;
+    font-weight: 950;
+    color: #7C2D12;
+}
+.rw-section-card {
+    background: #FFFFFF;
+    border: 1px solid #D8DEE6;
+    border-radius: 16px;
+    padding: 20px 22px;
+    margin-top: 14px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 8px rgba(15,23,42,.05);
+}
+.rw-section-heading {
+    font-size: 22px !important;
+    font-weight: 950;
+    color: #071B3A;
+    margin-bottom: 10px;
+}
+.rw-body {
+    font-size: 16px !important;
+    line-height: 1.65 !important;
+    color: #071B3A;
+}
+.rw-evidence-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+    margin-bottom: 18px;
+}
+.rw-evidence-card {
+    background:#FFFFFF;
+    border:1px solid #D8DEE6;
+    border-radius:14px;
+    padding:16px 18px;
+    min-height:130px;
+    box-shadow:0 2px 8px rgba(15,23,42,.05);
+}
+.rw-evidence-label {
+    font-size:13px !important;
+    color:#526173;
+    font-weight:900;
+    margin-bottom:8px;
+    text-transform:uppercase;
+    letter-spacing:.03em;
+}
+.rw-evidence-value {
+    font-size:30px !important;
+    font-weight:950;
+    color:#071B3A;
+    line-height:1.05 !important;
+}
+.rw-evidence-sub {
+    font-size:14px !important;
+    color:#526173;
+    margin-top:8px;
+    line-height:1.35 !important;
+}
+.rw-outcome-grid {
+    display:grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap:14px;
+    margin-top:14px;
+}
+.rw-outcome-card {
+    background:#F8FAFC;
+    border:1px solid #CBD5E1;
+    border-radius:14px;
+    padding:16px 18px;
+    min-height:112px;
+}
+.rw-outcome-label {
+    font-size:13px !important;
+    color:#334155;
+    font-weight:900;
+    margin-bottom:8px;
+}
+.rw-outcome-value {
+    font-size:26px !important;
+    font-weight:950;
+    color:#0B2C55;
+    line-height:1.1 !important;
+}
+.rw-timeline {
+    display:grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap:12px;
+    margin-top:14px;
+}
+.rw-timeline-item {
+    border-top:4px solid #1565C0;
+    background:#FFFFFF;
+    border-left:1px solid #D8DEE6;
+    border-right:1px solid #D8DEE6;
+    border-bottom:1px solid #D8DEE6;
+    border-radius:12px;
+    padding:14px 14px;
+    min-height:104px;
+}
+.rw-timeline-date {
+    font-size:13px !important;
+    font-weight:950;
+    color:#1565C0;
+    margin-bottom:8px;
+}
+.rw-timeline-event {
+    font-size:14px !important;
+    font-weight:800;
+    color:#071B3A;
+    line-height:1.35 !important;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+def section_title(title, subtitle=None):
+    st.markdown(f'<div class="ec-section-title">{title}</div>', unsafe_allow_html=True)
+    if subtitle:
+        st.markdown(f'<div class="ec-section-subtitle">{subtitle}</div>', unsafe_allow_html=True)
+
+# =========================
+# DATA
+# =========================
 rows = [
-    ["ABC Infrastructure", "Infrastructure", "Singapore", "A", 8.5, 1.2, 54, 93, 64, 18, 2, 71, "Treasury Growth"],
-    ["Pacific Energy", "Energy", "Australia", "A", 9.2, 1.4, 49, 84, 70, 16, 1, 78, "Treasury Growth"],
-    ["Quantum Semicon", "Semiconductor", "Taiwan", "A+", 6.1, 3.1, 84, 87, 29, 41, 4, 86, "Strategic Growth"],
-    ["Dragon Telecom", "Telecom", "China", "A", 5.9, 2.4, 73, 81, 47, 33, 3, 74, "Strategic Growth"],
-    ["Eastern Development Bank", "Financials", "Korea", "A+", 5.0, 4.4, 91, 86, 24, 52, 6, 91, "Crown Jewel"],
-    ["Meridian Sovereign Fund", "Sovereign", "UAE", "A+", 4.8, 5.2, 94, 95, 18, 58, 7, 94, "Crown Jewel"],
-    ["Quantum Infrastructure Fund", "Infrastructure", "UAE", "A+", 8.9, 3.2, 88, 94, 22, 46, 5, 93, "Crown Jewel"],
-    ["Crest Capital Partners", "Financials", "Hong Kong", "A", 4.3, 3.6, 91, 79, 23, 49, 5, 88, "Crown Jewel"],
-    ["Sakura Financial", "Financials", "Japan", "A+", 5.2, 4.8, 92, 90, 28, 55, 6, 90, "Crown Jewel"],
-    ["Titan Infrastructure Asia", "Infrastructure", "Philippines", "A", 8.2, 1.5, 58, 92, 61, 19, 2, 73, "Treasury Growth"],
-    ["Nova Infrastructure Holdings", "Infrastructure", "Vietnam", "A", 7.6, 1.8, 61, 89, 53, 21, 2, 76, "Treasury Growth"],
-    ["Terra Renewable Energy", "Renewables", "Australia", "A", 7.8, 1.9, 66, 90, 45, 24, 3, 79, "Strategic Growth"],
-    ["Titan Energy Partners", "Energy", "Qatar", "A", 9.5, 2.5, 71, 89, 52, 28, 3, 81, "Treasury Growth"],
-    ["Vertex Capital", "Financials", "Hong Kong", "A", 3.7, 3.4, 89, 75, 26, 45, 4, 85, "Crown Jewel"],
-    ["Orion Infrastructure", "Infrastructure", "India", "A", 8.0, 2.0, 65, 91, 57, 23, 2, 75, "Treasury Growth"],
-    ["Pacific Semiconductor", "Semiconductor", "Taiwan", "A", 6.3, 3.0, 83, 88, 30, 39, 4, 84, "Strategic Growth"],
-    ["Bluewave Offshore", "Offshore Services", "Malaysia", "B", 4.1, 0.7, 31, 44, 86, 9, 0, 42, "Portfolio Review"],
-    ["Oceanlink Shipping", "Shipping", "Hong Kong", "B", 6.4, 0.8, 35, 42, 88, 8, 1, 39, "Portfolio Review"],
-    ["Polaris Shipping", "Shipping", "Greece", "B", 5.7, 0.6, 25, 38, 92, 7, 0, 33, "Portfolio Review"],
-    ["Oceanic Bulk Carriers", "Shipping", "Greece", "B", 6.0, 0.5, 22, 35, 94, 6, 0, 29, "Portfolio Review"],
+["ABC Infrastructure","Infrastructure","Singapore",8.5,1.2,54,93,64,"Treasury Growth"],
+["Pacific Energy","Energy","Australia",9.2,1.4,49,84,70,"Treasury Growth"],
+["Quantum Semicon","Semiconductor","Taiwan",6.1,3.1,84,87,29,"Strategic Growth"],
+["Dragon Telecom","Telecom","China",5.9,2.4,73,81,47,"Strategic Growth"],
+["Eastern Development Bank","Financials","Korea",5.0,4.4,91,86,24,"Crown Jewel"],
+["Meridian Sovereign Fund","Sovereign","UAE",4.8,5.2,94,95,18,"Crown Jewel"],
+["Quantum Infrastructure Fund","Infrastructure","UAE",8.9,3.2,88,94,22,"Crown Jewel"],
+["Crest Capital Partners","Financials","Hong Kong",4.3,3.6,91,79,23,"Crown Jewel"],
+["Sakura Financial","Financials","Japan",5.2,4.8,92,90,28,"Crown Jewel"],
+["Titan Infrastructure Asia","Infrastructure","Philippines",8.2,1.5,58,92,61,"Treasury Growth"],
+["Nova Infrastructure Holdings","Infrastructure","Vietnam",7.6,1.8,61,89,53,"Treasury Growth"],
+["Terra Renewable Energy","Renewables","Australia",7.8,1.9,66,90,45,"Strategic Growth"],
+["Titan Energy Partners","Energy","Qatar",9.5,2.5,71,89,52,"Treasury Growth"],
+["Vertex Capital","Financials","Hong Kong",3.7,3.4,89,75,26,"Crown Jewel"],
+["Orion Infrastructure","Infrastructure","India",8.0,2.0,65,91,57,"Treasury Growth"],
+["Pacific Semiconductor","Semiconductor","Taiwan",6.3,3.0,83,88,30,"Strategic Growth"],
+["Bluewave Offshore","Offshore Services","Malaysia",4.1,0.7,31,44,86,"Portfolio Review"],
+["Oceanlink Shipping","Shipping","Hong Kong",6.4,0.8,35,42,88,"Portfolio Review"],
+["Polaris Shipping","Shipping","Greece",5.7,0.6,25,38,92,"Portfolio Review"],
+["Oceanic Bulk Carriers","Shipping","Greece",6.0,0.5,22,35,94,"Portfolio Review"],
 ]
 cols = [
-    "Relationship", "Sector", "Country", "Strategic_Tier", "Exposure_USD_B", "Deposits_USD_B",
-    "Treasury_Score", "Strategic_Score", "Risk_Score", "Wallet_Share_Pct",
-    "Executive_Meetings_12M", "Competitive_Position", "Priority"
+    "Relationship","Sector","Country","Exposure_USD_B","Deposits_USD_B",
+    "Treasury_Score","Strategic_Score","Risk_Score","Priority"
 ]
 df = pd.DataFrame(rows, columns=cols)
 
-# -----------------------------
-# Decision engine
-# -----------------------------
-def fmt_b(x: float) -> str:
+def fmt_b(x):
     return f"USD {float(x):.1f}B"
 
+def fmt_pct(x):
+    return f"{float(x):.1f}%"
 
-def fmt_pct_num(x: float) -> str:
-    return f"{float(x):.0f}%"
+def quadrant(row):
+    if row["Strategic_Score"] >= 70 and row["Treasury_Score"] >= 70:
+        return "Crown Jewel"
+    if row["Strategic_Score"] >= 70:
+        return "Optimization Focus"
+    if row["Treasury_Score"] >= 70:
+        return "Treasury Anchor"
+    return "Portfolio Review"
 
+def generate_management_action(row):
+    treasury = row["Treasury_Score"]
+    strategic = row["Strategic_Score"]
+    risk = row["Risk_Score"]
+    exposure = row["Exposure_USD_B"]
+    deposits = row["Deposits_USD_B"]
+    sector = row["Sector"]
+    priority = row["Priority"]
+
+    actions = []
+
+    if strategic >= 80 and treasury < 70:
+        actions.append("Increase treasury penetration and operating wallet linkage.")
+
+    if treasury >= 85 and strategic >= 85:
+        actions.append("Protect crown-jewel funding relationship and maintain pricing discipline.")
+
+    if risk >= 75:
+        actions.append("Enhanced monitoring recommended due to elevated portfolio risk profile.")
+
+    if exposure >= 8:
+        actions.append("Senior management coverage recommended given material exposure size.")
+
+    deposit_ratio = deposits / exposure if exposure else 0
+    if deposit_ratio < 0.25 and strategic >= 75:
+        actions.append("Relationship under-monetized from liquidity and deposit perspective.")
+
+    if sector in ["Shipping", "Offshore Services"]:
+        actions.append("Monitor refinancing and cyclical sector concentration risk.")
+
+    if priority == "Strategic Growth" and treasury >= 70:
+        actions.append("Expand wallet penetration through FX, cash management, and flow products.")
+
+    if len(actions) == 0:
+        actions.append("Relationship remains stable under current portfolio strategy.")
+
+    return " ".join(actions)
+
+def action_category(row):
+    if row["Risk_Score"] >= 80:
+        return "Risk Monitoring"
+    if row["Strategic_Score"] >= 80 and row["Treasury_Score"] < 70:
+        return "Treasury Deepening"
+    if row["Treasury_Score"] >= 85 and row["Strategic_Score"] >= 80:
+        return "Protect & Defend"
+    if row["Exposure_USD_B"] >= 8:
+        return "Senior Coverage"
+    return "Maintain"
 
 def management_priority_score(row, max_exposure):
-    exposure_importance = row["Exposure_USD_B"] / max_exposure * 100 if max_exposure else 0
+    """EC-AI Intelligence Layer v1: Management Priority Score."""
+    exposure_importance = (row["Exposure_USD_B"] / max_exposure * 100) if max_exposure else 0
     treasury_opportunity = max(0, 100 - row["Treasury_Score"])
-    relationship_gap = max(0, 100 - row["Strategic_Score"])
-    deposit_gap = max(0, 40 - row["Wallet_Share_Pct"]) * 1.6
+    relationship_weakness = max(0, 100 - row["Strategic_Score"])
     risk_alert = row["Risk_Score"]
-    score = 0.30 * exposure_importance + 0.25 * treasury_opportunity + 0.15 * relationship_gap + 0.15 * deposit_gap + 0.15 * risk_alert
+
+    score = (
+        0.40 * exposure_importance
+        + 0.25 * treasury_opportunity
+        + 0.20 * relationship_weakness
+        + 0.15 * risk_alert
+    )
     return round(score, 1)
 
 
-def priority_band(score):
-    if score >= 75:
+def management_priority_band(score):
+    if score >= 80:
         return "Immediate Management Attention"
     if score >= 65:
         return "High Priority"
     if score >= 50:
-        return "Active Monitor"
+        return "Monitor"
     return "Stable"
 
 
-def priority_css(score):
-    if score >= 75:
-        return "alert-high"
-    if score >= 65:
-        return "alert-med"
-    return "alert-low"
+def management_priority_rationale(row):
+    rationale = []
 
-
-def management_priority_label(score):
-    if score >= 75:
-        return "HIGH"
-    if score >= 65:
-        return "MEDIUM-HIGH"
-    if score >= 50:
-        return "MONITOR"
-    return "STABLE"
-
-
-def action_type(row):
-    if row["Risk_Score"] >= 85 and row["Treasury_Score"] < 60:
-        return "Risk Escalation"
-    if row["Risk_Score"] >= 80:
-        return "Credit Review"
-    if row["Strategic_Score"] >= 85 and row["Treasury_Score"] < 70:
-        return "Treasury Deep Dive"
-    if row["Wallet_Share_Pct"] < 20 and row["Strategic_Score"] >= 80:
-        return "Wallet Expansion"
-    if row["Executive_Meetings_12M"] <= 1 and row["Strategic_Score"] >= 75:
-        return "Executive Engagement"
-    if row["Deposits_USD_B"] / row["Exposure_USD_B"] < 0.22:
-        return "Deposit Retention"
-    if row["Strategic_Tier"] == "A+":
-        return "Strategic Relationship Investment"
-    return "Coverage Enhancement"
-
-
-def action_owner(action):
-    if action in ["Credit Review", "Risk Escalation"]:
-        return "Coverage + Risk"
-    if action in ["Treasury Deep Dive", "Deposit Retention", "Wallet Expansion"]:
-        return "RM + Treasury"
-    if action in ["Executive Engagement", "Strategic Relationship Investment"]:
-        return "Coverage Director"
-    return "Relationship Manager"
-
-
-def action_timeline(score, action):
-    if score >= 75 or action in ["Risk Escalation", "Credit Review"]:
-        return "This week"
-    if score >= 65:
-        return "30 days"
-    return "Next review cycle"
-
-
-def action_confidence(row):
-    signal_strength = (abs(70 - row["Treasury_Score"]) + abs(70 - row["Risk_Score"]) + abs(35 - row["Wallet_Share_Pct"])) / 3
-    return min(94, max(68, round(72 + signal_strength * 0.55)))
-
-
-def rationale_points(row):
-    points = []
     if row["Exposure_USD_B"] >= 8:
-        points.append("Material exposure size requires senior visibility")
+        rationale.append("material exposure size")
+
     if row["Treasury_Score"] < 70:
-        points.append("Treasury penetration is below desired relationship potential")
-    if row["Wallet_Share_Pct"] < 25:
-        points.append("Wallet share is under-monetized versus strategic importance")
+        rationale.append("treasury opportunity")
+
+    if row["Strategic_Score"] < 70:
+        rationale.append("relationship strength gap")
+
     if row["Risk_Score"] >= 80:
-        points.append("Risk indicators are elevated and need active monitoring")
-    if row["Executive_Meetings_12M"] <= 1:
-        points.append("Executive engagement cadence is low")
-    if not points:
-        points.append("Relationship remains strategically relevant and should be protected")
-    return points[:4]
+        rationale.append("elevated risk signal")
+
+    if not rationale:
+        rationale.append("stable relationship profile")
+
+    return ", ".join(rationale).capitalize() + "."
 
 
-def ai_situation_report(row):
-    wallet_ratio = row["Deposits_USD_B"] / row["Exposure_USD_B"] * 100 if row["Exposure_USD_B"] else 0
-    action = row["Recommended_Action"]
-    tone = "requires near-term management attention" if row["Management_Priority_Score"] >= 65 else "is stable but should remain under active coverage discipline"
-    risk_sentence = " Risk indicators are elevated and require closer credit and sector review." if row["Risk_Score"] >= 80 else " Risk indicators are manageable under the current portfolio view."
-    treasury_sentence = " Treasury penetration remains below strategic potential, creating a clear wallet expansion opportunity." if row["Treasury_Score"] < 70 else " Treasury linkage is comparatively strong and should be protected."
-    return (
-        f"{row['Relationship']} is a {row['Strategic_Tier']} institutional relationship in {row['Country']} with "
-        f"{fmt_b(row['Exposure_USD_B'])} exposure and {fmt_b(row['Deposits_USD_B'])} deposits. "
-        f"The relationship {tone} because management priority is driven by exposure relevance, wallet monetization, treasury penetration and risk signals. "
-        f"Current deposit-to-exposure linkage is {wallet_ratio:.1f}%, while wallet share is {row['Wallet_Share_Pct']:.0f}%."
-        f"{treasury_sentence}{risk_sentence} EC-AI recommends {action} as the next management action."
+def priority_color(score):
+    if score >= 75:
+        return "#FEE2E2"  # red tint
+    if score >= 65:
+        return "#FFEDD5"  # orange tint
+    if score >= 50:
+        return "#DBEAFE"  # blue tint
+    return "#DCFCE7"      # green tint
+
+
+def priority_text_color(score):
+    if score >= 75:
+        return "#991B1B"
+    if score >= 65:
+        return "#9A3412"
+    if score >= 50:
+        return "#1E3A8A"
+    return "#166534"
+
+
+def executive_action_type(row):
+    score = row["Management_Priority_Score"]
+    risk = row["Risk_Score"]
+    treasury = row["Treasury_Score"]
+    strategic = row["Strategic_Score"]
+    exposure = row["Exposure_USD_B"]
+    sector = row["Sector"]
+
+    if risk >= 85 and treasury < 70:
+        return "Senior Risk & Treasury Review"
+    if score >= 65 and sector in ["Shipping", "Offshore Services"]:
+        return "Cyclical Exposure Review"
+    if exposure >= 8 and strategic >= 80:
+        return "Senior Coverage Agenda"
+    if strategic >= 80 and treasury < 70:
+        return "Treasury Deepening Plan"
+    if risk >= 80:
+        return "Risk Monitoring Escalation"
+    if treasury < 70 and strategic < 70:
+        return "Relationship Repositioning"
+    return "Portfolio Monitoring"
+
+
+def executive_action_recommendation(row):
+    action_type = executive_action_type(row)
+    name = row["Relationship"]
+    sector = row["Sector"]
+
+    if action_type == "Senior Risk & Treasury Review":
+        return f"Schedule senior review with RM and Risk; agree treasury deepening plan and exposure monitoring for {name}."
+    if action_type == "Cyclical Exposure Review":
+        return f"Review refinancing risk and treasury wallet opportunity across {sector}; assign RM follow-up within 2 weeks."
+    if action_type == "Senior Coverage Agenda":
+        return f"Place {name} on senior coverage agenda; protect strategic relationship and identify wallet expansion opportunities."
+    if action_type == "Treasury Deepening Plan":
+        return f"Launch treasury deepening discussion covering deposits, cash management, FX and liquidity solutions."
+    if action_type == "Risk Monitoring Escalation":
+        return f"Move to enhanced monitoring cadence and request updated credit / sector view from coverage team."
+    if action_type == "Relationship Repositioning":
+        return f"Reassess relationship strategy; clarify target wallet, risk appetite and expected return contribution."
+    return f"Maintain portfolio monitoring and update relationship action plan during next business review."
+
+
+def build_executive_action_queue(data):
+    q = data.sort_values("Management_Priority_Score", ascending=False).copy().head(8)
+    q["Priority Rank"] = range(1, len(q) + 1)
+    q["Priority Score"] = q["Management_Priority_Score"].map(lambda x: f"{x:.1f}")
+    q["Why Management Should Care"] = q["Management_Priority_Rationale"]
+    q["Executive Action Type"] = q.apply(executive_action_type, axis=1)
+    q["Recommended Next Action"] = q.apply(executive_action_recommendation, axis=1)
+    q["Owner"] = q["Executive Action Type"].map(lambda x: "RM + Risk" if "Risk" in x else ("Senior Coverage" if "Senior" in x else "RM + Treasury"))
+    q["Timing"] = q["Management_Priority_Score"].map(lambda s: "This week" if s >= 65 else "Next review cycle")
+    return q
+
+
+def build_executive_agenda(data):
+    q = build_executive_action_queue(data)
+    high = q[q["Management_Priority_Score"] >= 65]
+    risk_names = q[q["Risk_Score"] >= 80]["Relationship"].tolist()
+    treasury_names = q[q["Treasury_Score"] < 70]["Relationship"].tolist()
+    senior_names = q[q["Exposure_USD_B"] >= 8]["Relationship"].tolist()
+
+    agenda = []
+    if not high.empty:
+        top = high.iloc[0]
+        agenda.append(f"1. Open management review with {top['Relationship']} as the top priority relationship due to {top['Management_Priority_Rationale'].lower()}")
+    else:
+        agenda.append("1. No immediate high-priority relationship identified; maintain current portfolio monitoring cadence.")
+
+    if treasury_names:
+        agenda.append(f"2. Launch treasury deepening follow-up for {', '.join(treasury_names[:3])} to improve deposits, cash management and wallet penetration.")
+    else:
+        agenda.append("2. Treasury linkage appears stable across the filtered portfolio; focus on protecting existing wallet.")
+
+    if risk_names:
+        agenda.append(f"3. Request enhanced risk monitoring for {', '.join(risk_names[:3])}, particularly cyclical or refinancing-sensitive exposures.")
+    else:
+        agenda.append("3. No elevated risk alert above threshold; continue standard quarterly review cadence.")
+
+    if senior_names:
+        agenda.append(f"4. Add {', '.join(senior_names[:3])} to senior coverage discussion given material exposure size.")
+    else:
+        agenda.append("4. No material exposure concentration above senior-coverage threshold in the filtered view.")
+
+    agenda.append("5. Ask each RM to return with a 30-day relationship action plan for high-priority names.")
+    return agenda
+
+
+def style_priority_table(styler):
+    def score_style(v):
+        try:
+            s = float(v)
+        except Exception:
+            return ""
+        return f"background-color: {priority_color(s)}; color: {priority_text_color(s)}; font-weight: 800;"
+
+    # pandas 3 removed Styler.applymap; use Styler.map when available.
+    if hasattr(styler, "map"):
+        return styler.map(score_style, subset=["Priority Score"])
+    return styler.applymap(score_style, subset=["Priority Score"])
+
+
+def build_ai_reasoning_narrative(row):
+    """Rule-based AI reasoning narrative v7.0: explains why management should care."""
+    relationship = row["Relationship"]
+    score = row["Management_Priority_Score"]
+    band = row["Management_Priority_Band"]
+    rationale = row["Management_Priority_Rationale"].replace(".", "").lower()
+    action_type = row.get("Executive_Action_Type", row.get("AI_Action_Category", "Management Review"))
+
+    if score >= 75:
+        urgency = "requires immediate senior management attention"
+    elif score >= 65:
+        urgency = "should be included in this week's management review"
+    elif score >= 50:
+        urgency = "should remain on the active monitoring list"
+    else:
+        urgency = "appears stable under the current portfolio view"
+
+    narrative = (
+        f"{relationship} {urgency}. "
+        f"The relationship has a Management Priority Score of {score:.1f}, classified as {band}. "
+        f"The main management signal is {rationale}. "
+        f"Recommended focus: {action_type}."
+    )
+    return narrative
+
+
+def build_ai_reasoning_summary(data):
+    """Executive-level reasoning summary across filtered portfolio."""
+    if data.empty:
+        return "No relationships available under current filters."
+
+    top = data.sort_values("Management_Priority_Score", ascending=False).iloc[0]
+    high_priority = data[data["Management_Priority_Score"] >= 65]
+    risk_names = data[data["Risk_Score"] >= 80]
+    treasury_gap = data[data["Treasury_Score"] < 70]
+
+    lines = []
+    lines.append(
+        f"The highest management attention signal is {top['Relationship']} "
+        f"with a priority score of {top['Management_Priority_Score']:.1f}."
     )
 
+    lines.append(
+        f"{len(high_priority)} relationships are classified as high priority, "
+        f"indicating a near-term management review queue."
+    )
 
-def strategic_assessment(row):
-    if row["Recommended_Action"] in ["Risk Escalation", "Credit Review"]:
-        return "Risk discipline should take priority before additional wallet growth. Management should clarify refinancing sensitivity, sector outlook and exposure appetite."
-    if row["Recommended_Action"] in ["Treasury Deep Dive", "Wallet Expansion", "Deposit Retention"]:
-        return "The relationship is strategically valuable but under-monetized. Management should convert lending relevance into operating deposits, cash management, FX and flow wallet."
-    if row["Recommended_Action"] == "Executive Engagement":
-        return "The relationship has strategic value but executive access is insufficient. Senior banker engagement can strengthen positioning and improve competitive relevance."
-    return "The relationship should be protected through disciplined coverage, continued wallet tracking and periodic senior review."
+    lines.append(
+        f"{len(risk_names)} relationships show elevated risk indicators, "
+        f"while {len(treasury_gap)} relationships show treasury monetization gaps."
+    )
 
+    lines.append(
+        "The key management implication is to move from portfolio diagnosis to targeted relationship action: "
+        "review high-priority names, assign banker follow-up, and track management closure."
+    )
 
-def expected_outcome(row):
-    deposit_growth = max(0.05, min(0.32, (100 - row["Treasury_Score"]) / 220))
-    deposit_uplift = row["Deposits_USD_B"] * deposit_growth
-    wallet_uplift = max(3, min(12, int((100 - row["Wallet_Share_Pct"]) / 8)))
-    revenue_uplift = row["Exposure_USD_B"] * (0.22 + wallet_uplift / 100)  # illustrative USD mm proxy
-    probability = min(88, max(55, 92 - row["Risk_Score"] * 0.35 + row["Strategic_Score"] * 0.12))
-    if row["Recommended_Action"] in ["Risk Escalation", "Credit Review"]:
-        return {
-            "Deposit Growth": "Defensive",
-            "Wallet Expansion": "Selective",
-            "Relationship Strength": "Stabilise",
-            "Probability": f"{probability:.0f}%",
-            "Detail": "Expected outcome is downside protection, clearer risk appetite and controlled follow-up actions."
-        }
-    return {
-        "Deposit Growth": f"+USD {deposit_uplift:.1f}B",
-        "Wallet Expansion": f"+{wallet_uplift} pts",
-        "Relationship Strength": "Moderate → Strong" if row["Strategic_Score"] >= 75 else "Weak → Moderate",
-        "Probability": f"{probability:.0f}%",
-        "Detail": f"Expected outcome is improved liquidity linkage, broader product penetration and stronger executive positioning. Illustrative revenue opportunity: USD {revenue_uplift:.1f}M."
-    }
+    return " ".join(lines)
 
 
-def build_relationship_memo(row):
-    outcome = expected_outcome(row)
-    points = rationale_points(row)
-    today = date.today().strftime("%d %B %Y")
+
+
+def executive_command_center_action_type(row):
+    """v7.0: simplified executive action type for command center cards."""
+    score = row["Management_Priority_Score"]
+    risk = row["Risk_Score"]
+    treasury = row["Treasury_Score"]
+    strategic = row["Strategic_Score"]
+    exposure = row["Exposure_USD_B"]
+
+    if score >= 75 or risk >= 85:
+        return "Senior Risk & Treasury Review"
+    if exposure >= 8:
+        return "Senior Coverage Agenda"
+    if strategic >= 80 and treasury < 70:
+        return "Treasury Deepening"
+    if risk >= 75:
+        return "Risk Monitoring"
+    return row.get("AI_Action_Category", "Management Review")
+
+
+def executive_command_center_next_action(row):
+    """v7.0: concise action recommendation for executive command center."""
+    rel = row["Relationship"]
+    action_type = executive_command_center_action_type(row)
+
+    if action_type == "Senior Risk & Treasury Review":
+        return f"Schedule senior review with Coverage, Risk and Treasury for {rel}; agree 30-day action plan."
+    if action_type == "Senior Coverage Agenda":
+        return f"Place {rel} on senior coverage agenda due to material exposure and strategic relevance."
+    if action_type == "Treasury Deepening":
+        return f"Launch treasury wallet discussion with {rel}; focus on deposits, cash management and flow products."
+    if action_type == "Risk Monitoring":
+        return f"Move {rel} to enhanced monitoring and review refinancing / cyclical exposure sensitivity."
+    return f"Maintain current coverage cadence for {rel} and monitor for changes."
+
+
+def build_command_center_agenda(data):
+    """v7.0: management agenda based on top priority relationships."""
+    top = data.sort_values("Management_Priority_Score", ascending=False).head(5).copy()
+    if top.empty:
+        return []
+    treasury_names = top[top["Treasury_Score"] < 70]["Relationship"].head(3).tolist()
+    risk_names = top[top["Risk_Score"] >= 80]["Relationship"].head(3).tolist()
+    exposure_names = top[top["Exposure_USD_B"] >= 8]["Relationship"].head(3).tolist()
+
+    agenda = []
+    agenda.append(f"Open management review with {top.iloc[0]['Relationship']} as the top executive attention signal.")
+    if treasury_names:
+        agenda.append("Launch treasury deepening follow-up for " + ", ".join(treasury_names) + ".")
+    if risk_names:
+        agenda.append("Request enhanced risk monitoring for " + ", ".join(risk_names) + ".")
+    if exposure_names:
+        agenda.append("Add " + ", ".join(exposure_names) + " to senior coverage discussion.")
+    agenda.append("Ask each RM to return with a 30-day relationship action plan for high-priority names.")
+    return agenda[:5]
+
+
+def build_management_memo(data):
+    total_exposure = data["Exposure_USD_B"].sum()
+    total_deposits = data["Deposits_USD_B"].sum()
+    treasury_coverage = total_deposits / total_exposure * 100 if total_exposure else 0
+    weighted_treasury = (data["Treasury_Score"] * data["Exposure_USD_B"]).sum() / total_exposure if total_exposure else 0
+    weighted_strategic = (data["Strategic_Score"] * data["Exposure_USD_B"]).sum() / total_exposure if total_exposure else 0
+
+    top_exposure = data.sort_values("Exposure_USD_B", ascending=False).head(5)
+    treasury_deepening = data[data["AI_Action_Category"] == "Treasury Deepening"].sort_values("Exposure_USD_B", ascending=False)
+    risk_monitoring = data[data["AI_Action_Category"] == "Risk Monitoring"].sort_values("Risk_Score", ascending=False)
+    crown_jewels = data[data["AI_Action_Category"] == "Protect & Defend"].sort_values("Strategic_Score", ascending=False)
+
     lines = []
-    lines.append(f"# EC-AI Executive Relationship Memo")
+    lines.append("# EC-AI Institutional Portfolio Management Memo")
     lines.append("")
-    lines.append(f"**Relationship:** {row['Relationship']}")
-    lines.append(f"**Date:** {today}")
-    lines.append(f"**Management Priority:** {management_priority_label(row['Management_Priority_Score'])}")
-    lines.append(f"**Recommended Action:** {row['Recommended_Action']}")
+    lines.append("## Portfolio Overview")
+    lines.append(f"- Total exposure: USD {total_exposure:.1f}B")
+    lines.append(f"- Total deposits: USD {total_deposits:.1f}B")
+    lines.append(f"- Treasury coverage: {treasury_coverage:.1f}%")
+    lines.append(f"- Weighted Treasury Score: {weighted_treasury:.1f}")
+    lines.append(f"- Weighted Strategic Score: {weighted_strategic:.1f}")
     lines.append("")
-    lines.append("## Executive Summary")
-    lines.append(ai_situation_report(row))
+    lines.append("## Executive Interpretation")
+    lines.append("The portfolio shows a concentration of strategically important institutional relationships with varying degrees of treasury penetration. Management attention should focus on relationships with high strategic value but lower treasury contribution, while protecting deposit-rich crown-jewel names and monitoring elevated-risk cyclical exposures.")
     lines.append("")
-    lines.append("## Strategic Assessment")
-    lines.append(strategic_assessment(row))
+    lines.append("## Top Exposure Relationships")
+    for _, r in top_exposure.iterrows():
+        lines.append(f"- {r['Relationship']}: USD {r['Exposure_USD_B']:.1f}B exposure | Treasury {int(r['Treasury_Score'])} | Strategic {int(r['Strategic_Score'])} | {r['AI_Action_Category']}")
     lines.append("")
-    lines.append("## Why Management Should Care")
-    for p in points:
-        lines.append(f"- {p}.")
+    lines.append("## Treasury Deepening Priorities")
+    if treasury_deepening.empty:
+        lines.append("- No treasury deepening priority identified under current rules.")
+    else:
+        for _, r in treasury_deepening.head(6).iterrows():
+            lines.append(f"- {r['Relationship']}: {r['AI_Management_Action']}")
     lines.append("")
-    lines.append("## Recommended Management Action")
-    lines.append(f"- Action type: {row['Recommended_Action']}")
-    lines.append(f"- Priority: {management_priority_label(row['Management_Priority_Score'])}")
-    lines.append(f"- Owner: {row['Owner']}")
-    lines.append(f"- Timeline: {row['Timeline']}")
-    lines.append(f"- Confidence: {row['Confidence']}%")
+    lines.append("## Risk Monitoring Priorities")
+    if risk_monitoring.empty:
+        lines.append("- No elevated risk monitoring priority identified under current rules.")
+    else:
+        for _, r in risk_monitoring.head(6).iterrows():
+            lines.append(f"- {r['Relationship']}: Risk Score {int(r['Risk_Score'])}. {r['AI_Management_Action']}")
     lines.append("")
-    lines.append("## Supporting Evidence")
-    lines.append(f"- Treasury score: {int(row['Treasury_Score'])}/100")
-    lines.append(f"- Strategic score: {int(row['Strategic_Score'])}/100")
-    lines.append(f"- Risk score: {int(row['Risk_Score'])}/100")
-    lines.append(f"- Wallet share: {int(row['Wallet_Share_Pct'])}%")
-    lines.append(f"- Executive meetings in last 12 months: {int(row['Executive_Meetings_12M'])}")
+    lines.append("## Crown-Jewel Relationship Protection")
+    if crown_jewels.empty:
+        lines.append("- No protect-and-defend relationship identified under current rules.")
+    else:
+        for _, r in crown_jewels.head(6).iterrows():
+            lines.append(f"- {r['Relationship']}: {r['AI_Management_Action']}")
     lines.append("")
-    lines.append("## Expected Outcome")
-    lines.append(f"- Deposit growth: {outcome['Deposit Growth']}")
-    lines.append(f"- Wallet expansion: {outcome['Wallet Expansion']}")
-    lines.append(f"- Relationship strength: {outcome['Relationship Strength']}")
-    lines.append(f"- Probability: {outcome['Probability']}")
-    lines.append(f"- Note: {outcome['Detail']}")
+    lines.append("## AI Reasoning Summary")
+    try:
+        lines.append(build_ai_reasoning_summary(data))
+    except Exception:
+        lines.append("AI reasoning summary unavailable under current data view.")
+    lines.append("")
+    lines.append("## Recommended Management Agenda")
+    lines.append("1. Prioritize treasury deepening for strategic relationships with weak deposit linkage.")
+    lines.append("2. Review large exposure names for senior coverage and portfolio concentration.")
+    lines.append("3. Monitor shipping, offshore, and other cyclical relationships with elevated risk scores.")
+    lines.append("4. Protect high-quality funding relationships and maintain pricing discipline.")
+    lines.append("5. Use relationship-level action categories to guide banker follow-up and management committee discussion.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v8.0")
+    lines.append("Generated by EC-AI Institutional Relationship OS v7.0")
     return "\n".join(lines)
 
 
-def markdown_to_pdf(markdown_text: str) -> bytes:
+def build_management_memo_html(data):
+    memo = build_management_memo(data)
+    html = memo.replace("\n", "<br>")
+    html = html.replace("# EC-AI Institutional Portfolio Management Memo", "<h2>EC-AI Institutional Portfolio Management Memo</h2>")
+    html = html.replace("## Portfolio Overview", "<h3>Portfolio Overview</h3>")
+    html = html.replace("## Executive Interpretation", "<h3>Executive Interpretation</h3>")
+    html = html.replace("## Top Exposure Relationships", "<h3>Top Exposure Relationships</h3>")
+    html = html.replace("## Treasury Deepening Priorities", "<h3>Treasury Deepening Priorities</h3>")
+    html = html.replace("## Risk Monitoring Priorities", "<h3>Risk Monitoring Priorities</h3>")
+    html = html.replace("## Crown-Jewel Relationship Protection", "<h3>Crown-Jewel Relationship Protection</h3>")
+    html = html.replace("## Recommended Management Agenda", "<h3>Recommended Management Agenda</h3>")
+    return f'<div class="narrative-box">{html}</div>'
+
+
+
+
+
+def build_management_memo_pdf(data) -> bytes:
+    """Generate an executive PDF version of the EC-AI management memo."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import inch
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.enums import TA_LEFT
+
+    memo = build_management_memo(data)
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=0.65 * inch,
+        rightMargin=0.65 * inch,
+        topMargin=0.55 * inch,
+        bottomMargin=0.55 * inch,
+    )
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="ECTitle", parent=styles["Title"], fontSize=18, leading=22, alignment=TA_LEFT, spaceAfter=14))
+    styles.add(ParagraphStyle(name="ECH2", parent=styles["Heading2"], fontSize=14, leading=18, spaceBefore=12, spaceAfter=7))
+    styles.add(ParagraphStyle(name="ECBody", parent=styles["BodyText"], fontSize=10.5, leading=16, spaceAfter=6))
+    styles.add(ParagraphStyle(name="ECSmall", parent=styles["BodyText"], fontSize=9, leading=12, textColor="#4B5563"))
+
+    story = []
+    for raw in memo.splitlines():
+        line = raw.strip()
+        if not line:
+            story.append(Spacer(1, 0.08 * inch))
+            continue
+        safe = (line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+        safe = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", safe)
+        if safe.startswith("# "):
+            story.append(Paragraph(safe[2:], styles["ECTitle"]))
+        elif safe.startswith("## "):
+            story.append(Paragraph(safe[3:], styles["ECH2"]))
+        elif safe.startswith("- "):
+            story.append(Paragraph("• " + safe[2:], styles["ECBody"]))
+        elif re.match(r"^\d+\.\s", safe):
+            story.append(Paragraph(safe, styles["ECBody"]))
+        elif safe.startswith("---"):
+            story.append(Spacer(1, 0.10 * inch))
+            story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v7.0", styles["ECSmall"]))
+        else:
+            story.append(Paragraph(safe, styles["ECBody"]))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def build_markdown_memo_pdf(memo_text: str, title_override: str | None = None) -> bytes:
+    """Generate readable PDF from EC-AI markdown-style memo text."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.units import inch
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -323,342 +2138,1223 @@ def markdown_to_pdf(markdown_text: str) -> bytes:
         topMargin=0.55 * inch,
         bottomMargin=0.55 * inch,
     )
+
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="ECTitle", parent=styles["Title"], fontSize=18, leading=23, alignment=TA_LEFT, spaceAfter=12))
-    styles.add(ParagraphStyle(name="ECH2", parent=styles["Heading2"], fontSize=13.5, leading=17, spaceBefore=10, spaceAfter=6))
-    styles.add(ParagraphStyle(name="ECBody", parent=styles["BodyText"], fontSize=10.3, leading=15.5, spaceAfter=5))
-    styles.add(ParagraphStyle(name="ECSmall", parent=styles["BodyText"], fontSize=9, leading=12, textColor="#4B5563"))
+    styles.add(ParagraphStyle(name="ECTitle2", parent=styles["Title"], fontSize=18, leading=22, alignment=TA_LEFT, spaceAfter=14))
+    styles.add(ParagraphStyle(name="ECH2b", parent=styles["Heading2"], fontSize=14, leading=18, spaceBefore=12, spaceAfter=7))
+    styles.add(ParagraphStyle(name="ECBody2", parent=styles["BodyText"], fontSize=10.8, leading=16.5, spaceAfter=6))
+    styles.add(ParagraphStyle(name="ECSmall2", parent=styles["BodyText"], fontSize=9, leading=12, textColor="#4B5563"))
 
     story = []
-    for raw in str(markdown_text).splitlines():
+    for raw in str(memo_text).splitlines():
         line = raw.strip()
         if not line:
-            story.append(Spacer(1, 0.07 * inch))
+            story.append(Spacer(1, 0.08 * inch))
             continue
+
         safe = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         safe = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", safe)
+
         if safe.startswith("# "):
-            story.append(Paragraph(safe[2:], styles["ECTitle"]))
+            title = title_override or safe[2:]
+            story.append(Paragraph(title, styles["ECTitle2"]))
         elif safe.startswith("## "):
-            story.append(Paragraph(safe[3:], styles["ECH2"]))
+            story.append(Paragraph(safe[3:], styles["ECH2b"]))
         elif safe.startswith("- "):
-            story.append(Paragraph("• " + safe[2:], styles["ECBody"]))
+            story.append(Paragraph("• " + safe[2:], styles["ECBody2"]))
+        elif re.match(r"^\d+\.\s", safe):
+            story.append(Paragraph(safe, styles["ECBody2"]))
         elif safe.startswith("---"):
-            story.append(Spacer(1, 0.12 * inch))
+            story.append(Spacer(1, 0.10 * inch))
         else:
-            story.append(Paragraph(safe, styles["ECBody"]))
+            story.append(Paragraph(safe, styles["ECBody2"]))
+
     doc.build(story)
     return buf.getvalue()
 
 
-max_exposure = df["Exposure_USD_B"].max()
-df["Management_Priority_Score"] = df.apply(lambda r: management_priority_score(r, max_exposure), axis=1)
-df["Management_Priority_Band"] = df["Management_Priority_Score"].apply(priority_band)
-df["Recommended_Action"] = df.apply(action_type, axis=1)
-df["Owner"] = df["Recommended_Action"].apply(action_owner)
-df["Timeline"] = df.apply(lambda r: action_timeline(r["Management_Priority_Score"], r["Recommended_Action"]), axis=1)
-df["Confidence"] = df.apply(action_confidence, axis=1)
-df["Attention_Label"] = df["Management_Priority_Score"].apply(management_priority_label)
+def relationship_360_assessment(row):
+    exposure = row["Exposure_USD_B"]
+    deposits = row["Deposits_USD_B"]
+    treasury = row["Treasury_Score"]
+    strategic = row["Strategic_Score"]
+    risk = row["Risk_Score"]
+    sector = row["Sector"]
 
-# -----------------------------
-# Sidebar
-# -----------------------------
+    wallet_ratio = deposits / exposure * 100 if exposure else 0
+
+    if strategic >= 85:
+        strategic_view = "Core strategic institutional relationship"
+    elif strategic >= 70:
+        strategic_view = "Important strategic relationship"
+    else:
+        strategic_view = "Non-core portfolio relationship"
+
+    if wallet_ratio >= 60:
+        wallet_view = "Strong wallet penetration"
+    elif wallet_ratio >= 35:
+        wallet_view = "Moderate wallet penetration"
+    else:
+        wallet_view = "Under-monetized relationship"
+
+    if treasury >= 85:
+        treasury_view = "Strong treasury linkage"
+    elif treasury >= 70:
+        treasury_view = "Acceptable treasury linkage"
+    else:
+        treasury_view = "Treasury deepening required"
+
+    if risk >= 80:
+        risk_view = "Elevated risk profile requiring active monitoring"
+    elif risk >= 60:
+        risk_view = "Moderate portfolio risk profile"
+    else:
+        risk_view = "Stable portfolio risk profile"
+
+    if sector in ["Shipping", "Offshore Services"]:
+        sector_view = "Cyclical sector exposure with refinancing sensitivity"
+    elif sector == "Infrastructure":
+        sector_view = "Long-tenor strategic infrastructure exposure"
+    elif sector == "Financials":
+        sector_view = "Funding-sensitive financial institution relationship"
+    else:
+        sector_view = "Standard sector monitoring"
+
+    return strategic_view, wallet_view, treasury_view, risk_view, sector_view, wallet_ratio
+
+
+def build_relationship_360_memo(row):
+    strategic_view, wallet_view, treasury_view, risk_view, sector_view, wallet_ratio = relationship_360_assessment(row)
+
+    lines = []
+    lines.append(f"# Relationship 360 Profile: {row['Relationship']}")
+    lines.append("")
+    lines.append("## Executive Summary")
+    lines.append(f"{row['Relationship']} is a {row['Priority']} relationship in the {row['Sector']} sector, located in {row['Country']}.")
+    lines.append(f"- Strategic assessment: {strategic_view}")
+    lines.append(f"- Treasury assessment: {treasury_view}")
+    lines.append(f"- Wallet assessment: {wallet_view} ({wallet_ratio:.1f}% deposits / exposure)")
+    lines.append(f"- Risk assessment: {risk_view}")
+    lines.append(f"- Sector view: {sector_view}")
+    lines.append("")
+    lines.append("## Core Metrics")
+    lines.append(f"- Exposure: USD {row['Exposure_USD_B']:.1f}B")
+    lines.append(f"- Deposits: USD {row['Deposits_USD_B']:.1f}B")
+    lines.append(f"- Treasury Score: {int(row['Treasury_Score'])}")
+    lines.append(f"- Strategic Score: {int(row['Strategic_Score'])}")
+    lines.append(f"- Risk Score: {int(row['Risk_Score'])}")
+    lines.append("")
+    lines.append("## AI Recommended Action")
+    lines.append(row["AI_Management_Action"])
+    lines.append("")
+    lines.append("## Banker Coverage Strategy")
+    if row["Exposure_USD_B"] >= 8:
+        lines.append("- Maintain quarterly senior management engagement.")
+    else:
+        lines.append("- Maintain regular relationship manager coverage.")
+    if wallet_ratio < 35:
+        lines.append("- Launch treasury deepening discussion focused on operating deposits and cash management.")
+    else:
+        lines.append("- Protect existing wallet and maintain treasury linkage.")
+    if row["Risk_Score"] >= 80:
+        lines.append("- Move to monthly risk monitoring cadence.")
+    else:
+        lines.append("- Maintain quarterly risk review cadence.")
+    lines.append("- Identify FX, hedging, liquidity, and transaction banking cross-sell opportunities.")
+    lines.append("")
+    lines.append("---")
+    lines.append("Generated by EC-AI Institutional Relationship OS v7.0")
+    return "\n".join(lines)
+
+df["Quadrant"] = df.apply(quadrant, axis=1)
+df["AI_Management_Action"] = df.apply(generate_management_action, axis=1)
+df["AI_Action_Category"] = df.apply(action_category, axis=1)
+
+# =========================
+# EC-AI INTELLIGENCE LAYER v1
+# =========================
+max_exposure_for_priority = df["Exposure_USD_B"].max()
+df["Management_Priority_Score"] = df.apply(
+    lambda r: management_priority_score(r, max_exposure_for_priority),
+    axis=1,
+)
+df["Management_Priority_Band"] = df["Management_Priority_Score"].apply(management_priority_band)
+df["Management_Priority_Rationale"] = df.apply(management_priority_rationale, axis=1)
+
+# =========================
+# SIDEBAR
+# =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("**v8.0**")
+st.sidebar.markdown("v8.1")
 st.sidebar.markdown("---")
-st.sidebar.caption("Relationship Workspace is now the primary operating environment.")
+st.sidebar.info("Full portfolio view enabled. Filters removed for cleaner executive presentation.")
 
-countries = st.sidebar.multiselect("Country", sorted(df["Country"].unique()), default=sorted(df["Country"].unique()))
-sectors = st.sidebar.multiselect("Sector", sorted(df["Sector"].unique()), default=sorted(df["Sector"].unique()))
-view = df[df["Country"].isin(countries) & df["Sector"].isin(sectors)].copy()
+view = df.copy()
 
 if view.empty:
     st.warning("No relationships match the selected filters.")
     st.stop()
 
-# -----------------------------
-# Header
-# -----------------------------
+
+# =========================
+# CLEAN OS HEADER
+# =========================
 st.markdown(
     """
-    <div class="ec-hero">
-        <div class="ec-title">EC-AI Institutional Relationship OS v8.0</div>
-        <div class="ec-sub">Management Attention Allocation for Institutional Banking</div>
-        <div class="ec-body">
-        EC-AI converts portfolio intelligence into relationship-level decisions: which relationships require management attention, what action should be taken, who owns it, and what outcome is expected.
+    <div class="os-hero">
+        <div class="os-hero-title">EC-AI Institutional Relationship OS</div>
+        <div class="os-hero-sub">Transform Portfolio Data into Executive Actions</div>
+        <div class="os-hero-body">
+        Multi-tab institutional relationship operating system for portfolio intelligence, AI reasoning, management actions and executive memos.
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-# Relationship Workspace first
-tab_workspace, tab_command, tab_actions, tab_portfolio, tab_memo = st.tabs(
+# =========================
+# EC-AI OS v8.1 MULTI-TAB SHELL
+# =========================
+tab_command, tab_portfolio, tab_actions, tab_relationship, tab_reasoning, tab_memo = st.tabs(
     [
-        "Relationship Workspace",
         "Executive Command Center",
-        "Management Actions",
         "Portfolio Intelligence",
-        "Executive Memo Center",
+        "Management Actions",
+        "Relationship Workspace",
+        "AI Reasoning",
+        "Executive Memo",
     ]
 )
 
-# -----------------------------
-# Relationship Workspace
-# -----------------------------
-with tab_workspace:
-    default_relationship = view.sort_values("Management_Priority_Score", ascending=False).iloc[0]["Relationship"]
-    selected = st.selectbox(
-        "Select relationship",
-        view.sort_values("Management_Priority_Score", ascending=False)["Relationship"].tolist(),
-        index=view.sort_values("Management_Priority_Score", ascending=False)["Relationship"].tolist().index(default_relationship),
-    )
-    r = view[view["Relationship"] == selected].iloc[0]
-    wallet_ratio = r["Deposits_USD_B"] / r["Exposure_USD_B"] * 100 if r["Exposure_USD_B"] else 0
-    badge_class = priority_css(r["Management_Priority_Score"])
+with tab_command:
+    # =========================
+    # EXECUTIVE COMMAND CENTER v7.0
+    # =========================
+    command_view = view.sort_values("Management_Priority_Score", ascending=False).copy()
+    command_view["Executive_Action_Type"] = command_view.apply(executive_command_center_action_type, axis=1)
+    command_view["Executive_Next_Action"] = command_view.apply(executive_command_center_next_action, axis=1)
+
+    total_priority = int((command_view["Management_Priority_Score"] >= 65).sum())
+    immediate_actions = int((command_view["Management_Priority_Score"] >= 75).sum())
+    top_command = command_view.iloc[0]
+    top_theme = command_view["Executive_Action_Type"].value_counts().idxmax()
+
+    if immediate_actions > 0:
+        portfolio_health = "Action Required"
+    elif total_priority >= 4:
+        portfolio_health = "Watchlist"
+    else:
+        portfolio_health = "Stable"
 
     st.markdown(
         f"""
-        <div class="workspace-header">
-            <div class="workspace-name">{r['Relationship']}</div>
-            <div class="workspace-meta">{r['Country']} · {r['Sector']} · Strategic Tier {r['Strategic_Tier']} · {r['Priority']}</div>
-            <span class="priority-badge {badge_class}">Management Priority: {r['Attention_Label']} · Score {r['Management_Priority_Score']:.1f}</span>
-            <div class="kpi-grid">
-                <div class="kpi"><div class="kpi-label">Exposure</div><div class="kpi-value">{fmt_b(r['Exposure_USD_B'])}</div></div>
-                <div class="kpi"><div class="kpi-label">Deposits</div><div class="kpi-value">{fmt_b(r['Deposits_USD_B'])}</div></div>
-                <div class="kpi"><div class="kpi-label">Wallet Share</div><div class="kpi-value">{fmt_pct_num(r['Wallet_Share_Pct'])}</div></div>
-                <div class="kpi"><div class="kpi-label">Treasury</div><div class="kpi-value">{int(r['Treasury_Score'])}</div></div>
-                <div class="kpi"><div class="kpi-label">Risk</div><div class="kpi-value">{int(r['Risk_Score'])}</div></div>
-                <div class="kpi"><div class="kpi-label">Exec Meetings</div><div class="kpi-value">{int(r['Executive_Meetings_12M'])}</div></div>
+        <div class="ecc-hero">
+            <div class="ecc-kicker">EC-AI v7.0 · Executive Command Center</div>
+            <div class="ecc-title">What should management act on next?</div>
+            <div class="ecc-subtitle">
+            EC-AI converts institutional relationship data into executive actions:
+            priority signals, reasoning themes, recommended next steps and management agenda.
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    left, right = st.columns([1.45, 1], gap="large")
-    with left:
-        st.markdown('<div class="card"><div class="card-kicker">AI Situation Report</div><div class="card-title">Executive Narrative</div><div class="card-body">' + ai_situation_report(r) + '</div></div>', unsafe_allow_html=True)
-        st.markdown('<div class="card"><div class="card-kicker">Strategic Assessment</div><div class="card-title">What management should understand</div><div class="card-body">' + strategic_assessment(r) + '</div></div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="ecc-metric-row">
+            <div class="ecc-metric">
+                <div class="ecc-metric-label">Portfolio Health</div>
+                <div class="ecc-metric-value">{portfolio_health}</div>
+                <div class="ecc-metric-sub">Based on high-priority and immediate-action relationships</div>
+            </div>
+            <div class="ecc-metric">
+                <div class="ecc-metric-label">Priority Relationships</div>
+                <div class="ecc-metric-value">{total_priority}</div>
+                <div class="ecc-metric-sub">Management Priority Score ≥ 65</div>
+            </div>
+            <div class="ecc-metric">
+                <div class="ecc-metric-label">Immediate Actions</div>
+                <div class="ecc-metric-value">{immediate_actions}</div>
+                <div class="ecc-metric-sub">Management Priority Score ≥ 75</div>
+            </div>
+            <div class="ecc-metric">
+                <div class="ecc-metric-label">Top Theme</div>
+                <div class="ecc-metric-value" style="font-size:24px !important;">{top_theme}</div>
+                <div class="ecc-metric-sub">Most common executive action category</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    with right:
-        st.markdown(
-            f"""
-            <div class="action-card">
-                <div class="card-kicker">Recommended Management Action</div>
-                <div class="action-type">{r['Recommended_Action']}</div>
-                <div class="action-row">
-                    <div class="action-mini"><div class="action-mini-label">Priority</div><div class="action-mini-value">{r['Attention_Label']}</div></div>
-                    <div class="action-mini"><div class="action-mini-label">Owner</div><div class="action-mini-value">{r['Owner']}</div></div>
-                    <div class="action-mini"><div class="action-mini-label">Timeline</div><div class="action-mini-value">{r['Timeline']}</div></div>
-                    <div class="action-mini"><div class="action-mini-label">Confidence</div><div class="action-mini-value">{r['Confidence']}%</div></div>
+    st.markdown(
+        f"""
+        <div class="command-strip">
+            <div class="command-panel">
+                <div class="command-panel-title">Executive Decision Brief</div>
+                <div class="command-panel-body">
+                The current portfolio is classified as <b>{portfolio_health}</b>.
+                EC-AI identified <b>{total_priority}</b> priority relationships and
+                <b>{immediate_actions}</b> immediate actions. The dominant management theme is
+                <b>{top_theme}</b>, indicating that management should focus on relationship-level follow-up rather than broad dashboard review.
                 </div>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        st.markdown('<div class="card"><div class="card-title">Why recommended</div><div class="card-body"><ul>' + "".join([f"<li>{p}</li>" for p in rationale_points(r)]) + '</ul></div></div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="section-title">Supporting Evidence</div><div class="section-sub">Only evidence that supports the recommended decision is shown.</div>', unsafe_allow_html=True)
-    st.markdown(
-        f"""
-        <div class="evidence-grid">
-            <div class="metric-card"><div class="metric-label">Treasury Penetration</div><div class="metric-value">{int(r['Treasury_Score'])}/100</div><div class="metric-sub">Peer aspiration: 80+</div></div>
-            <div class="metric-card"><div class="metric-label">Deposit / Exposure Linkage</div><div class="metric-value">{wallet_ratio:.1f}%</div><div class="metric-sub">Operating liquidity linkage</div></div>
-            <div class="metric-card"><div class="metric-label">Wallet Share</div><div class="metric-value">{int(r['Wallet_Share_Pct'])}%</div><div class="metric-sub">Peer benchmark: 35%</div></div>
-            <div class="metric-card"><div class="metric-label">Competitive Position</div><div class="metric-value">{int(r['Competitive_Position'])}</div><div class="metric-sub">100 = strongest position</div></div>
+            <div class="command-panel">
+                <div class="command-panel-title">Top Relationship</div>
+                <div class="command-panel-body">
+                <b>{top_command["Relationship"]}</b><br>
+                Priority Score: <b>{top_command["Management_Priority_Score"]:.1f}</b><br>
+                Action: <b>{top_command["Executive_Action_Type"]}</b>
+                </div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="section-title">Expected Outcome</div><div class="section-sub">Projected management outcome if the recommended action is executed.</div>', unsafe_allow_html=True)
-    outcome = expected_outcome(r)
+    section_title("Top Management Actions", "Highest-priority relationships requiring management attention.")
+
+    top_actions = command_view.head(4).reset_index(drop=True)
+
+    row1 = st.columns(2, gap="large")
+    row2 = st.columns(2, gap="large")
+    card_cols = list(row1) + list(row2)
+
+    for idx, r in top_actions.iterrows():
+        rank = idx + 1
+        with card_cols[idx]:
+            with st.container(border=True):
+                st.markdown(
+                    f"""
+                    <div class="ecc-action-rank">Priority #{rank} · Score {r["Management_Priority_Score"]:.1f}</div>
+                    <div class="ecc-action-name">{r["Relationship"]}</div>
+                    <div class="ecc-action-type">{r["Executive_Action_Type"]}</div>
+                    <div class="ecc-action-text"><b>Why it matters:</b><br>{r["Management_Priority_Rationale"]}</div>
+                    <br>
+                    <div class="ecc-action-text"><b>Next action:</b><br>{r["Executive_Next_Action"]}</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    section_title("Executive Management Agenda", "Suggested discussion flow for the next management review.")
+    agenda_items = build_command_center_agenda(command_view)
+    agenda_html = '<div class="ecc-agenda"><div class="ecc-agenda-title">Recommended Agenda</div><ol>'
+    for item in agenda_items:
+        agenda_html += f"<li>{item}</li>"
+    agenda_html += "</ol></div>"
+    st.markdown(agenda_html, unsafe_allow_html=True)
+
+    with st.expander("View Executive Command Center Action Table", expanded=False):
+        ecc_table = command_view[[
+            "Relationship",
+            "Country",
+            "Sector",
+            "Exposure_USD_B",
+            "Treasury_Score",
+            "Strategic_Score",
+            "Risk_Score",
+            "Management_Priority_Score",
+            "Management_Priority_Band",
+            "Executive_Action_Type",
+            "Executive_Next_Action",
+        ]].copy()
+        ecc_table["Exposure_USD_B"] = ecc_table["Exposure_USD_B"].map(lambda x: f"{x:.1f}")
+        ecc_table["Management_Priority_Score"] = ecc_table["Management_Priority_Score"].map(lambda x: f"{x:.1f}")
+        st.dataframe(ecc_table, use_container_width=True, hide_index=True, height=300)
+
+
+with tab_portfolio:
     st.markdown(
-        f"""
-        <div class="outcome-grid">
-            <div class="metric-card"><div class="metric-label">Deposit Growth</div><div class="metric-value">{outcome['Deposit Growth']}</div><div class="metric-sub">Illustrative management target</div></div>
-            <div class="metric-card"><div class="metric-label">Wallet Expansion</div><div class="metric-value">{outcome['Wallet Expansion']}</div><div class="metric-sub">Potential increase</div></div>
-            <div class="metric-card"><div class="metric-label">Relationship Strength</div><div class="metric-value" style="font-size:20px;">{outcome['Relationship Strength']}</div><div class="metric-sub">Coverage outcome</div></div>
-            <div class="metric-card"><div class="metric-label">Probability</div><div class="metric-value">{outcome['Probability']}</div><div class="metric-sub">Rule-based confidence</div></div>
+        """
+        <div class="ec-module-note">
+        <b>Portfolio Intelligence</b><br>
+        Evidence layer for portfolio structure, relationship positioning, exposure concentration and reference tables.
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.markdown(f'<div class="card"><div class="card-body">{outcome["Detail"]}</div></div>', unsafe_allow_html=True)
-
-    memo = build_relationship_memo(r)
-    memo_pdf = markdown_to_pdf(memo)
-    st.markdown('<div class="section-title">Executive Memo</div><div class="section-sub">Generate a relationship-level management memo for review, committee discussion or banker follow-up.</div>', unsafe_allow_html=True)
-    mcol1, mcol2 = st.columns([1.2, 1], gap="large")
-    with mcol1:
-        st.markdown('<div class="memo-box">' + memo.replace("\n", "<br>") + '</div>', unsafe_allow_html=True)
-    with mcol2:
-        safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", selected).strip("_").lower()
-        st.download_button(
-            "Download Executive Memo PDF",
-            data=memo_pdf,
-            file_name=f"ecai_executive_relationship_memo_{safe_name}_v8_0.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
-        st.download_button(
-            "Download Memo Text",
-            data=memo.encode("utf-8"),
-            file_name=f"ecai_executive_relationship_memo_{safe_name}_v8_0.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-        st.markdown('<div class="small-note">v8.0 memo is generated from the same decision engine used in the Relationship Workspace.</div>', unsafe_allow_html=True)
-
-# -----------------------------
-# Executive Command Center
-# -----------------------------
-with tab_command:
-    command = view.sort_values("Management_Priority_Score", ascending=False).copy()
-    high_count = int((command["Management_Priority_Score"] >= 65).sum())
-    immediate_count = int((command["Management_Priority_Score"] >= 75).sum())
-    top = command.iloc[0]
-    total_exposure = command["Exposure_USD_B"].sum()
-    total_deposits = command["Deposits_USD_B"].sum()
-    portfolio_health = "Action Required" if immediate_count else ("Watchlist" if high_count >= 4 else "Stable")
-
-    st.markdown('<div class="section-title">Executive Command Center</div><div class="section-sub">Answers the weekly management question: which relationships require attention now?</div>', unsafe_allow_html=True)
+    # =========================
+    # HEADER
+    # =========================
+    st.markdown('<div class="main-title">Portfolio Cognition Dashboard</div>', unsafe_allow_html=True)
     st.markdown(
-        f"""
-        <div class="evidence-grid">
-            <div class="metric-card"><div class="metric-label">Portfolio Health</div><div class="metric-value">{portfolio_health}</div><div class="metric-sub">Based on priority signals</div></div>
-            <div class="metric-card"><div class="metric-label">Priority Relationships</div><div class="metric-value">{high_count}</div><div class="metric-sub">Score ≥ 65</div></div>
-            <div class="metric-card"><div class="metric-label">Immediate Actions</div><div class="metric-value">{immediate_count}</div><div class="metric-sub">Score ≥ 75</div></div>
-            <div class="metric-card"><div class="metric-label">Top Relationship</div><div class="metric-value" style="font-size:20px;">{top['Relationship']}</div><div class="metric-sub">{top['Recommended_Action']}</div></div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<div class="card"><div class="card-title">Executive Decision Brief</div><div class="card-body">The filtered portfolio has {fmt_b(total_exposure)} exposure and {fmt_b(total_deposits)} deposits. EC-AI identifies <b>{high_count}</b> relationships requiring management attention. The top priority is <b>{top["Relationship"]}</b>, where the recommended action is <b>{top["Recommended_Action"]}</b>.</div></div>',
+        '<div class="sub-title">Executive view of institutional relationships | EC-AI Synthetic Institutional Portfolio Dataset v7.0</div>',
         unsafe_allow_html=True,
     )
 
-    top_cards = command.head(4).reset_index(drop=True)
-    cols_cards = st.columns(4, gap="medium")
-    for i, (_, row) in enumerate(top_cards.iterrows()):
-        with cols_cards[i]:
+    # =========================
+    # KPI STRIP
+    # =========================
+    total_exposure = view["Exposure_USD_B"].sum()
+    total_deposits = view["Deposits_USD_B"].sum()
+    weighted_treasury = (view["Treasury_Score"] * view["Exposure_USD_B"]).sum() / total_exposure
+    weighted_strategic = (view["Strategic_Score"] * view["Exposure_USD_B"]).sum() / total_exposure
+    coverage = total_deposits / total_exposure * 100
+    risk_alerts = int((view["Risk_Score"] >= 80).sum())
+
+    kpis = [
+        ("Total Exposure", fmt_b(total_exposure), "Filtered portfolio"),
+        ("Weighted Treasury Score", f"{weighted_treasury:.1f}", "Out of 100"),
+        ("Weighted Strategic Score", f"{weighted_strategic:.1f}", "Out of 100"),
+        ("Treasury Coverage", fmt_pct(coverage), "Deposits / exposure"),
+        ("AI Risk Alerts", str(risk_alerts), "Risk score ≥ 80"),
+    ]
+
+    for col, (label, value, sub) in zip(st.columns(5), kpis):
+        with col:
             st.markdown(
                 f"""
-                <div class="card">
-                    <div class="card-kicker">Priority #{i+1} · Score {row['Management_Priority_Score']:.1f}</div>
-                    <div class="card-title">{row['Relationship']}</div>
-                    <div class="card-body"><b>{row['Recommended_Action']}</b><br><br>{'; '.join(rationale_points(row))}.</div>
+                <div class="kpi-card">
+                    <div class="kpi-label">{label}</div>
+                    <div class="kpi-value">{value}</div>
+                    <div class="kpi-sub">{sub}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-# -----------------------------
-# Management Actions
-# -----------------------------
-with tab_actions:
-    st.markdown('<div class="section-title">Management Actions</div><div class="section-sub">Action queue by relationship, owner and timeline.</div>', unsafe_allow_html=True)
-    actions = view.sort_values("Management_Priority_Score", ascending=False).copy()
-    actions["Exposure"] = actions["Exposure_USD_B"].map(fmt_b)
-    actions["Deposits"] = actions["Deposits_USD_B"].map(fmt_b)
-    actions["Priority Score"] = actions["Management_Priority_Score"].map(lambda x: f"{x:.1f}")
-    table = actions[[
-        "Relationship", "Country", "Sector", "Exposure", "Deposits", "Recommended_Action", "Attention_Label", "Owner", "Timeline", "Confidence", "Priority Score"
-    ]].rename(columns={"Recommended_Action": "Action Type", "Attention_Label": "Priority"})
-    st.dataframe(table, use_container_width=True, hide_index=True, height=520)
-
-    summary = actions.groupby("Recommended_Action").agg(Relationships=("Relationship", "count"), Avg_Priority=("Management_Priority_Score", "mean")).reset_index()
-    summary["Avg_Priority"] = summary["Avg_Priority"].map(lambda x: f"{x:.1f}")
-    st.markdown('<div class="section-title">Action Taxonomy Summary</div>', unsafe_allow_html=True)
-    st.dataframe(summary.rename(columns={"Recommended_Action": "Action Type"}), use_container_width=True, hide_index=True, height=240)
-
-# -----------------------------
-# Portfolio Intelligence
-# -----------------------------
-with tab_portfolio:
-    st.markdown('<div class="section-title">Portfolio Intelligence</div><div class="section-sub">Evidence layer only. The product is not the chart; the product is management attention allocation.</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
-        fig = px.scatter(
-            view,
-            x="Treasury_Score",
-            y="Strategic_Score",
-            size="Exposure_USD_B",
-            color="Recommended_Action",
-            hover_name="Relationship",
-            hover_data=["Country", "Sector", "Risk_Score", "Management_Priority_Score"],
-            title="Relationship Positioning: Treasury vs Strategic Score",
-        )
-        fig.update_layout(height=470, template="plotly_white", legend_title_text="Action")
-        st.plotly_chart(fig, use_container_width=True)
-    with c2:
-        bar = view.sort_values("Management_Priority_Score", ascending=False).head(10)
-        fig2 = px.bar(bar, x="Management_Priority_Score", y="Relationship", orientation="h", color="Recommended_Action", title="Top Management Attention Signals")
-        fig2.update_layout(height=470, template="plotly_white", yaxis={"categoryorder":"total ascending"}, legend_title_text="Action")
-        st.plotly_chart(fig2, use_container_width=True)
-
-    evidence = view.copy()
-    evidence["Exposure"] = evidence["Exposure_USD_B"].map(fmt_b)
-    evidence["Deposits"] = evidence["Deposits_USD_B"].map(fmt_b)
-    evidence["Priority Score"] = evidence["Management_Priority_Score"].map(lambda x: f"{x:.1f}")
-    st.dataframe(
-        evidence[["Relationship", "Country", "Sector", "Strategic_Tier", "Exposure", "Deposits", "Treasury_Score", "Strategic_Score", "Risk_Score", "Wallet_Share_Pct", "Priority Score", "Recommended_Action"]],
-        use_container_width=True,
-        hide_index=True,
-        height=360,
+    st.markdown(
+        """
+        <div class="narrative-box">
+        The portfolio shows concentration in strategic infrastructure and financial relationships requiring treasury penetration enhancement.
+        The AI Management Action Engine highlights where management should deepen treasury linkage, protect funding relationships, and monitor elevated risk names.
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-# -----------------------------
-# Executive Memo Center
-# -----------------------------
-with tab_memo:
-    st.markdown('<div class="section-title">Executive Memo Center</div><div class="section-sub">Generate relationship-level memos or portfolio-level management briefs.</div>', unsafe_allow_html=True)
-    memo_relationship = st.selectbox("Select memo relationship", view.sort_values("Management_Priority_Score", ascending=False)["Relationship"].tolist(), key="memo_select")
-    memo_row = view[view["Relationship"] == memo_relationship].iloc[0]
-    memo_text = build_relationship_memo(memo_row)
-    memo_pdf = markdown_to_pdf(memo_text)
-    l, rcol = st.columns([1.35, 1], gap="large")
-    with l:
-        st.markdown('<div class="memo-box">' + memo_text.replace("\n", "<br>") + '</div>', unsafe_allow_html=True)
-    with rcol:
-        safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", memo_relationship).strip("_").lower()
+    # =========================
+    # PORTFOLIO COGNITION FULL-WIDTH
+    # =========================
+    key_df = view.sort_values(
+        ["Exposure_USD_B", "Strategic_Score", "Risk_Score"],
+        ascending=[False, False, False],
+    ).reset_index(drop=True)
+    key_df["Chart_No"] = range(1, len(key_df) + 1)
+    key_map = dict(zip(key_df["Relationship"], key_df["Chart_No"]))
+    view["Chart_No"] = view["Relationship"].map(key_map)
+    view["Label"] = view["Chart_No"].astype(str)
+
+    section_title("Portfolio Cognition Quadrant", "Treasury strength, strategic value, exposure size and relationship priority.")
+    st.markdown(
+        '<div class="small-note">X-axis: Treasury Score | Y-axis: Strategic Score | Bubble size: Exposure in USD billions<br>Names are moved to the reference table to avoid chart congestion.</div>',
+        unsafe_allow_html=True,
+    )
+
+    color_map = {
+        "Treasury Growth": "#1565C0",
+        "Strategic Growth": "#5E35B1",
+        "Crown Jewel": "#D32F2F",
+        "Portfolio Review": "#F57C00",
+    }
+
+    fig = px.scatter(
+        view,
+        x="Treasury_Score",
+        y="Strategic_Score",
+        size="Exposure_USD_B",
+        color="Priority",
+        text="Label",
+        hover_name="Relationship",
+        size_max=32,
+        color_discrete_map=color_map,
+        hover_data={
+            "Country": True,
+            "Sector": True,
+            "Exposure_USD_B": ":.1f",
+            "Deposits_USD_B": ":.1f",
+            "Risk_Score": True,
+            "AI_Action_Category": True,
+            "Chart_No": False,
+            "Label": False,
+        },
+    )
+
+    fig.add_shape(type="rect", x0=0, y0=70, x1=70, y1=100, fillcolor="rgba(255,152,0,0.10)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=70, y0=70, x1=100, y1=100, fillcolor="rgba(76,175,80,0.10)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=0, y0=0, x1=70, y1=70, fillcolor="rgba(244,67,54,0.06)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=70, y0=0, x1=100, y1=70, fillcolor="rgba(33,150,243,0.06)", line_width=0, layer="below")
+    fig.add_vline(x=70, line_width=1, line_dash="dash", line_color="#9CA3AF")
+    fig.add_hline(y=70, line_width=1, line_dash="dash", line_color="#9CA3AF")
+
+    fig.add_annotation(x=22, y=96, text="<b>OPTIMIZATION FOCUS</b>", showarrow=False, font=dict(size=13, color="#6B4E16"))
+    fig.add_annotation(x=88, y=96, text="<b>CROWN JEWEL</b>", showarrow=False, font=dict(size=13, color="#0B6B2E"))
+    fig.add_annotation(x=22, y=8, text="<b>PORTFOLIO REVIEW</b>", showarrow=False, font=dict(size=13, color="#7F1D1D"))
+    fig.add_annotation(x=88, y=8, text="<b>TREASURY ANCHOR</b>", showarrow=False, font=dict(size=13, color="#0B3D75"))
+
+    fig.update_traces(
+        textposition="middle center",
+        textfont=dict(size=11, color="white", family="Arial Black"),
+        marker=dict(opacity=0.80, line=dict(width=1, color="white")),
+    )
+
+    fig.update_layout(
+    template="plotly_white",
+    height=620,
+        margin=dict(l=10, r=10, t=20, b=20),
+        showlegend=False,
+        font=dict(family="Inter, Arial", size=13, color="#071B3A"),
+        xaxis=dict(title="Treasury Score", range=[0, 100], dtick=10, gridcolor="rgba(17,24,39,.08)"),
+        yaxis=dict(title="Strategic Score", range=[0, 100], dtick=10, gridcolor="rgba(17,24,39,.08)"),
+    )
+
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
+
+    top5_pct = view.nlargest(5, "Exposure_USD_B")["Exposure_USD_B"].sum() / total_exposure * 100
+    infra_pct = view[view["Sector"] == "Infrastructure"]["Exposure_USD_B"].sum() / total_exposure * 100
+    shipping_pct = view[view["Sector"].isin(["Shipping", "Aviation"])]["Exposure_USD_B"].sum() / total_exposure * 100
+
+    st.markdown(
+        f"""
+        <div class="pc-summary-row">
+            <div class="pc-action-card">
+                <div class="pc-action-title">REMOVED_Top 5 Relationships</div>
+                <div class="pc-action-value">{top5_pct:.1f}%</div>
+                <div class="pc-action-sub">of portfolio exposure</div>
+            </div>
+            <div class="pc-action-card">
+                <div class="pc-action-title">REMOVED_Infrastructure Concentration</div>
+                <div class="pc-action-value">{infra_pct:.1f}%</div>
+                <div class="pc-action-sub">of total exposure</div>
+            </div>
+            <div class="pc-action-card">
+                <div class="pc-action-title">REMOVED_Shipping & Aviation Risk</div>
+                <div class="pc-action-value">{shipping_pct:.1f}%</div>
+                <div class="pc-action-sub">of exposure</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="ec-table-title">Top Management Actions</div>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="pc-actions-list">
+        <ol>
+            <li>Deepen treasury linkage for infrastructure relationships.</li>
+            <li>Monitor refinancing-sensitive shipping exposures.</li>
+            <li>Protect crown-jewel deposit relationships.</li>
+            <li>Expand wallet penetration across strategic names.</li>
+        </ol>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="ec-table-title">Relationship Reference</div>', unsafe_allow_html=True)
+    st.caption("By chart number")
+    ref = key_df[["Chart_No", "Relationship", "Country", "Sector", "Exposure_USD_B"]].copy()
+    ref = ref.rename(columns={"Chart_No": "#", "Exposure_USD_B": "Exposure (USD B)"})
+    ref["Exposure (USD B)"] = ref["Exposure (USD B)"].map(lambda x: f"{x:.1f}")
+    st.dataframe(ref, use_container_width=True, hide_index=True, height=300)
+
+
+with tab_actions:
+    st.markdown(
+        """
+        <div class="ec-module-note">
+        <b>Management Actions</b><br>
+        Converts relationship signals into banker follow-up priorities, action categories and executive queues.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    # =========================
+    # LOWER GRID
+    # =========================
+    with st.expander("Portfolio Relationship Workbench", expanded=False):
+        lower_left, lower_right = st.columns([3.75, 1.45], gap="large")
+
+        with lower_left:
+            section_title("Management Attention Priorities", "Relationship-level management focus based on exposure, strategic importance and risk.")
+            attention = view.sort_values(["Strategic_Score", "Risk_Score", "Exposure_USD_B"], ascending=[False, False, False]).copy()
+            attention["Exposure (USD B)"] = attention["Exposure_USD_B"].map(lambda x: f"{x:.1f}")
+            attention["Deposits (USD B)"] = attention["Deposits_USD_B"].map(lambda x: f"{x:.1f}")
+
+            st.dataframe(
+                attention[
+                    [
+                        "Relationship","Quadrant","Priority","Country","Sector",
+                        "Exposure (USD B)","Deposits (USD B)",
+                        "Treasury_Score","Strategic_Score","Risk_Score","AI_Action_Category",
+                    ]
+                ],
+                use_container_width=True,
+                hide_index=True,
+                height=260,
+            )
+
+        with lower_right:
+            section_title("Relationship Quick Drilldown", "Single relationship view with action recommendation.")
+            selected = st.selectbox("Select relationship", view["Relationship"].tolist())
+            row = view[view["Relationship"] == selected].iloc[0]
+
+            def small_metric(label, value):
+                st.markdown(
+                    f"""
+                    <div class="small-metric-card">
+                        <div class="small-metric-label">{label}</div>
+                        <div class="small-metric-value">{value}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            d1, d2, d3, d4, d5 = st.columns(5)
+            with d1:
+                small_metric("Exposure", fmt_b(row["Exposure_USD_B"]))
+            with d2:
+                small_metric("Deposits", fmt_b(row["Deposits_USD_B"]))
+            with d3:
+                small_metric("Treasury", int(row["Treasury_Score"]))
+            with d4:
+                small_metric("Strategic", int(row["Strategic_Score"]))
+            with d5:
+                small_metric("Risk", int(row["Risk_Score"]))
+
+            if row["Quadrant"] == "Optimization Focus":
+                msg = "Strategically important relationship requiring treasury deepening and stronger operational wallet linkage."
+            elif row["Quadrant"] == "Crown Jewel":
+                msg = "High-quality relationship combining strategic relevance with strong treasury contribution."
+            elif row["Quadrant"] == "Treasury Anchor":
+                msg = "Relationship remains valuable from a liquidity and funding perspective."
+            else:
+                msg = "Relationship may warrant portfolio review given weaker economics and strategic positioning."
+
+            st.markdown(f'<div class="narrative-box">{msg}</div>', unsafe_allow_html=True)
+
+            st.markdown("### AI Management Action Engine")
+            st.markdown(
+                f"""
+                <div class="ai-box" style="min-height:150px;">
+                <b>Recommended Management Action</b><br><br>
+                {row["AI_Management_Action"]}<br><br>
+                <b>Action Category:</b> {row["AI_Action_Category"]}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    # =========================
+    # EXECUTIVE INTELLIGENCE LAYER
+    # =========================
+    section_title("Executive Intelligence Layer", "Portfolio metrics converted into management attention signals.")
+    st.markdown(
+        """
+        <div class="narrative-box">
+        EC-AI Intelligence Layer converts portfolio metrics into an executive attention signal.
+        The Management Priority Score combines exposure importance, treasury opportunity,
+        relationship weakness, and risk alert indicators.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    priority_view = view.sort_values("Management_Priority_Score", ascending=False).copy()
+    priority_view["Exposure (USD B)"] = priority_view["Exposure_USD_B"].map(lambda x: f"{x:.1f}")
+    priority_view["Deposits (USD B)"] = priority_view["Deposits_USD_B"].map(lambda x: f"{x:.1f}")
+    priority_view["Priority Score"] = priority_view["Management_Priority_Score"].map(lambda x: f"{x:.1f}")
+
+    avg_priority_score = priority_view["Management_Priority_Score"].mean()
+    top_priority_name = priority_view.iloc[0]["Relationship"]
+    high_priority_count = int((priority_view["Management_Priority_Score"] >= 65).sum())
+
+    st.markdown(
+        f"""
+        <div class="ec-kpi-row">
+            <div class="ec-kpi-tile">
+                <div class="ec-kpi-tile-label">Average Priority Score</div>
+                <div class="ec-kpi-tile-value">{avg_priority_score:.1f}</div>
+                <div class="ec-kpi-tile-sub">Across filtered relationships</div>
+            </div>
+            <div class="ec-kpi-tile">
+                <div class="ec-kpi-tile-label">Top Management Priority</div>
+                <div class="ec-kpi-tile-value" style="font-size:22px !important;">{top_priority_name}</div>
+                <div class="ec-kpi-tile-sub">Requires management review</div>
+            </div>
+            <div class="ec-kpi-tile">
+                <div class="ec-kpi-tile-label">High Priority Relationships</div>
+                <div class="ec-kpi-tile-value">{high_priority_count}</div>
+                <div class="ec-kpi-tile-sub">Score >= 65</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="ec-table-title">Top Relationships Requiring Management Attention</div>', unsafe_allow_html=True)
+    st.dataframe(
+        priority_view[
+            [
+                "Relationship",
+                "Country",
+                "Sector",
+                "Exposure (USD B)",
+                "Treasury_Score",
+                "Strategic_Score",
+                "Risk_Score",
+                "Priority Score",
+                "Management_Priority_Band",
+                "Management_Priority_Rationale",
+            ]
+        ].head(10),
+        use_container_width=True,
+        hide_index=True,
+        height=250,
+    )
+
+    st.markdown(
+        """
+        <div class="ai-box">
+        <b>Management Priority Score v7.0 Formula</b><br><br>
+        40% Exposure Importance + 25% Treasury Opportunity + 20% Relationship Weakness + 15% Risk Alert<br><br>
+        <b>Score Colours:</b> Red ≥ 75 | Orange 65–74.9 | Blue 50–64.9 | Green &lt; 50
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+    # =========================
+    # ACTION ENGINE SUMMARY
+    # =========================
+    section_title("AI Management Action Summary", "Action categories and AI-generated management recommendations.")
+    summary = view["AI_Action_Category"].value_counts().reset_index()
+    summary.columns = ["Action Category", "Relationship Count"]
+    s1, s2 = st.columns([1.2, 3.8], gap="large")
+
+    with s1:
+        st.dataframe(summary, use_container_width=True, hide_index=True, height=165)
+
+    with s2:
+        engine_table = view[[
+            "Relationship", "AI_Action_Category", "AI_Management_Action"
+        ]].sort_values(["AI_Action_Category", "Relationship"])
+        st.dataframe(engine_table, use_container_width=True, hide_index=True, height=165)
+
+
+
+
+
+def rw_priority_level(row):
+    score = row.get("Management_Priority_Score", 0)
+    risk = row.get("Risk_Score", 0)
+    if score >= 75 or risk >= 85:
+        return "HIGH", "#991B1B", "Executive Attention Required"
+    if score >= 65 or risk >= 75:
+        return "MEDIUM", "#9A3412", "Management Review Recommended"
+    return "NORMAL", "#166534", "Standard Coverage Monitoring"
+
+
+def rw_confidence(row):
+    score = float(row.get("Management_Priority_Score", 50))
+    risk = float(row.get("Risk_Score", 50))
+    treasury_gap = max(0, 100 - float(row.get("Treasury_Score", 50)))
+    conf = 55 + 0.18 * score + 0.10 * risk + 0.08 * treasury_gap
+    return int(min(94, max(68, round(conf))))
+
+
+def rw_expected_outcome(row, wallet_ratio):
+    exposure = float(row["Exposure_USD_B"])
+    deposits = float(row["Deposits_USD_B"])
+    treasury = float(row["Treasury_Score"])
+    risk = float(row["Risk_Score"])
+    confidence = rw_confidence(row)
+    deposit_growth = max(0.08, (100 - treasury) / 100 * 0.25) * deposits
+    current_wallet = wallet_ratio
+    target_wallet = min(current_wallet + max(4, (100 - treasury) * 0.18), 65)
+    if risk >= 85:
+        strength_from, strength_to = "Weak", "Stabilized"
+    elif current_wallet < 35:
+        strength_from, strength_to = "Moderate", "Strong"
+    else:
+        strength_from, strength_to = "Strong", "Protected"
+    return deposit_growth, current_wallet, target_wallet, strength_from, strength_to, confidence
+
+
+def rw_timeline_events(row):
+    rel = row["Relationship"]
+    risk = float(row["Risk_Score"])
+    treasury = float(row["Treasury_Score"])
+    exposure = float(row["Exposure_USD_B"])
+    if risk >= 85:
+        return [
+            ("2025 Q3", "Sector risk review"),
+            ("2025 Q4", "Treasury coverage discussion"),
+            ("2026 Q1", "Risk signal increased"),
+            ("2026 Q2", "Senior review triggered"),
+            ("Today", "Management attention required"),
+        ]
+    if treasury < 70:
+        return [
+            ("2025 Q3", "Relationship planning"),
+            ("2025 Q4", "Operating wallet review"),
+            ("2026 Q1", "Treasury gap identified"),
+            ("2026 Q2", "Wallet expansion opportunity"),
+            ("Today", "Treasury deep dive recommended"),
+        ]
+    if exposure >= 8:
+        return [
+            ("2025 Q3", "Senior coverage touchpoint"),
+            ("2025 Q4", "Portfolio exposure review"),
+            ("2026 Q1", "Strategic account planning"),
+            ("2026 Q2", "Management agenda review"),
+            ("Today", "Protect and expand relationship"),
+        ]
+    return [
+        ("2025 Q3", "Standard coverage review"),
+        ("2025 Q4", "Relationship health check"),
+        ("2026 Q1", "Portfolio monitoring"),
+        ("2026 Q2", "Business review completed"),
+        ("Today", "Maintain coverage cadence"),
+    ]
+
+
+def rw_situation_report(row, strategic_view, wallet_view, treasury_view, risk_view, sector_view):
+    rel = row["Relationship"]
+    return f"""
+    <b>Executive Assessment</b><br>
+    {rel} is assessed as <b>{strategic_view}</b> with <b>{wallet_view.lower()}</b> and <b>{treasury_view.lower()}</b>.
+    The relationship carries <b>USD {row['Exposure_USD_B']:.1f}B</b> exposure and <b>USD {row['Deposits_USD_B']:.1f}B</b> deposits.
+    <br><br>
+    <b>Growth Opportunities</b><br>
+    Management should focus on operating wallet penetration, treasury dialogue, FX / cash management linkage and senior coverage where appropriate.
+    <br><br>
+    <b>Risk Observations</b><br>
+    Current risk view: <b>{risk_view}</b>. Sector context: <b>{sector_view}</b>.
+    <br><br>
+    <b>Strategic Recommendation</b><br>
+    The recommended management action is <b>{row['AI_Action_Category']}</b>: {row['AI_Management_Action']}
+    """
+
+
+with tab_relationship:
+    # =========================
+    # RELATIONSHIP WORKSPACE v8.1
+    # =========================
+    section_title("Relationship Workspace", "Single-client executive operating environment: alert, situation report, action, evidence, outcome and timeline.")
+    st.markdown(
+        """
+        <div class="narrative-box">
+        Relationship Workspace v8.1 preserves the v7.0 intelligence foundation and adds executive decision support:
+        management alert, supporting intelligence, expected outcome and relationship timeline.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    selected_360 = st.selectbox(
+        "Select relationship for workspace",
+        view["Relationship"].tolist(),
+        key="relationship_360_select",
+    )
+
+    r360 = view[view["Relationship"] == selected_360].iloc[0]
+    strategic_view, wallet_view, treasury_view, risk_view, sector_view, wallet_ratio = relationship_360_assessment(r360)
+    priority_level, priority_color_hex, alert_title = rw_priority_level(r360)
+    confidence = rw_confidence(r360)
+    deposit_growth, current_wallet, target_wallet, strength_from, strength_to, outcome_confidence = rw_expected_outcome(r360, wallet_ratio)
+
+    # Executive Summary / Hero
+    st.markdown(
+        f"""
+        <div class="r360-hero-card" style="padding:28px 30px;">
+            <div class="r360-name">{r360["Relationship"]}</div>
+            <div class="r360-meta">{r360["Country"]} · {r360["Sector"]} · Strategic Tier: {r360["Priority"]}</div>
+            <span class="strategy-pill">{strategic_view}</span>
+            <span class="strategy-pill">{wallet_view}</span>
+            <span class="strategy-pill">Management Priority: {priority_level}</span>
+            <div class="r360-kpi-row" style="margin-top:18px; margin-bottom:0;">
+                <div class="r360-kpi">
+                    <div class="r360-kpi-label">Exposure</div>
+                    <div class="r360-kpi-value">USD {r360["Exposure_USD_B"]:.1f}B</div>
+                </div>
+                <div class="r360-kpi">
+                    <div class="r360-kpi-label">Deposits</div>
+                    <div class="r360-kpi-value">USD {r360["Deposits_USD_B"]:.1f}B</div>
+                </div>
+                <div class="r360-kpi">
+                    <div class="r360-kpi-label">Wallet Ratio</div>
+                    <div class="r360-kpi-value">{wallet_ratio:.1f}%</div>
+                </div>
+                <div class="r360-kpi">
+                    <div class="r360-kpi-label">Priority Score</div>
+                    <div class="r360-kpi-value">{r360["Management_Priority_Score"]:.1f}</div>
+                </div>
+                <div class="r360-kpi">
+                    <div class="r360-kpi-label">Risk Score</div>
+                    <div class="r360-kpi-value">{int(r360["Risk_Score"])}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Executive Alert
+    st.markdown(
+        f"""
+        <div class="rw-alert">
+            <div class="rw-alert-title">⚠ {alert_title}</div>
+            <div class="rw-body">
+                <b>{r360["AI_Action_Category"]}</b> recommended for <b>{r360["Relationship"]}</b> because {r360["Management_Priority_Rationale"].lower()}
+            </div>
+            <div class="rw-alert-grid">
+                <div class="rw-alert-metric">
+                    <div class="rw-alert-label">Action Type</div>
+                    <div class="rw-alert-value">{r360["AI_Action_Category"]}</div>
+                </div>
+                <div class="rw-alert-metric">
+                    <div class="rw-alert-label">Confidence</div>
+                    <div class="rw-alert-value">{confidence}%</div>
+                </div>
+                <div class="rw-alert-metric">
+                    <div class="rw-alert-label">Potential Impact</div>
+                    <div class="rw-alert-value">USD {r360["Exposure_USD_B"]:.1f}B</div>
+                </div>
+                <div class="rw-alert-metric">
+                    <div class="rw-alert-label">Target Date</div>
+                    <div class="rw-alert-value">30 Days</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # AI Situation Report + Recommended Action
+    left_col, right_col = st.columns([1.55, 1.0], gap="large")
+    with left_col:
+        st.markdown(
+            f"""
+            <div class="rw-section-card">
+                <div class="rw-section-heading">AI Situation Report</div>
+                <div class="rw-body">
+                    {rw_situation_report(r360, strategic_view, wallet_view, treasury_view, risk_view, sector_view)}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with right_col:
+        owner = "RM + Risk" if "Risk" in r360["AI_Action_Category"] or r360["Risk_Score"] >= 80 else ("Senior Coverage" if r360["Exposure_USD_B"] >= 8 else "RM + Treasury")
+        st.markdown(
+            f"""
+            <div class="rw-section-card">
+                <div class="rw-section-heading">Recommended Management Action</div>
+                <div class="rw-body">
+                    <b style="color:#1565C0;font-size:20px;">{r360["AI_Action_Category"]}</b><br><br>
+                    <b>Priority:</b> {priority_level}<br>
+                    <b>Owner:</b> {owner}<br>
+                    <b>Timeline:</b> 30 Days<br>
+                    <b>Confidence:</b> {confidence}%<br><br>
+                    {r360["AI_Management_Action"]}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # Supporting Intelligence
+    st.markdown('<div class="ec-table-title">Supporting Intelligence</div>', unsafe_allow_html=True)
+    peer_treasury = min(92, max(55, int(r360["Treasury_Score"] + (100 - r360["Treasury_Score"]) * 0.55)))
+    peer_wallet = min(65, max(28, wallet_ratio + 18))
+    engagement_meetings = 0 if r360["Risk_Score"] >= 85 or r360["Strategic_Score"] < 50 else (1 if wallet_ratio < 35 else 3)
+    risk_signal = "Elevated" if r360["Risk_Score"] >= 80 else ("Moderate" if r360["Risk_Score"] >= 60 else "Stable")
+    st.markdown(
+        f"""
+        <div class="rw-evidence-grid">
+            <div class="rw-evidence-card">
+                <div class="rw-evidence-label">Treasury Penetration</div>
+                <div class="rw-evidence-value">{int(r360["Treasury_Score"])}%</div>
+                <div class="rw-evidence-sub">Peer benchmark: {peer_treasury}%</div>
+            </div>
+            <div class="rw-evidence-card">
+                <div class="rw-evidence-label">Wallet Share</div>
+                <div class="rw-evidence-value">{wallet_ratio:.1f}%</div>
+                <div class="rw-evidence-sub">Peer benchmark: {peer_wallet:.1f}%</div>
+            </div>
+            <div class="rw-evidence-card">
+                <div class="rw-evidence-label">Risk Signal</div>
+                <div class="rw-evidence-value">{risk_signal}</div>
+                <div class="rw-evidence-sub">Risk score: {int(r360["Risk_Score"])}</div>
+            </div>
+            <div class="rw-evidence-card">
+                <div class="rw-evidence-label">Executive Engagement</div>
+                <div class="rw-evidence-value">{engagement_meetings}</div>
+                <div class="rw-evidence-sub">Meetings in last 12 months</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Expected Outcome
+    st.markdown(
+        f"""
+        <div class="rw-section-card">
+            <div class="rw-section-heading">Expected Outcome</div>
+            <div class="rw-body">If the recommended management action is executed within the next 30 days, EC-AI estimates the following relationship outcomes.</div>
+            <div class="rw-outcome-grid">
+                <div class="rw-outcome-card">
+                    <div class="rw-outcome-label">Deposit Growth</div>
+                    <div class="rw-outcome-value">+USD {deposit_growth:.1f}B</div>
+                </div>
+                <div class="rw-outcome-card">
+                    <div class="rw-outcome-label">Wallet Share</div>
+                    <div class="rw-outcome-value">{current_wallet:.1f}% → {target_wallet:.1f}%</div>
+                </div>
+                <div class="rw-outcome-card">
+                    <div class="rw-outcome-label">Relationship Strength</div>
+                    <div class="rw-outcome-value" style="font-size:22px !important;">{strength_from} → {strength_to}</div>
+                </div>
+                <div class="rw-outcome-card">
+                    <div class="rw-outcome-label">Management Confidence</div>
+                    <div class="rw-outcome-value">{outcome_confidence}%</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Relationship Timeline
+    timeline_html = '<div class="rw-section-card"><div class="rw-section-heading">Relationship Timeline</div><div class="rw-timeline">'
+    for date_label, event in rw_timeline_events(r360):
+        timeline_html += f'<div class="rw-timeline-item"><div class="rw-timeline-date">{date_label}</div><div class="rw-timeline-event">{event}</div></div>'
+    timeline_html += '</div></div>'
+    st.markdown(timeline_html, unsafe_allow_html=True)
+
+    # Keep v7.0 tables and memo export
+    metrics_table = pd.DataFrame({
+        "Metric": [
+            "Exposure",
+            "Deposits",
+            "Wallet Ratio",
+            "Treasury Score",
+            "Strategic Score",
+            "Risk Score",
+            "Action Category",
+        ],
+        "Value": [
+            f'USD {r360["Exposure_USD_B"]:.1f}B',
+            f'USD {r360["Deposits_USD_B"]:.1f}B',
+            f"{wallet_ratio:.1f}%",
+            int(r360["Treasury_Score"]),
+            int(r360["Strategic_Score"]),
+            int(r360["Risk_Score"]),
+            r360["AI_Action_Category"],
+        ],
+    })
+
+    assessment_table = pd.DataFrame({
+        "Dimension": [
+            "Strategic Importance",
+            "Treasury Quality",
+            "Wallet Penetration",
+            "Portfolio Risk",
+            "Sector View",
+        ],
+        "Assessment": [
+            strategic_view,
+            treasury_view,
+            wallet_view,
+            risk_view,
+            sector_view,
+        ],
+    })
+
+    tcol1, tcol2 = st.columns(2, gap="large")
+    with tcol1:
+        st.markdown('<div class="ec-table-title">Relationship Metrics</div>', unsafe_allow_html=True)
+        st.dataframe(metrics_table, use_container_width=True, hide_index=True, height=260)
+    with tcol2:
+        st.markdown('<div class="ec-table-title">360 Assessment</div>', unsafe_allow_html=True)
+        st.dataframe(assessment_table, use_container_width=True, hide_index=True, height=260)
+
+    strategy_table = pd.DataFrame({
+        "Coverage Area": [
+            "Senior Coverage",
+            "Treasury Penetration",
+            "Wallet Expansion",
+            "Risk Monitoring",
+            "Relationship Objective",
+        ],
+        "Recommended Action": [
+            "Quarterly senior management engagement" if r360["Exposure_USD_B"] >= 8 else "Standard banker coverage cadence",
+            "Launch operating wallet / deposits discussion" if wallet_ratio < 35 else "Protect existing treasury linkage",
+            "FX, hedging, liquidity and cash management cross-sell",
+            "Monthly monitoring" if r360["Risk_Score"] >= 80 else "Quarterly review",
+            r360["AI_Action_Category"],
+        ],
+    })
+
+    st.markdown('<div class="ec-table-title">Banker Coverage Strategy</div>', unsafe_allow_html=True)
+    st.dataframe(strategy_table, use_container_width=True, hide_index=True, height=170)
+
+    r360_memo = build_relationship_360_memo(r360)
+
+    try:
+        r360_pdf = build_markdown_memo_pdf(
+            r360_memo,
+            title_override=f"Relationship 360 Profile: {selected_360}",
+        )
         st.download_button(
-            "Download Relationship Memo PDF",
-            data=memo_pdf,
-            file_name=f"ecai_relationship_memo_{safe_name}_v8_0.pdf",
+            "Download Relationship Workspace Memo PDF",
+            data=r360_pdf,
+            file_name=f"ecai_relationship_workspace_{selected_360.replace(' ', '_').lower()}_v8_1.pdf",
             mime="application/pdf",
+            use_container_width=False,
+        )
+    except Exception as e:
+        st.warning(f"Relationship Workspace PDF export unavailable: {e}")
+        st.download_button(
+            "Download Relationship Workspace Memo Text",
+            data=r360_memo.encode("utf-8"),
+            file_name=f"ecai_relationship_workspace_{selected_360.replace(' ', '_').lower()}_v8_1.txt",
+            mime="text/plain",
+            use_container_width=False,
+        )
+
+
+
+with tab_reasoning:
+    # =========================
+    # AI REASONING LAYER v7.0
+    # =========================
+    section_title("AI Reasoning Layer", "Priority signals translated into executive interpretation and management logic.")
+    st.markdown(
+        """
+        <div class="narrative-box">
+        EC-AI Reasoning Layer translates priority signals into executive interpretation.
+        This layer explains why management should care, what the main signal is, and what action should follow.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    reasoning_view = priority_view.copy()
+
+    if "Executive_Action_Type" not in reasoning_view.columns:
+        reasoning_view["Executive_Action_Type"] = reasoning_view["AI_Action_Category"]
+
+    reasoning_view["AI_Reasoning_Narrative"] = reasoning_view.apply(build_ai_reasoning_narrative, axis=1)
+
+    top_reasoning = reasoning_view.iloc[0]
+
+    st.markdown(
+        f"""
+        <div class="ec-kpi-wide-row">
+            <div class="ec-kpi-tile">
+                <div class="ec-kpi-tile-label">Top AI Reasoning Signal</div>
+                <div class="ec-kpi-tile-value" style="font-size:22px !important;">{top_reasoning["Relationship"]}</div>
+                <div class="ec-kpi-tile-sub">Priority score {top_reasoning["Management_Priority_Score"]:.1f}</div>
+            </div>
+            <div class="ec-kpi-tile">
+                <div class="ec-kpi-tile-label">Reasoning Theme</div>
+                <div class="ec-kpi-tile-value" style="font-size:22px !important;">{top_reasoning.get("Executive_Action_Type", top_reasoning["AI_Action_Category"])}</div>
+                <div class="ec-kpi-tile-sub">Generated from priority signals</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="ec-table-title">Executive Reasoning Summary</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="ai-box">
+        {build_ai_reasoning_summary(reasoning_view)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="ec-table-title">Relationship-Level AI Reasoning</div>', unsafe_allow_html=True)
+    reasoning_table = reasoning_view[
+        [
+            "Relationship",
+            "Priority Score",
+            "Management_Priority_Band",
+            "AI_Reasoning_Narrative",
+        ]
+    ].head(8)
+
+    st.dataframe(
+        reasoning_table,
+        use_container_width=True,
+        hide_index=True,
+        height=220,
+    )
+
+
+
+
+with tab_memo:
+    # =========================
+    # MANAGEMENT MEMO GENERATOR
+    # =========================
+    section_title("Management Memo Generator", "Generate executive-ready PDF memo from portfolio intelligence and AI action outputs.")
+    st.markdown(
+        """
+        <div class="narrative-box">
+        Generate an executive-ready management memo summarizing portfolio exposure, treasury deepening priorities,
+        risk monitoring names, crown-jewel relationships, and recommended management agenda.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    memo_text = build_management_memo(view)
+    memo_pdf = build_management_memo_pdf(view)
+
+    st.markdown(
+        """
+        <div class="ec-export-row">
+            <div class="ec-export-card">
+                <b>Export Tools</b><br><br>
+                Download the executive memo or export the underlying AI action table for further review.
+            </div>
+            <div></div>
+            <div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    download_col1, download_col2, download_col3 = st.columns([1, 1, 1], gap="medium")
+    with download_col1:
+        st.download_button(
+            "Download Management Memo PDF",
+            data=memo_pdf,
+            file_name="ecai_institutional_portfolio_management_memo_v7_0.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+    with download_col2:
+        st.download_button(
+            "Download Action Table CSV",
+            data=view[["Relationship", "Country", "Sector", "Exposure_USD_B", "Deposits_USD_B", "Treasury_Score", "Strategic_Score", "Risk_Score", "Management_Priority_Score", "Management_Priority_Band", "Management_Priority_Rationale", "AI_Action_Category", "AI_Management_Action"]].to_csv(index=False).encode("utf-8"),
+            file_name="ecai_ai_management_action_table_v7_0.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with download_col3:
+        st.download_button(
+            "Download Memo Text",
+            data=memo_text.encode("utf-8"),
+            file_name="ecai_institutional_portfolio_management_memo_v7_0.txt",
+            mime="text/plain",
             use_container_width=True,
         )
 
-        portfolio_brief = [
-            "# EC-AI Weekly Management Attention Brief",
-            "",
-            f"**Portfolio health:** {'Action Required' if int((view['Management_Priority_Score'] >= 75).sum()) else 'Watchlist'}",
-            f"**Priority relationships:** {int((view['Management_Priority_Score'] >= 65).sum())}",
-            "",
-            "## Top Management Actions",
-        ]
-        for i, (_, rr) in enumerate(view.sort_values("Management_Priority_Score", ascending=False).head(8).iterrows(), 1):
-            portfolio_brief.append(f"{i}. **{rr['Relationship']}** — {rr['Recommended_Action']} | Owner: {rr['Owner']} | Timeline: {rr['Timeline']} | Score: {rr['Management_Priority_Score']:.1f}")
-        portfolio_brief.append("")
-        portfolio_brief.append("## Management Agenda")
-        portfolio_brief.append("- Open review with the highest priority relationship.")
-        portfolio_brief.append("- Assign owner and 30-day action plan for each high-priority relationship.")
-        portfolio_brief.append("- Separate growth actions from risk actions to avoid unclear accountability.")
-        portfolio_brief.append("- Track closure in the next weekly management review.")
-        portfolio_brief.append("")
-        portfolio_brief.append("---")
-        portfolio_brief.append("Generated by EC-AI Institutional Relationship OS v8.0")
-        portfolio_text = "\n".join(portfolio_brief)
-        portfolio_pdf = markdown_to_pdf(portfolio_text)
-        st.download_button(
-            "Download Weekly Portfolio Brief PDF",
-            data=portfolio_pdf,
-            file_name="ecai_weekly_management_attention_brief_v8_0.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
-        st.markdown('<div class="small-note">This center turns Relationship Workspace output into executive-ready documents.</div>', unsafe_allow_html=True)
+    with st.expander("Preview Management Memo", expanded=True):
+        st.markdown(build_management_memo_html(view), unsafe_allow_html=True)
+
+
+
+st.markdown("---")
+st.caption("EC-AI Institutional Relationship OS v8.1 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
