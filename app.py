@@ -2353,7 +2353,7 @@ df["Management_Priority_Rationale"] = df.apply(management_priority_rationale, ax
 # =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("v8.1")
+st.sidebar.markdown("v8.1.5")
 st.sidebar.markdown("---")
 
 view = df.copy()
@@ -2668,32 +2668,7 @@ with tab_portfolio:
 
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True})
 
-    top5_pct = view.nlargest(5, "Exposure_USD_B")["Exposure_USD_B"].sum() / total_exposure * 100
-    infra_pct = view[view["Sector"] == "Infrastructure"]["Exposure_USD_B"].sum() / total_exposure * 100
-    shipping_pct = view[view["Sector"].isin(["Shipping", "Aviation"])]["Exposure_USD_B"].sum() / total_exposure * 100
-
-    st.markdown(
-        f"""
-        <div class="pc-summary-row">
-            <div class="pc-action-card">
-                <div class="pc-action-title" style="font-size:18px !important; line-height:1.25 !important;">Top 5 Relationships</div>
-                <div class="pc-action-value" style="font-size:30px !important; line-height:1.15 !important;">{top5_pct:.1f}%</div>
-                <div class="pc-action-sub" style="font-size:14px !important;">of portfolio exposure</div>
-            </div>
-            <div class="pc-action-card">
-                <div class="pc-action-title" style="font-size:18px !important; line-height:1.25 !important;">Infrastructure Concentration</div>
-                <div class="pc-action-value" style="font-size:30px !important; line-height:1.15 !important;">{infra_pct:.1f}%</div>
-                <div class="pc-action-sub" style="font-size:14px !important;">of total exposure</div>
-            </div>
-            <div class="pc-action-card">
-                <div class="pc-action-title" style="font-size:18px !important; line-height:1.25 !important;">Shipping & Aviation Risk</div>
-                <div class="pc-action-value" style="font-size:30px !important; line-height:1.15 !important;">{shipping_pct:.1f}%</div>
-                <div class="pc-action-sub" style="font-size:14px !important;">of exposure</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # v8.1.5: removed three portfolio summary cards to reduce visual clutter.
 
     st.markdown('<div class="ec-table-title">Top Management Actions</div>', unsafe_allow_html=True)
     st.markdown(
@@ -2769,10 +2744,12 @@ with tab_actions:
                 background: #FFFFFF;
                 border: 1px solid #D8DEE6;
                 border-radius: 14px;
-                padding: 18px 20px;
-                min-height: 150px;
+                padding: 20px 22px;
+                min-height: 230px;
+                height: 230px;
                 box-shadow: 0 1px 3px rgba(15,23,42,.05);
                 margin-bottom: 14px;
+                overflow: hidden;
             }
             .wb-panel-title {
                 font-size: 17px !important;
@@ -2827,26 +2804,32 @@ with tab_actions:
         )
 
         if row["Quadrant"] == "Optimization Focus":
-            msg = "Strategically important relationship requiring treasury deepening and stronger operational wallet linkage."
-        elif row["Quadrant"] == "Crown Jewel":
-            msg = "High-quality relationship combining strategic relevance with strong treasury contribution."
-        elif row["Quadrant"] == "Treasury Anchor":
-            msg = "Relationship remains valuable from a liquidity and funding perspective."
-        else:
-            msg = "Relationship may warrant portfolio review given weaker economics and strategic positioning."
-
-        wb_col1, wb_col2 = st.columns(2, gap="large")
-        with wb_col1:
-            st.markdown(
-                f"""
-                <div class="wb-panel">
-                    <div class="wb-panel-title">Relationship Interpretation</div>
-                    <div class="wb-panel-body">{msg}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+            msg = (
+                f"{row['Relationship']} remains a strategically important relationship with strong strategic relevance. "
+                "Treasury penetration is below expected relationship potential, and operating wallet linkage should be strengthened. "
+                "Management focus should remain on treasury dialogue, liquidity opportunities and senior coverage engagement."
             )
-        with wb_col2:
+        elif row["Quadrant"] == "Crown Jewel":
+            msg = (
+                f"{row['Relationship']} is a high-quality institutional relationship combining strategic relevance and strong treasury contribution. "
+                "The relationship should be protected through regular senior engagement, disciplined pricing and continued wallet defense. "
+                "Management should ensure the relationship remains anchored across deposits, liquidity and flow products."
+            )
+        elif row["Quadrant"] == "Treasury Anchor":
+            msg = (
+                f"{row['Relationship']} remains valuable from a liquidity and funding perspective. "
+                "The relationship contributes treasury value but may require stronger strategic coverage linkage. "
+                "Management should assess whether the existing wallet can be converted into broader institutional relevance."
+            )
+        else:
+            msg = (
+                f"{row['Relationship']} may warrant portfolio review given weaker economics, elevated risk or limited strategic positioning. "
+                "Management should clarify risk appetite, refinancing sensitivity and required return contribution. "
+                "Coverage should define whether the relationship should be recovered, repriced or monitored."
+            )
+
+        wb_col1, wb_col2 = st.columns([1, 1], gap="large")
+        with wb_col1:
             st.markdown(
                 f"""
                 <div class="wb-panel wb-action-panel">
@@ -2856,6 +2839,16 @@ with tab_actions:
                         {row["AI_Management_Action"]}<br><br>
                         <b>Action Category:</b> {row["AI_Action_Category"]}
                     </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with wb_col2:
+            st.markdown(
+                f"""
+                <div class="wb-panel">
+                    <div class="wb-panel-title">Relationship Interpretation</div>
+                    <div class="wb-panel-body">{msg}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -3517,4 +3510,4 @@ with tab_memo:
 
 
 st.markdown("---")
-st.caption("EC-AI Institutional Relationship OS v8.1.4 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
+st.caption("EC-AI Institutional Relationship OS v8.1.6 | Executive Intelligence Layer + AI Management Action Engine + Relationship 360 Intelligence + Management Memo Generator")
