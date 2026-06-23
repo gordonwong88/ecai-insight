@@ -1,6 +1,6 @@
 
-# EC-AI Institutional Relationship OS v8.1
-# v8.1: v7.0 foundation preserved + enhanced Relationship Workspace decision support
+# EC-AI Institutional Relationship OS v9.0
+# v9.0: Management Attention Queue + MAS v1.2 engine + v8.1 relationship workspace preserved
 # Run:
 #   python -m streamlit run ecai_institutional_relationship_os_v8_1_preserve_v7.py
 
@@ -11,7 +11,7 @@ import plotly.express as px
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Institutional Portfolio Dashboard",
+    page_title="EC-AI Institutional Relationship OS v9.0",
     page_icon="🏦",
     layout="wide",
 )
@@ -2363,27 +2363,391 @@ if view.empty:
     st.stop()
 
 
+
+
+# =========================
+# EC-AI OS v9.0 MAS DATASET
+# =========================
+MAS_V12_RECORDS = [
+    {
+        "Company": "Alibaba Group Holding Limited (NYSE:BABA)",
+        "Country": "China",
+        "Sector": "Broadline Retail",
+        "Credit Rating": "A+",
+        "Outlook": "Stable",
+        "Ticker": "NYSE:BABA",
+        "Revenue Growth %": 2.742,
+        "EBITDA Margin %": 10.756,
+        "ROE %": 9.216,
+        "EV USD B": 248.940092004,
+        "Market Cap USD B": 244.5491620845,
+        "Revenue USD B": 144.192676102609,
+        "EBITDA USD B": 15.5086676678748,
+        "Net Income USD B": 14.385461557270599,
+        "Assets USD B": 276.85359663818997,
+        "Debt USD B": 40.844666051574,
+        "Equity USD B": 163.28906522709,
+        "Cash USD B": 19.06950442551,
+        "Interest Exp USD B": 1.37942782056019,
+        "Strategic Importance": 19,
+        "Wallet Opportunity": 14,
+        "Relationship Health": 14,
+        "Coverage Strength": 7,
+        "Risk Signals": 5,
+        "MAS": 59,
+        "Attention Band": "Review",
+        "Primary Driver": "Strategic Importance",
+        "Recommended Action": "Portfolio Monitoring",
+        "Expected Outcome": "Maintain monitoring cadence and refresh MAS next cycle."
+    },
+    {
+        "Company": "BHP Group Limited (ASX:BHP)",
+        "Country": "Australia",
+        "Sector": "Metals and Mining",
+        "Credit Rating": "NR",
+        "Outlook": "NR",
+        "Ticker": "ASX:BHP",
+        "Revenue Growth %": -7.898,
+        "EBITDA Margin %": 48.7,
+        "ROE %": 24.713,
+        "EV USD B": 236.745249573615,
+        "Market Cap USD B": 214.939946357054,
+        "Revenue USD B": 0.0,
+        "EBITDA USD B": 0.0,
+        "Net Income USD B": 0.0,
+        "Assets USD B": 0.0,
+        "Debt USD B": 0.0,
+        "Equity USD B": 0.0,
+        "Cash USD B": 13.466,
+        "Interest Exp USD B": 0.0,
+        "Strategic Importance": 7,
+        "Wallet Opportunity": 9,
+        "Relationship Health": 10,
+        "Coverage Strength": 7,
+        "Risk Signals": 6,
+        "MAS": 39,
+        "Attention Band": "Monitor",
+        "Primary Driver": "Relationship Health",
+        "Recommended Action": "Portfolio Monitoring",
+        "Expected Outcome": "Maintain monitoring cadence and refresh MAS next cycle."
+    },
+    {
+        "Company": "CK Hutchison Holdings Limited (SEHK:1)",
+        "Country": "Hong Kong",
+        "Sector": "Industrial Conglomerates",
+        "Credit Rating": "A",
+        "Outlook": "Stable",
+        "Ticker": "SEHK:1",
+        "Revenue Growth %": -0.467,
+        "EBITDA Margin %": 17.016,
+        "ROE %": 2.889,
+        "EV USD B": 73.8636278648969,
+        "Market Cap USD B": 33.477957377536896,
+        "Revenue USD B": 35.9222428437891,
+        "EBITDA USD B": 6.11253836560083,
+        "Net Income USD B": 2.48472997716078,
+        "Assets USD B": 148.478436659681,
+        "Debt USD B": 42.99127389414,
+        "Equity USD B": 88.44315647162401,
+        "Cash USD B": 18.468440737955998,
+        "Interest Exp USD B": 1.5864045238795699,
+        "Strategic Importance": 12,
+        "Wallet Opportunity": 13,
+        "Relationship Health": 18,
+        "Coverage Strength": 7,
+        "Risk Signals": 5,
+        "MAS": 55,
+        "Attention Band": "Review",
+        "Primary Driver": "Relationship Health",
+        "Recommended Action": "Deposit Retention",
+        "Expected Outcome": "Stabilize operating balances and treasury linkage."
+    },
+    {
+        "Company": "DBS Bank Ltd.",
+        "Country": "Singapore",
+        "Sector": "Banks",
+        "Credit Rating": "AA-",
+        "Outlook": "Stable",
+        "Ticker": "SGX:D05",
+        "Revenue Growth %": 1.994,
+        "EBITDA Margin %": 0.0,
+        "ROE %": 15.596,
+        "EV USD B": 0.0,
+        "Market Cap USD B": 0.0,
+        "Revenue USD B": 17.724025650134898,
+        "EBITDA USD B": 21.161495961098,
+        "Net Income USD B": 8.38467145783239,
+        "Assets USD B": 698.52592500052,
+        "Debt USD B": 58.620153505272,
+        "Equity USD B": 54.555561633688,
+        "Cash USD B": 36.060424672496,
+        "Interest Exp USD B": 10.5573976811093,
+        "Strategic Importance": 15,
+        "Wallet Opportunity": 16,
+        "Relationship Health": 17,
+        "Coverage Strength": 7,
+        "Risk Signals": 4,
+        "MAS": 59,
+        "Attention Band": "Review",
+        "Primary Driver": "Relationship Health",
+        "Recommended Action": "Portfolio Monitoring",
+        "Expected Outcome": "Maintain monitoring cadence and refresh MAS next cycle."
+    },
+    {
+        "Company": "HSBC Holdings plc (LSE:HSBA)",
+        "Country": "United Kingdom",
+        "Sector": "Banks",
+        "Credit Rating": "A-",
+        "Outlook": "Positive",
+        "Ticker": "LSE:HSBA",
+        "Revenue Growth %": 3.24,
+        "EBITDA Margin %": 0.0,
+        "ROE %": 11.611,
+        "EV USD B": 0.0,
+        "Market Cap USD B": 324.75297934902096,
+        "Revenue USD B": 74.173,
+        "EBITDA USD B": 0.0,
+        "Net Income USD B": 22.955,
+        "Assets USD B": 3306.011,
+        "Debt USD B": 0.0,
+        "Equity USD B": 197.27,
+        "Cash USD B": 214.707,
+        "Interest Exp USD B": 61.68,
+        "Strategic Importance": 20,
+        "Wallet Opportunity": 13,
+        "Relationship Health": 18,
+        "Coverage Strength": 7,
+        "Risk Signals": 3,
+        "MAS": 61,
+        "Attention Band": "Management Attention",
+        "Primary Driver": "Strategic Importance",
+        "Recommended Action": "Deposit Retention",
+        "Expected Outcome": "Stabilize operating balances and treasury linkage."
+    },
+    {
+        "Company": "Jardine Matheson Holdings Limited (SGX:J36)",
+        "Country": "Bermuda",
+        "Sector": "Industrial Conglomerates",
+        "Credit Rating": "A+",
+        "Outlook": "Stable",
+        "Ticker": "SGX:J36",
+        "Revenue Growth %": -4.366,
+        "EBITDA Margin %": 13.891,
+        "ROE %": 6.096,
+        "EV USD B": 53.167276647,
+        "Market Cap USD B": 18.339276647200002,
+        "Revenue USD B": 34.217,
+        "EBITDA USD B": 4.753,
+        "Net Income USD B": 3.291,
+        "Assets USD B": 86.136,
+        "Debt USD B": 18.151,
+        "Equity USD B": 54.647,
+        "Cash USD B": 8.563,
+        "Interest Exp USD B": 0.664,
+        "Strategic Importance": 11,
+        "Wallet Opportunity": 11,
+        "Relationship Health": 17,
+        "Coverage Strength": 7,
+        "Risk Signals": 5,
+        "MAS": 51,
+        "Attention Band": "Review",
+        "Primary Driver": "Relationship Health",
+        "Recommended Action": "Portfolio Monitoring",
+        "Expected Outcome": "Maintain monitoring cadence and refresh MAS next cycle."
+    },
+    {
+        "Company": "Rio Tinto plc",
+        "Country": "United Kingdom",
+        "Sector": "Metals and Mining",
+        "Credit Rating": "A",
+        "Outlook": "Stable",
+        "Ticker": 0,
+        "Revenue Growth %": 0.0,
+        "EBITDA Margin %": 0.0,
+        "ROE %": 0.0,
+        "EV USD B": 0.0,
+        "Market Cap USD B": 0.0,
+        "Revenue USD B": 0.0,
+        "EBITDA USD B": 0.0,
+        "Net Income USD B": 0.0,
+        "Assets USD B": 0.0,
+        "Debt USD B": 0.0,
+        "Equity USD B": 0.0,
+        "Cash USD B": 0.0,
+        "Interest Exp USD B": 0.0,
+        "Strategic Importance": 5,
+        "Wallet Opportunity": 5,
+        "Relationship Health": 20,
+        "Coverage Strength": 7,
+        "Risk Signals": 5,
+        "MAS": 42,
+        "Attention Band": "Review",
+        "Primary Driver": "Relationship Health",
+        "Recommended Action": "Deposit Retention",
+        "Expected Outcome": "Stabilize operating balances and treasury linkage."
+    },
+    {
+        "Company": "Taiwan Semiconductor Manufacturing Company Limited (TWSE:2330)",
+        "Country": "Taiwan",
+        "Sector": "Semiconductors and Semiconductor Equipment",
+        "Credit Rating": "AA-",
+        "Outlook": "Stable",
+        "Ticker": "TWSE:2330",
+        "Revenue Growth %": 31.605,
+        "EBITDA Margin %": 69.593,
+        "ROE %": 36.21,
+        "EV USD B": 1985.41800164287,
+        "Market Cap USD B": 2056.43397952335,
+        "Revenue USD B": 133.069172905942,
+        "EBITDA USD B": 92.60686725577959,
+        "Net Income USD B": 61.8407893163835,
+        "Assets USD B": 270.823938595944,
+        "Debt USD B": 34.2204431437669,
+        "Equity USD B": 185.503090457933,
+        "Cash USD B": 94.92298883334679,
+        "Interest Exp USD B": 0.402394112618306,
+        "Strategic Importance": 21,
+        "Wallet Opportunity": 16,
+        "Relationship Health": 3,
+        "Coverage Strength": 7,
+        "Risk Signals": 4,
+        "MAS": 51,
+        "Attention Band": "Review",
+        "Primary Driver": "Strategic Importance",
+        "Recommended Action": "Portfolio Monitoring",
+        "Expected Outcome": "Maintain monitoring cadence and refresh MAS next cycle."
+    },
+    {
+        "Company": "Tencent Holdings Limited (SEHK:700)",
+        "Country": "China",
+        "Sector": "Interactive Media and Services",
+        "Credit Rating": "A+",
+        "Outlook": "Stable",
+        "Ticker": "SEHK:700",
+        "Revenue Growth %": 13.86,
+        "EBITDA Margin %": 36.755,
+        "ROE %": 20.515,
+        "EV USD B": 501.991657124582,
+        "Market Cap USD B": 497.673569976239,
+        "Revenue USD B": 108.207822997037,
+        "EBITDA USD B": 39.7719761918158,
+        "Net Income USD B": 33.7311162395495,
+        "Assets USD B": 297.41496756212996,
+        "Debt USD B": 58.791863522336996,
+        "Equity USD B": 175.664308055709,
+        "Cash USD B": 31.57276650759,
+        "Interest Exp USD B": 1.85989634868547,
+        "Strategic Importance": 19,
+        "Wallet Opportunity": 17,
+        "Relationship Health": 5,
+        "Coverage Strength": 7,
+        "Risk Signals": 5,
+        "MAS": 53,
+        "Attention Band": "Review",
+        "Primary Driver": "Strategic Importance",
+        "Recommended Action": "Portfolio Monitoring",
+        "Expected Outcome": "Maintain monitoring cadence and refresh MAS next cycle."
+    },
+    {
+        "Company": "Toyota Motor Corporation (TSE:7203)",
+        "Country": "Japan",
+        "Sector": "Automobiles",
+        "Credit Rating": "A+",
+        "Outlook": "Stable",
+        "Ticker": "TSE:7203",
+        "Revenue Growth %": 5.513,
+        "EBITDA Margin %": 11.074,
+        "ROE %": 10.233,
+        "EV USD B": 414.723286932352,
+        "Market Cap USD B": 221.56439664803202,
+        "Revenue USD B": 336.748929820736,
+        "EBITDA USD B": 37.2918582954804,
+        "Net Income USD B": 26.4812540025717,
+        "Assets USD B": 663.6415471154099,
+        "Debt USD B": 276.19558611102,
+        "Equity USD B": 257.97971985948,
+        "Cash USD B": 62.168468682779995,
+        "Interest Exp USD B": 0.400584442216333,
+        "Strategic Importance": 22,
+        "Wallet Opportunity": 19,
+        "Relationship Health": 13,
+        "Coverage Strength": 7,
+        "Risk Signals": 5,
+        "MAS": 66,
+        "Attention Band": "Management Attention",
+        "Primary Driver": "Strategic Importance",
+        "Recommended Action": "Strategic Relationship Investment",
+        "Expected Outcome": "Protect strategic franchise and deepen senior connectivity."
+    }
+]
+
+def build_mas_df():
+    mas_df = pd.DataFrame(MAS_V12_RECORDS)
+    mas_df["Company Short"] = mas_df["Company"].astype(str).str.replace(r"\s*\([^)]*\)", "", regex=True)
+    mas_df["Company Short"] = mas_df["Company Short"].str.replace("Taiwan Semiconductor Manufacturing Company Limited", "TSMC", regex=False)
+    mas_df["Company Short"] = mas_df["Company Short"].str.replace("Alibaba Group Holding Limited", "Alibaba", regex=False)
+    mas_df["Company Short"] = mas_df["Company Short"].str.replace("Tencent Holdings Limited", "Tencent", regex=False)
+    mas_df["Company Short"] = mas_df["Company Short"].str.replace("Toyota Motor Corporation", "Toyota", regex=False)
+    mas_df["Company Short"] = mas_df["Company Short"].str.replace("CK Hutchison Holdings Limited", "CK Hutchison", regex=False)
+    mas_df["Company Short"] = mas_df["Company Short"].str.replace("Jardine Matheson Holdings Limited", "Jardine Matheson", regex=False)
+    mas_df["Company Short"] = mas_df["Company Short"].str.replace("HSBC Holdings plc", "HSBC", regex=False)
+    mas_df["Company Short"] = mas_df["Company Short"].str.replace("DBS Bank Ltd.", "DBS", regex=False)
+    mas_df = mas_df.sort_values("MAS", ascending=False).reset_index(drop=True)
+    mas_df.insert(0, "Rank", range(1, len(mas_df) + 1))
+    return mas_df
+
+def mas_band_summary(mas_df):
+    return mas_df["Attention Band"].value_counts().reset_index().rename(columns={"index":"Band", "Attention Band":"Count"})
+
 # =========================
 # CLEAN OS HEADER
 # =========================
 st.markdown(
     """
     <div class="os-hero">
-        <div class="os-hero-title">EC-AI Institutional Relationship OS</div>
+        <div class="os-hero-title">EC-AI Institutional Relationship OS v9.0</div>
         <div class="os-hero-sub">Transform Portfolio Data into Executive Actions</div>
         <div class="os-hero-body">
-        Multi-tab institutional relationship operating system for portfolio intelligence, AI reasoning, management actions and executive memos.
+        Management Attention Allocation system with MAS v1.2, relationship intelligence, AI actions and executive memo generation.
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
+
+
+st.markdown("""
+<style>
+.mas-hero {
+    background: linear-gradient(135deg,#061A36 0%,#143A6D 65%,#235C99 100%);
+    border-radius: 22px;
+    padding: 28px 32px;
+    color: white;
+    box-shadow: 0 18px 44px rgba(6,26,54,0.20);
+    margin-bottom: 18px;
+}
+.mas-kicker {font-size:12px; text-transform:uppercase; letter-spacing:.12em; opacity:.78; font-weight:800;}
+.mas-title {font-size:34px; line-height:1.1; font-weight:900; margin-top:8px; margin-bottom:8px;}
+.mas-sub {font-size:15px; line-height:1.5; max-width:980px; opacity:.92;}
+.mas-card-row {display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:14px; margin:16px 0 18px 0;}
+.mas-card {border:1px solid #D5DEE9; border-radius:16px; padding:16px 18px; background:#FFFFFF; box-shadow:0 8px 20px rgba(15,23,42,.06); min-height:104px;}
+.mas-label {font-size:11px; color:#64748B; font-weight:800; text-transform:uppercase; letter-spacing:.08em;}
+.mas-value {font-size:28px; color:#061A36; font-weight:900; margin-top:7px;}
+.mas-note {font-size:12px; color:#64748B; margin-top:3px;}
+.mas-callout {border-left:5px solid #2F6FDB; background:#F6F9FD; border-radius:14px; padding:18px 20px; margin:12px 0 20px 0; color:#061A36;}
+.mas-table-title {font-size:22px; font-weight:900; color:#061A36; margin:24px 0 8px 0;}
+.mas-driver-pill {display:inline-block; background:#EEF5FF; color:#164A8B; border:1px solid #C9DCF8; border-radius:999px; padding:6px 10px; font-size:12px; font-weight:800;}
+.mas-warning {font-size:12px; color:#64748B; padding-top:4px;}
+</style>
+""", unsafe_allow_html=True)
+
 # =========================
-# EC-AI OS v8.1 MULTI-TAB SHELL
+# EC-AI OS v9.0 MULTI-TAB SHELL
 # =========================
-tab_command, tab_portfolio, tab_actions, tab_relationship, tab_reasoning, tab_memo = st.tabs(
+tab_mas, tab_command, tab_portfolio, tab_actions, tab_relationship, tab_reasoning, tab_memo = st.tabs(
     [
+        "Management Attention Queue",
         "Executive Command Center",
         "Portfolio Intelligence",
         "Management Actions",
@@ -2392,6 +2756,117 @@ tab_command, tab_portfolio, tab_actions, tab_relationship, tab_reasoning, tab_me
         "Executive Memo",
     ]
 )
+
+with tab_mas:
+    mas_df = build_mas_df()
+    top_mas = mas_df.iloc[0]
+    management_attention_count = int((mas_df["MAS"] >= 60).sum())
+    avg_mas = float(mas_df["MAS"].mean())
+    top_driver = mas_df["Primary Driver"].value_counts().idxmax()
+
+    st.markdown(
+        """
+        <div class="mas-hero">
+            <div class="mas-kicker">EC-AI OS v9.0 · MAS v1.2</div>
+            <div class="mas-title">Top Relationships Requiring Management Attention</div>
+            <div class="mas-sub">
+            EC-AI ranks public-company institutional relationships using real S&P-derived signals: strategic scale,
+            wallet opportunity, relationship health, coverage proxy and risk signals. The queue translates data into
+            management action and expected outcome.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="mas-card-row">
+            <div class="mas-card"><div class="mas-label">Highest MAS</div><div class="mas-value">{int(top_mas['MAS'])}</div><div class="mas-note">{top_mas['Company Short']}</div></div>
+            <div class="mas-card"><div class="mas-label">Management Attention</div><div class="mas-value">{management_attention_count}</div><div class="mas-note">Relationships with MAS ≥ 60</div></div>
+            <div class="mas-card"><div class="mas-label">Average MAS</div><div class="mas-value">{avg_mas:.1f}</div><div class="mas-note">Top 10 universe</div></div>
+            <div class="mas-card"><div class="mas-label">Dominant Driver</div><div class="mas-value" style="font-size:22px;">{top_driver}</div><div class="mas-note">Most common primary driver</div></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="mas-callout">
+            <b>Executive Brief</b><br>
+            EC-AI identifies <b>{top_mas['Company Short']}</b> as the highest-ranked relationship in the current public-company universe,
+            with MAS <b>{int(top_mas['MAS'])}</b>. The primary driver is <b>{top_mas['Primary Driver']}</b>, and the recommended action is
+            <b>{top_mas['Recommended Action']}</b>. This queue should be used as the first Monday-morning management attention screen.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    queue_cols = ["Rank", "Company Short", "Country", "Sector", "MAS", "Attention Band", "Primary Driver", "Recommended Action", "Expected Outcome"]
+    st.markdown('<div class="mas-table-title">Management Attention Queue</div>', unsafe_allow_html=True)
+    st.dataframe(
+        mas_df[queue_cols],
+        use_container_width=True,
+        height=390,
+        hide_index=True,
+        column_config={
+            "Company Short": st.column_config.TextColumn("Company"),
+            "MAS": st.column_config.ProgressColumn("MAS", min_value=0, max_value=100, format="%d"),
+        },
+    )
+
+    col_a, col_b = st.columns([1.15, 1])
+    with col_a:
+        st.markdown('<div class="mas-table-title">MAS Pillar Scorecard</div>', unsafe_allow_html=True)
+        pillar_cols = ["Company Short", "Strategic Importance", "Wallet Opportunity", "Relationship Health", "Coverage Strength", "Risk Signals", "MAS"]
+        st.dataframe(mas_df[pillar_cols], use_container_width=True, height=330, hide_index=True)
+    with col_b:
+        st.markdown('<div class="mas-table-title">Action Mix</div>', unsafe_allow_html=True)
+        action_mix = mas_df["Recommended Action"].value_counts().reset_index()
+        action_mix.columns = ["Recommended Action", "Count"]
+        fig_action = px.bar(action_mix, x="Count", y="Recommended Action", orientation="h", text="Count")
+        fig_action.update_layout(height=330, margin=dict(l=10, r=10, t=12, b=10), showlegend=False, xaxis_title=None, yaxis_title=None)
+        st.plotly_chart(fig_action, use_container_width=True)
+
+    selected_company = st.selectbox("Open Relationship Intelligence Object", mas_df["Company Short"].tolist())
+    rel = mas_df[mas_df["Company Short"] == selected_company].iloc[0]
+    st.markdown('<div class="mas-table-title">Relationship Intelligence Object</div>', unsafe_allow_html=True)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Revenue", f"USD {rel['Revenue USD B']:.1f}B")
+    c2.metric("Debt", f"USD {rel['Debt USD B']:.1f}B")
+    c3.metric("Rating", str(rel['Credit Rating']))
+    c4.metric("Revenue Growth", f"{rel['Revenue Growth %']:.1f}%")
+    c5.metric("MAS", int(rel['MAS']))
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown(
+            f"""
+            <div class="mas-card" style="min-height:210px;">
+                <div class="mas-label">AI Reasoning</div>
+                <div style="font-size:18px;font-weight:900;color:#061A36;margin:8px 0;">{rel['Company Short']}</div>
+                <div style="font-size:13px;line-height:1.55;color:#0F172A;">
+                This relationship has MAS <b>{int(rel['MAS'])}</b>, driven primarily by <b>{rel['Primary Driver']}</b>.
+                Strategic scale, wallet indicators and external health signals are translated into a management action recommendation.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with right:
+        st.markdown(
+            f"""
+            <div class="mas-card" style="min-height:210px;">
+                <div class="mas-label">Recommended Management Action</div>
+                <div style="font-size:20px;font-weight:900;color:#0B3B7A;margin:8px 0;">{rel['Recommended Action']}</div>
+                <div style="font-size:13px;line-height:1.55;color:#0F172A;"><b>Expected outcome:</b><br>{rel['Expected Outcome']}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="mas-warning">Note: MAS v1.2 uses S&P public-company data and a neutral coverage proxy. Coverage will improve when CRM / executive meeting data is added.</div>', unsafe_allow_html=True)
 
 with tab_command:
     # =========================
