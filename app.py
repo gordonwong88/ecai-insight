@@ -1,8 +1,8 @@
 
-# EC-AI Institutional Relationship OS v9.2.4
+# EC-AI Institutional Relationship OS v9.3
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
-#   python -m streamlit run ecai_institutional_relationship_os_v9_2_4.py
+#   python -m streamlit run ecai_institutional_relationship_os_v9_3.py
 
 import io
 import math
@@ -15,7 +15,7 @@ import plotly.express as px
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Institutional Relationship OS v9.2.4",
+    page_title="EC-AI Institutional Relationship OS v9.3",
     page_icon="🏦",
     layout="wide",
 )
@@ -79,6 +79,15 @@ st.markdown("""
 .explain-cell { background:#F8FAFC; border:1px solid #E6EAF0; border-radius:12px; padding:10px 12px; min-height:82px; }
 .explain-label { color:#526173; font-size:11px !important; font-weight:900; text-transform:uppercase; letter-spacing:.03em; }
 .explain-value { color:#071B3A; font-size:22px !important; font-weight:950; margin:4px 0; }
+
+.exec-status-pill { display:inline-block; border-radius:999px; padding:5px 10px; font-size:12px !important; font-weight:900; }
+.exec-not-started { background:#F3F4F6; color:#374151; border:1px solid #D1D5DB; }
+.exec-assigned { background:#E8EEF7; color:#0B2C55; border:1px solid #AFC4DD; }
+.exec-progress { background:#DBEAFE; color:#1E3A8A; border:1px solid #BFDBFE; }
+.exec-monitoring { background:#F8FAFC; color:#4B5563; border:1px solid #CBD5E1; }
+.exec-completed { background:#DCFCE7; color:#166534; border:1px solid #BBF7D0; }
+.exec-escalated { background:#FEF3C7; color:#92400E; border:1px solid #FCD34D; }
+.exec-panel { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:15px; padding:17px 19px; box-shadow:0 2px 8px rgba(15,23,42,.045); }
 
 </style>
 """, unsafe_allow_html=True)
@@ -372,6 +381,116 @@ df = df.sort_values("MAS", ascending=False).reset_index(drop=True)
 df["Rank"] = range(1, len(df) + 1)
 
 # =========================
+# Management Execution Hub data
+# =========================
+def owner_for_action(action, driver):
+    if action == "Treasury Deep Dive":
+        return "Treasury Team"
+    if action in ["Strategic Relationship Investment", "Executive Engagement"]:
+        return "Coverage Director"
+    if action == "Relationship Recovery":
+        return "Senior Banker"
+    if action == "Credit Review":
+        return "Credit Risk"
+    if action == "Cross-Border Expansion":
+        return "Regional Coverage"
+    return "Relationship Manager"
+
+
+def priority_for_row(row):
+    if row["MAS"] >= 61:
+        return "High"
+    if row["Recommended_Action"] in ["Treasury Deep Dive", "Strategic Relationship Investment", "Relationship Recovery"]:
+        return "Medium-High"
+    return "Medium"
+
+
+def due_for_row(row):
+    if row["MAS"] >= 61:
+        return "30 Days"
+    if row["Recommended_Action"] in ["Treasury Deep Dive", "Strategic Relationship Investment"]:
+        return "45 Days"
+    return "60 Days"
+
+
+def status_for_row(row):
+    mapping = {
+        "Toyota": "In Progress",
+        "HSBC": "Assigned",
+        "DBS": "In Progress",
+        "Alibaba": "Not Started",
+        "CK Hutchison": "Monitoring",
+        "Tencent": "Assigned",
+        "TSMC": "Assigned",
+        "Jardine Matheson": "Monitoring",
+        "BHP": "Not Started",
+        "Rio Tinto": "Not Started",
+    }
+    return mapping.get(row["Company"], "Not Started")
+
+
+def progress_for_status(status):
+    return {
+        "Completed": 100,
+        "In Progress": 60,
+        "Assigned": 30,
+        "Monitoring": 20,
+        "Not Started": 0,
+        "Deferred": 0,
+    }.get(status, 0)
+
+
+def impact_for_action(action):
+    return {
+        "Treasury Deep Dive": "Deposit / Treasury Wallet",
+        "Strategic Relationship Investment": "Executive Connectivity",
+        "Executive Engagement": "Senior Management Access",
+        "Relationship Recovery": "Revenue Recovery",
+        "Credit Review": "Risk Mitigation",
+        "Cross-Border Expansion": "Cross-Border Revenue",
+        "Portfolio Monitoring": "Relationship Monitoring",
+    }.get(action, "Relationship Impact")
+
+
+def build_execution_df(data):
+    rows = []
+    for _, r in data.iterrows():
+        status = status_for_row(r)
+        rows.append({
+            "Rank": int(r["Rank"]),
+            "Relationship": r["Company"],
+            "MAS": float(r["MAS"]),
+            "Action": r["Recommended_Action"],
+            "Owner": owner_for_action(r["Recommended_Action"], r["Primary_Driver"]),
+            "Priority": priority_for_row(r),
+            "Due": due_for_row(r),
+            "Status": status,
+            "Progress_%": progress_for_status(status),
+            "Impact": impact_for_action(r["Recommended_Action"]),
+            "Next Step": next_step_for_row(r),
+        })
+    return pd.DataFrame(rows)
+
+
+def next_step_for_row(row):
+    action = row["Recommended_Action"]
+    company = row["Company"]
+    if action == "Treasury Deep Dive":
+        return f"Schedule treasury wallet review for {company}; quantify deposits, FX, cash management and funding needs."
+    if action == "Strategic Relationship Investment":
+        return f"Confirm executive sponsor for {company}; prepare 30-day senior coverage plan."
+    if action == "Relationship Recovery":
+        return f"Review relationship deterioration signals for {company}; agree recovery owner and next client touchpoint."
+    if action == "Cross-Border Expansion":
+        return f"Map regional wallet for {company}; identify cross-border treasury and liquidity opportunities."
+    if action == "Credit Review":
+        return f"Refresh credit view for {company}; confirm risk appetite and exposure strategy."
+    return f"Keep {company} under active monitoring and refresh MAS next cycle."
+
+
+execution_df = build_execution_df(df)
+
+# =========================
 # Export / Memo functions
 # =========================
 def queue_table(data):
@@ -431,7 +550,7 @@ def build_portfolio_memo(data):
     lines.append("- 81-100: Executive Attention")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v9.2.4 | MAS v1.2")
+    lines.append("Generated by EC-AI Institutional Relationship OS v9.3 | MAS v1.2")
     return "\n".join(lines)
 
 
@@ -468,7 +587,7 @@ def build_relationship_memo(row):
     lines.append(f"Assign {row['Company']} to the {row['Recommended_Action']} workflow and review progress at the next management attention meeting.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v9.2.4")
+    lines.append("Generated by EC-AI Institutional Relationship OS v9.3")
     return "\n".join(lines)
 
 
@@ -548,7 +667,7 @@ def build_executive_pack_pdf(data, selected_company=None):
         story.append(Paragraph(r["AI_Reasoning"], styles["ECBody"]))
         story.append(Spacer(1, 6))
     story.append(Spacer(1, 10))
-    story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v9.2.4 | Management Attention Allocation System", styles["ECSmall"]))
+    story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v9.3 | Management Attention Allocation System", styles["ECSmall"]))
     doc.build(story)
     return buf.getvalue()
 
@@ -599,8 +718,8 @@ def apply_mckinsey_layout(fig, height=420, title=None):
     return fig
 
 
-def safe_explainability_block(row):
-    """Render MAS pillar explainability; fixes v9.2 NameError and makes MAS transparent."""
+def render_explainability_block(row):
+    """Render MAS pillar explainability; keeps MAS transparent and safe."""
     values = [
         ("Strategic importance", row.get("Strategic_Score", 0), 25, "Scale: revenue, assets, market cap"),
         ("Wallet opportunity", row.get("Wallet_Score", 0), 25, "Debt, EV, cash, interest expense"),
@@ -622,7 +741,7 @@ def safe_explainability_block(row):
           <div class="explain-label">{label}</div>
           <div class="explain-value">{val_txt}<span style="font-size:12px;color:#6B7A90;"> / {maxv}</span></div>
           <div style="height:7px;background:#E8EEF7;border-radius:999px;overflow:hidden;margin:5px 0 6px;">
-            <div style="height:7px;width:{pct:.0f}%;background:#2F6BBD;border-radius:999px;"></div>
+            <div style="height:7px;width:{pct:.0f}%;background:#365F9C;border-radius:999px;"></div>
           </div>
           <div class="ec-card-sub">{desc}</div>
         </div>
@@ -642,8 +761,8 @@ def safe_explainability_block(row):
 def safe_explainability_block(row):
     """Safe wrapper so no tab can fail if explainability rendering encounters unexpected data."""
     try:
-        return safe_explainability_block(row)
-    except Exception as e:
+        return render_explainability_block(row)
+    except Exception:
         company = row.get("Company", "relationship") if hasattr(row, "get") else "relationship"
         return f"""
         <div class="ec-note">
@@ -657,7 +776,7 @@ def safe_explainability_block(row):
 # =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("**v9.2.2**")
+st.sidebar.markdown("**v9.3**")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Universe**")
 st.sidebar.markdown("Top 10 public company relationships from S&P Screener")
@@ -672,7 +791,7 @@ st.sidebar.markdown("Executive Memo Engine")
 # =========================
 st.markdown("""
 <div class="ec-hero">
-  <div class="ec-title">EC-AI Institutional Relationship OS v9.2.4</div>
+  <div class="ec-title">EC-AI Institutional Relationship OS v9.3</div>
   <div class="ec-subtitle">Management Attention Allocation System powered by real S&P public company data</div>
   <div class="ec-body">A relationship intelligence platform that converts institutional company data into Management Attention Score, primary driver, recommended action and executive memo outputs.</div>
 </div>
@@ -683,16 +802,17 @@ _top_pdf = build_executive_pack_pdf(df, selected_company=df.iloc[0]["Company"])
 st.markdown("<div class='ec-top-export'><b>Executive Pack Export</b><br>Generate a one-click PDF covering the Management Attention Queue, Portfolio Intelligence evidence, selected Relationship Workspace, AI Reasoning and Executive Memo.</div>", unsafe_allow_html=True)
 exp1, exp2, exp3 = st.columns([1.2, 1.2, 4], gap="medium")
 with exp1:
-    st.download_button("📄 Generate Executive Pack PDF", data=_top_pdf, file_name="ecai_institutional_relationship_os_v9_2_4_executive_pack.pdf", mime="application/pdf", use_container_width=True)
+    st.download_button("📄 Generate Executive Pack PDF", data=_top_pdf, file_name="ecai_institutional_relationship_os_v9_3_executive_pack.pdf", mime="application/pdf", use_container_width=True)
 with exp2:
-    st.download_button("⬇️ Download MAS Scorecard CSV", data=df.to_csv(index=False).encode("utf-8"), file_name="ecai_mas_v1_2_top10_relationships_v9_2_1.csv", mime="text/csv", use_container_width=True)
+    st.download_button("⬇️ Download MAS Scorecard CSV", data=df.to_csv(index=False).encode("utf-8"), file_name="ecai_mas_v1_2_top10_relationships_v9_3.csv", mime="text/csv", use_container_width=True)
 
 # =========================
 # Tabs
 # =========================
-tab_queue, tab_command, tab_portfolio, tab_actions, tab_relationship, tab_reasoning, tab_memo = st.tabs([
+tab_queue, tab_command, tab_execution, tab_portfolio, tab_actions, tab_relationship, tab_reasoning, tab_memo = st.tabs([
     "Management Attention Queue",
     "Executive Command Center",
+    "Management Execution Hub",
     "Portfolio Intelligence",
     "Management Actions",
     "Relationship Workspace",
@@ -790,7 +910,89 @@ with tab_command:
     st.markdown("<div class='ec-note'><ol>" + "".join([f"<li>{x}</li>" for x in agenda]) + "</ol></div>", unsafe_allow_html=True)
 
 # =========================
-# Tab 3: Portfolio Intelligence
+# Tab 3: Management Execution Hub
+# =========================
+with tab_execution:
+    section_title("Management Execution Hub", "Close the loop from management attention to owner, deadline, status and expected impact.")
+    total_actions = len(execution_df)
+    in_progress = int((execution_df["Status"] == "In Progress").sum())
+    completed = int((execution_df["Status"] == "Completed").sum())
+    actioned = int((execution_df["Status"].isin(["Assigned", "In Progress", "Monitoring", "Completed"])).sum())
+    escalation = int(((execution_df["Priority"] == "High") | (execution_df["MAS"] >= 61)).sum())
+    coverage_pct = (actioned / total_actions * 100) if total_actions else 0
+
+    st.markdown(f"""
+    <div class="ec-kpi-row4">
+      <div class="ec-card"><div class="ec-card-label">Total Actions</div><div class="ec-card-value">{total_actions}</div><div class="ec-card-sub">From MAS action engine</div></div>
+      <div class="ec-card"><div class="ec-card-label">In Progress</div><div class="ec-card-value">{in_progress}</div><div class="ec-card-sub">Owner has started</div></div>
+      <div class="ec-card"><div class="ec-card-label">Action Coverage</div><div class="ec-card-value">{coverage_pct:.0f}%</div><div class="ec-card-sub">Assigned / active / completed</div></div>
+      <div class="ec-card"><div class="ec-card-label">Escalations</div><div class="ec-card-value">{escalation}</div><div class="ec-card-sub">High priority / MAS ≥ 61</div></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="ec-note">
+      <b>Execution Layer</b><br>
+      The Management Execution Hub translates the Management Attention Queue into action ownership, target timing and follow-up discipline. This is the bridge from intelligence to management decision.
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2 = st.columns([1, 2], gap="large")
+    with c1:
+        st.markdown('<div class="ec-table-title">Execution Status Mix</div>', unsafe_allow_html=True)
+        status_order = ["Not Started", "Assigned", "In Progress", "Monitoring", "Completed", "Deferred"]
+        status_df = execution_df["Status"].value_counts().reindex(status_order).fillna(0).reset_index()
+        status_df.columns = ["Status", "Count"]
+        status_df = status_df[status_df["Count"] > 0]
+        status_colors = {
+            "Not Started": "#D8DEE6",
+            "Assigned": "#AFC4DD",
+            "In Progress": "#365F9C",
+            "Monitoring": "#9AA4B2",
+            "Completed": "#2F855A",
+            "Deferred": "#5D6B7A",
+        }
+        fig_status = px.bar(status_df, x="Count", y="Status", orientation="h", text="Count", color="Status", color_discrete_map=status_colors)
+        fig_status.update_traces(textposition="outside")
+        apply_mckinsey_layout(fig_status, height=320, title="Actions by Status")
+        fig_status.update_layout(showlegend=False, xaxis_title="Actions", yaxis_title="")
+        st.plotly_chart(fig_status, use_container_width=True, config={"displayModeBar": False})
+    with c2:
+        st.markdown('<div class="ec-table-title">Management Action Execution Queue</div>', unsafe_allow_html=True)
+        exec_display = execution_df[["Rank", "Relationship", "MAS", "Action", "Owner", "Priority", "Due", "Status", "Progress_%", "Impact"]].copy()
+        exec_display["MAS"] = exec_display["MAS"].map(lambda x: f"{x:.1f}")
+        st.dataframe(exec_display, use_container_width=True, hide_index=True, height=320)
+
+    section_title("Executive Escalation Panel", "Relationships requiring senior sponsorship or cross-functional coordination.")
+    escalation_df = execution_df[(execution_df["Priority"] == "High") | (execution_df["MAS"] >= 61)].head(4)
+    if escalation_df.empty:
+        st.markdown("<div class='ec-note'><b>No immediate escalation.</b><br>All relationships are below executive escalation threshold under current MAS settings.</div>", unsafe_allow_html=True)
+    else:
+        cols = st.columns(min(4, len(escalation_df)), gap="medium")
+        for i, (_, r) in enumerate(escalation_df.iterrows()):
+            with cols[i]:
+                st.markdown(f"""
+                <div class="ec-action-card">
+                  <div class="ec-rank">Escalation · MAS {float(r['MAS']):.1f}</div>
+                  <div class="ec-company">{r['Relationship']}</div>
+                  <div class="ec-action">{r['Action']}</div>
+                  <div class="ec-text"><b>Owner:</b> {r['Owner']}<br><b>Status:</b> {r['Status']}<br><b>Due:</b> {r['Due']}<br><b>Impact:</b> {r['Impact']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    section_title("AI Recommended Next Steps", "Suggested 30-day execution plan by relationship.")
+    for _, r in execution_df.head(5).iterrows():
+        with st.expander(f"{r['Relationship']} · {r['Action']} · {r['Owner']} · {r['Status']}", expanded=(r['Rank'] == 1)):
+            st.markdown(f"""
+            <div class="ec-note">
+              <b>Next step:</b> {r['Next Step']}<br><br>
+              <b>30-day management objective:</b> Convert the recommended action into an owned follow-up item with clear stakeholder, timing and impact measure.<br><br>
+              <b>Success indicator:</b> Owner confirms action status and next client / internal management touchpoint before the next review cycle.
+            </div>
+            """, unsafe_allow_html=True)
+
+# =========================
+# Tab 4: Portfolio Intelligence
 # =========================
 with tab_portfolio:
     section_title("Portfolio Intelligence", "Evidence layer for the real S&P Top 10 institutional relationship universe.")
@@ -926,7 +1128,7 @@ with tab_memo:
     pdf = build_executive_pack_pdf(df, selected_company=df.iloc[0]["Company"])
     c1, c2, c3 = st.columns(3, gap="medium")
     with c1:
-        st.download_button("Generate Executive Pack PDF", data=pdf, file_name="ecai_institutional_relationship_os_v9_2_4_executive_pack.pdf", mime="application/pdf", use_container_width=True)
+        st.download_button("Generate Executive Pack PDF", data=pdf, file_name="ecai_institutional_relationship_os_v9_3_executive_pack.pdf", mime="application/pdf", use_container_width=True)
     with c2:
         st.download_button("Download MAS Scorecard CSV", data=df.to_csv(index=False).encode("utf-8"), file_name="ecai_mas_v1_2_top10_relationships.csv", mime="text/csv", use_container_width=True)
     with c3:
@@ -936,4 +1138,4 @@ with tab_memo:
         st.markdown(f"<div class='memo-preview'>{memo_text.replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("EC-AI Institutional Relationship OS v9.2.4 | Management Attention Allocation System (MAS) v1.2 | Real S&P Top 10 Public Company Universe")
+st.caption("EC-AI Institutional Relationship OS v9.3 | Management Attention Allocation System (MAS) v1.2 | Real S&P Top 10 Public Company Universe")
