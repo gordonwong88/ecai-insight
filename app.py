@@ -1,5 +1,5 @@
 
-# EC-AI Institutional Relationship OS v10.0.1 Alpha
+# EC-AI Institutional Relationship OS v10.0.2 Alpha
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
 #   python -m streamlit run ecai_institutional_relationship_os_v9_4.py
@@ -15,7 +15,7 @@ import plotly.express as px
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Institutional Relationship OS v10.0.1 Alpha",
+    page_title="EC-AI Institutional Relationship OS v10.0.2 Alpha",
     page_icon="🏦",
     layout="wide",
 )
@@ -31,17 +31,17 @@ st.markdown("""
 .ec-hero { background: transparent; margin: 0 0 16px 0; padding: 0; }
 .ec-title { font-size: 38px !important; font-weight: 950 !important; color:#071B3A; letter-spacing:-0.035em; line-height:1.35 !important; margin-top:24px; margin-bottom:8px; padding-top:4px; }
 .ec-subtitle { font-size: 20px !important; font-weight: 800; color:#0B2C55; margin-bottom:6px; }
-.ec-body { font-size: 15px !important; color:#526173; line-height:1.45 !important; max-width: 1180px; }
+.ec-body { font-size: 16px !important; color:#526173; line-height:1.45 !important; max-width: 1180px; }
 [data-baseweb="tab-list"] { gap: 6px; background:#F8FAFC; padding:6px; border-radius:14px; border:1px solid #D8DEE6; margin-bottom:14px; }
-[data-baseweb="tab"] { height:44px; padding:0 15px; border-radius:10px; font-weight:850; font-size:14px; }
+[data-baseweb="tab"] { height:46px; padding:0 16px; border-radius:10px; font-weight:850; font-size:15px; }
 [data-baseweb="tab"][aria-selected="true"] { background:#071B3A; color:white; }
 .ec-section-title { font-size: 31px !important; font-weight: 950 !important; color:#071B3A; margin-top:18px; margin-bottom:6px; letter-spacing:-0.02em; line-height:1.12 !important; }
-.ec-section-subtitle { font-size:15px !important; color:#526173; margin-bottom:12px; }
-.ec-note { background:#F8FAFC; border-left:5px solid #1565C0; border-radius:12px; padding:13px 17px; margin:10px 0 15px 0; color:#071B3A; font-size:15px !important; line-height:1.5 !important; }
+.ec-section-subtitle { font-size:16px !important; color:#526173; margin-bottom:12px; }
+.ec-note { background:#F8FAFC; border-left:5px solid #1565C0; border-radius:12px; padding:13px 17px; margin:10px 0 15px 0; color:#071B3A; font-size:16px !important; line-height:1.5 !important; }
 .ec-card { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:15px; padding:17px 19px; box-shadow:0 2px 8px rgba(15,23,42,.055); min-height:105px; }
-.ec-card-label { color:#526173; font-size:12px !important; font-weight:900; text-transform:uppercase; letter-spacing:.03em; margin-bottom:6px; }
+.ec-card-label { color:#526173; font-size:13px !important; font-weight:900; text-transform:uppercase; letter-spacing:.03em; margin-bottom:6px; }
 .ec-card-value { color:#071B3A; font-size:29px !important; font-weight:950; line-height:1.08 !important; }
-.ec-card-sub { color:#526173; font-size:12px !important; margin-top:6px; line-height:1.3 !important; }
+.ec-card-sub { color:#526173; font-size:13px !important; margin-top:6px; line-height:1.3 !important; }
 .ec-kpi-row { display:grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap:13px; margin:12px 0 15px 0; }
 .ec-kpi-row4 { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:13px; margin:12px 0 15px 0; }
 .ec-kpi-row3 { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:13px; margin:12px 0 15px 0; }
@@ -49,7 +49,7 @@ st.markdown("""
 .ec-legend { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:15px; padding:17px 19px; margin:10px 0 15px; box-shadow:0 2px 8px rgba(15,23,42,.045); }
 .ec-legend-title { font-size:20px !important; font-weight:950; color:#071B3A; margin-bottom:8px; }
 .ec-legend-grid { display:grid; grid-template-columns: 1.1fr 1fr; gap:18px; }
-.ec-pill { display:inline-block; border-radius:999px; padding:5px 10px; font-size:12px !important; font-weight:900; margin:3px 4px 3px 0; }
+.ec-pill { display:inline-block; border-radius:999px; padding:5px 10px; font-size:13px !important; font-weight:900; margin:3px 4px 3px 0; }
 .ec-pill-red { background:#FEE2E2; color:#991B1B; border:1px solid #FECACA; }
 .ec-pill-orange { background:#FFEDD5; color:#9A3412; border:1px solid #FED7AA; }
 .ec-pill-blue { background:#DBEAFE; color:#1E3A8A; border:1px solid #BFDBFE; }
@@ -58,12 +58,12 @@ st.markdown("""
 .ec-rank { display:inline-block; background:#EEF4FF; color:#0B3D75; border:1px solid #C7D7FE; border-radius:999px; padding:4px 10px; font-size:12px !important; font-weight:900; margin-bottom:8px; }
 .ec-company { font-size:22px !important; font-weight:950; color:#071B3A; line-height:1.15 !important; margin-bottom:6px; }
 .ec-action { font-size:15px !important; font-weight:900; color:#1565C0; margin-bottom:8px; }
-.ec-text { font-size:14px !important; color:#071B3A; line-height:1.45 !important; }
+.ec-text { font-size:15px !important; color:#071B3A; line-height:1.45 !important; }
 .ec-table-title { font-size:21px !important; font-weight:950; color:#071B3A; margin:14px 0 8px; }
-[data-testid="stDataFrame"] div, [data-testid="stDataFrame"] span, [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td { font-size: 13.5px !important; }
+[data-testid="stDataFrame"] div, [data-testid="stDataFrame"] span, [data-testid="stDataFrame"] th, [data-testid="stDataFrame"] td { font-size: 14.5px !important; }
 .rw-hero { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:17px; padding:22px 26px; box-shadow:0 2px 8px rgba(15,23,42,.055); margin:10px 0 15px; }
 .rw-name { font-size:33px !important; font-weight:950; color:#071B3A; line-height:1.15 !important; margin-bottom:5px; }
-.rw-meta { font-size:15px !important; color:#526173; margin-bottom:12px; }
+.rw-meta { font-size:16px !important; color:#526173; margin-bottom:12px; }
 .rw-alert { background:#FEF3C7; border-left:6px solid #F59E0B; border-radius:13px; padding:15px 17px; color:#071B3A; margin:12px 0 15px; }
 .rw-alert-title { font-size:18px !important; font-weight:950; margin-bottom:6px; }
 .rw-card { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:14px; padding:15px 17px; min-height:120px; }
@@ -102,9 +102,9 @@ st.markdown("""
 .rel360-grid { display:grid; grid-template-columns: 1.1fr 1fr; gap:15px; margin:12px 0 16px 0; }
 .rel360-panel { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:16px; padding:18px 20px; box-shadow:0 2px 8px rgba(15,23,42,.045); min-height:180px; }
 .rel360-panel-title { font-size:19px !important; font-weight:950; color:#071B3A; margin-bottom:8px; }
-.timeline-item { border-left:4px solid #365F9C; padding:2px 0 12px 14px; margin-left:4px; }
+.timeline-item { border-left:4px solid #365F9C; padding:1px 0 9px 14px; margin-left:4px; }
 .timeline-date { font-size:12px !important; font-weight:950; color:#526173; text-transform:uppercase; letter-spacing:.04em; }
-.timeline-event { font-size:15px !important; font-weight:850; color:#071B3A; line-height:1.35; }
+.timeline-event { font-size:16px !important; font-weight:850; color:#071B3A; line-height:1.35; }
 .network-node { display:inline-block; padding:8px 12px; margin:5px 6px 5px 0; border-radius:999px; background:#F8FAFC; border:1px solid #D8DEE6; color:#071B3A; font-size:13px !important; font-weight:850; }
 .network-node-core { background:#071B3A; color:white; border:1px solid #071B3A; }
 .product-strong { background:#DCFCE7; color:#166534; border-radius:999px; padding:4px 9px; font-weight:900; }
@@ -120,7 +120,7 @@ st.markdown("""
 .rel360-meta { color:#526173; font-size:15px !important; margin-bottom:12px; }
 .rel360-command { background:#F8FAFC; border-left:5px solid #071B3A; border-radius:14px; padding:17px 20px; margin:14px 0; color:#071B3A; }
 .rel360-command-title { font-size:18px !important; font-weight:950; margin-bottom:8px; color:#071B3A; }
-.rel360-panel-clean { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:16px; padding:18px 20px; box-shadow:0 2px 8px rgba(15,23,42,.045); min-height:250px; }
+.rel360-panel-clean { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:16px; padding:14px 18px; box-shadow:0 2px 8px rgba(15,23,42,.045); min-height:0; }
 .rel360-wide-panel { background:#FFFFFF; border:1px solid #D8DEE6; border-radius:16px; padding:18px 20px; box-shadow:0 2px 8px rgba(15,23,42,.045); margin:14px 0 16px; }
 .rel360-panel-title-clean { font-size:20px !important; font-weight:950; color:#071B3A; margin-bottom:10px; }
 .wallet-grid { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:12px; margin-top:10px; }
@@ -128,9 +128,14 @@ st.markdown("""
 .wallet-label { color:#526173; font-size:11px !important; font-weight:950; text-transform:uppercase; letter-spacing:.04em; }
 .wallet-value { color:#071B3A; font-size:24px !important; font-weight:950; margin-top:4px; }
 .wallet-sub { color:#526173; font-size:12px !important; margin-top:4px; }
-.product-table-clean table { width:100%; border-collapse:collapse; font-size:14px; }
-.product-table-clean th { background:#F8FAFC; color:#526173; text-transform:uppercase; font-size:11px; letter-spacing:.04em; padding:10px; border:1px solid #E6EAF0; }
-.product-table-clean td { padding:10px; border:1px solid #E6EAF0; color:#071B3A; }
+.product-table-clean table { width:100%; border-collapse:collapse; font-size:15px; }
+.product-table-clean th { background:#F8FAFC; color:#526173; text-transform:uppercase; font-size:12px; letter-spacing:.04em; padding:8px 10px; border:1px solid #E6EAF0; }
+.product-table-clean td { padding:8px 10px; border:1px solid #E6EAF0; color:#071B3A; }
+
+.mas-breakdown-table table { width:100%; border-collapse:collapse; font-size:15px; }
+.mas-breakdown-table th { background:#F8FAFC; color:#526173; font-weight:900; padding:10px; border:1px solid #E6EAF0; }
+.mas-breakdown-table td { padding:10px; border:1px solid #E6EAF0; color:#071B3A; }
+.mas-breakdown-table th:nth-child(2), .mas-breakdown-table th:nth-child(3), .mas-breakdown-table td:nth-child(2), .mas-breakdown-table td:nth-child(3) { text-align:right; }
 
 </style>
 """, unsafe_allow_html=True)
@@ -648,7 +653,7 @@ def build_portfolio_memo(data):
     lines.append("- 81-100: Executive Attention")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v10.0.1 Alpha | MAS v1.2")
+    lines.append("Generated by EC-AI Institutional Relationship OS v10.0.2 Alpha | MAS v1.2")
     return "\n".join(lines)
 
 
@@ -685,7 +690,7 @@ def build_relationship_memo(row):
     lines.append(f"Assign {row['Company']} to the {row['Recommended_Action']} workflow and review progress at the next management attention meeting.")
     lines.append("")
     lines.append("---")
-    lines.append("Generated by EC-AI Institutional Relationship OS v10.0.1 Alpha")
+    lines.append("Generated by EC-AI Institutional Relationship OS v10.0.2 Alpha")
     return "\n".join(lines)
 
 
@@ -765,7 +770,7 @@ def build_executive_pack_pdf(data, selected_company=None):
         story.append(Paragraph(r["AI_Reasoning"], styles["ECBody"]))
         story.append(Spacer(1, 6))
     story.append(Spacer(1, 10))
-    story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v10.0.1 Alpha | Management Attention Allocation System", styles["ECSmall"]))
+    story.append(Paragraph("Generated by EC-AI Institutional Relationship OS v10.0.2 Alpha | Management Attention Allocation System", styles["ECSmall"]))
     doc.build(story)
     return buf.getvalue()
 
@@ -797,6 +802,19 @@ ACTION_COLORS = {
     "Cross-Border Expansion": MCKINSEY_STEEL,
     "Credit Review": "#7A1E1E",
     "Executive Engagement": "#3B4A60",
+}
+
+RELATIONSHIP_CHART_COLORS = {
+    "Toyota": "#071B3A",
+    "HSBC": "#1F4E79",
+    "Alibaba": "#365F9C",
+    "DBS": "#2A6F97",
+    "CK Hutchison": "#4A6FA5",
+    "Tencent": "#5D7FA6",
+    "TSMC": "#6B8DB5",
+    "Jardine Matheson": "#7A8FA8",
+    "BHP": "#8D99AE",
+    "Rio Tinto": "#A6B3C2",
 }
 
 
@@ -917,7 +935,7 @@ def render_explainability_native(row):
 
 
 # =========================
-# Relationship 360 Helpers v10.0.1 Alpha
+# Relationship 360 Helpers v10.0.2 Alpha
 # =========================
 def relationship_timeline(company: str):
     base = {
@@ -996,7 +1014,7 @@ def status_badge(status: str) -> str:
 # =========================
 st.sidebar.markdown("## EC-AI")
 st.sidebar.markdown("Institutional Relationship OS")
-st.sidebar.markdown("**v10.0.1 Alpha**")
+st.sidebar.markdown("**v10.0.2 Alpha**")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Universe**")
 st.sidebar.markdown("Top 10 public company relationships from S&P Screener")
@@ -1011,7 +1029,7 @@ st.sidebar.markdown("Executive Memo Engine")
 # =========================
 st.markdown("""
 <div class="ec-hero">
-  <div class="ec-title">EC-AI Institutional Relationship OS v10.0.1 Alpha</div>
+  <div class="ec-title">EC-AI Institutional Relationship OS v10.0.2 Alpha</div>
   <div class="ec-subtitle">Management Attention Allocation System powered by real S&P public company data</div>
   <div class="ec-body">A relationship intelligence platform that converts institutional company data into Management Attention Score, primary driver, recommended action and executive memo outputs.</div>
 </div>
@@ -1081,10 +1099,20 @@ with tab_queue:
 
     c1, c2 = st.columns([2, 1], gap="large")
     with c1:
-        fig = px.bar(df.sort_values("MAS"), x="MAS", y="Company", orientation="h", text="MAS", color="MAS_Band", color_discrete_map=MAS_BAND_COLORS, title="Management Attention Score by Relationship")
+        mas_plot_df = df.sort_values("MAS")
+        fig = px.bar(
+            mas_plot_df,
+            x="MAS",
+            y="Company",
+            orientation="h",
+            text="MAS",
+            color="Company",
+            color_discrete_map=RELATIONSHIP_CHART_COLORS,
+            title="Management Attention Score by Relationship",
+        )
         fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
         apply_mckinsey_layout(fig, height=420)
-        fig.update_layout(showlegend=True, xaxis_title="MAS", yaxis_title="")
+        fig.update_layout(showlegend=False, xaxis_title="MAS", yaxis_title="")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     with c2:
         action_mix = df["Recommended_Action"].value_counts().reset_index()
@@ -1196,17 +1224,23 @@ with tab_rel360:
 
     left, right = st.columns([1, 1], gap="large")
     with left:
-        st.markdown('<div class="rel360-panel-clean"><div class="rel360-panel-title-clean">Relationship Timeline</div>', unsafe_allow_html=True)
-        for dt, ev in relationship_timeline(r360["Company"]):
-            st.markdown(f'<div class="timeline-item"><div class="timeline-date">{dt}</div><div class="timeline-event">{ev}</div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        timeline_html = "".join([
+            f'<div class="timeline-item"><div class="timeline-date">{dt}</div><div class="timeline-event">{ev}</div></div>'
+            for dt, ev in relationship_timeline(r360["Company"])
+        ])
+        st.markdown(
+            f'<div class="rel360-panel-clean"><div class="rel360-panel-title-clean">Relationship Timeline</div>{timeline_html}</div>',
+            unsafe_allow_html=True,
+        )
     with right:
         pp = product_penetration(r360)
         pp_display = pp.copy()
         pp_display["Penetration / Potential"] = pp_display["Penetration / Potential"].map(status_badge)
-        st.markdown('<div class="rel360-panel-clean"><div class="rel360-panel-title-clean">Product Penetration & Wallet Opportunity</div><div class="product-table-clean">', unsafe_allow_html=True)
-        st.markdown(pp_display.to_html(index=False, escape=False), unsafe_allow_html=True)
-        st.markdown('</div></div>', unsafe_allow_html=True)
+        product_html = pp_display.to_html(index=False, escape=False)
+        st.markdown(
+            f'<div class="rel360-panel-clean"><div class="rel360-panel-title-clean">Product Penetration & Wallet Opportunity</div><div class="product-table-clean">{product_html}</div></div>',
+            unsafe_allow_html=True,
+        )
 
     nodes = relationship_network(r360)
     node_html = f'<span class="network-node network-node-core">{r360["Company"]}</span>'
@@ -1460,7 +1494,10 @@ with tab_relationship:
         "Score": [row["Strategic_Score"], row["Wallet_Score"], row["Health_Score"], row["Coverage_Score"], row["Risk_Score"]],
         "Max": [25, 25, 25, 15, 10],
     })
-    st.dataframe(breakdown, use_container_width=True, hide_index=True, height=240)
+    st.markdown(
+        '<div class="mas-breakdown-table">' + breakdown.to_html(index=False, escape=False) + '</div>',
+        unsafe_allow_html=True,
+    )
 
     rel_pdf = build_executive_pack_pdf(df, selected_company=selected)
     st.download_button("Download Relationship Executive Pack PDF", data=rel_pdf, file_name=f"ecai_{selected.lower().replace(' ', '_')}_relationship_360_pack_v10_0.pdf", mime="application/pdf")
@@ -1502,4 +1539,4 @@ with tab_memo:
         st.markdown(f"<div class='memo-preview'>{memo_text.replace(chr(10), '<br>')}</div>", unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("EC-AI Institutional Relationship OS v10.0.1 Alpha | Management Attention Allocation System (MAS) v1.2 | Real S&P Top 10 Public Company Universe")
+st.caption("EC-AI Institutional Relationship OS v10.0.2 Alpha | Management Attention Allocation System (MAS) v1.2 | Real S&P Top 10 Public Company Universe")
