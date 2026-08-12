@@ -1138,9 +1138,10 @@ def wallet_reasoning(row) -> str:
 # memo/PDF export functions, visual helpers, Relationship 360 helpers and
 # Wallet Sizing Engine v1.0.
 #
-# Stage 1-C.1 replaces ONLY the application shell and primary navigation.
-# The legacy v10 rendering code remains physically below st.stop() as a
-# temporary migration reference, but is intentionally not executed.
+# Stage 1-C.1 replaces the application shell and primary navigation, while
+# mapping proven v10 content into the six locked workspaces as a functional
+# migration bridge. The legacy ten-tab source remains below st.stop() for
+# reference and is intentionally not executed.
 
 @dataclass(frozen=True)
 class Workspace:
@@ -1297,7 +1298,7 @@ section[data-testid="stSidebar"] [data-baseweb="select"] span { color:#FFFFFF !i
 .ec-context-chip-value { color:var(--ec-navy-950); font-size:12.5px; font-weight:820; margin-top:3px; }
 
 /* Stage 1-C.1 workspace frame */
-.ec-workspace { min-height:620px; }
+.ec-workspace { min-height:0; }
 .ec-build-placeholder { background:#FFF; border:1px solid var(--ec-slate-200); border-radius:14px; padding:22px 24px; box-shadow:var(--ec-shadow-sm); }
 .ec-build-placeholder-kicker { color:var(--ec-blue-700); font-size:10.5px; font-weight:900; text-transform:uppercase; letter-spacing:.07em; }
 .ec-build-placeholder-title { color:var(--ec-navy-950); font-size:18px; font-weight:850; margin-top:6px; }
@@ -1426,42 +1427,367 @@ def render_stage_1c_topbar(workspace):
     )
 
 
-def render_stage_1c_workspace(workspace):
-    """Stage 1-C.1 body only. Locked page designs are implemented from C.2/C.3 onward."""
-    avg_score = float(df["MAS"].mean()) if len(df) else 0.0
-    open_actions = int((execution_df["Status"] != "Completed").sum()) if len(execution_df) else 0
-    attention = int((df["MAS"] >= 61).sum()) if len(df) else 0
-    st.markdown('<div class="ec-workspace">', unsafe_allow_html=True)
+def _stage1c_metric_row(cards):
+    """Render a compact row of executive metrics using retained v10 card styles."""
+    cols = st.columns(len(cards), gap="small")
+    for col, (label, value, sub) in zip(cols, cards):
+        with col:
+            st.markdown(
+                f"""
+                <div class="ec-card">
+                    <div class="ec-card-label">{label}</div>
+                    <div class="ec-card-value">{value}</div>
+                    <div class="ec-card-sub">{sub}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+def _selected_relationship_row(default_to_top=True):
+    selected = st.session_state.get("selected_relationship")
+    if selected and selected in df["Company"].tolist():
+        return df[df["Company"] == selected].iloc[0]
+    return df.iloc[0] if default_to_top and len(df) else None
+
+
+def render_stage_1c_briefing():
+    """Functional bridge: legacy executive/queue intelligence inside the new shell."""
+    total_revenue = df["Revenue_B"].sum(skipna=True)
+    avg_score = float(df["MAS"].mean())
+    attention_count = int((df["MAS"] >= 61).sum())
+    open_actions = int((execution_df["Status"] != "Completed").sum())
+    top = df.iloc[0]
+
     st.markdown(
         f"""
-        <div class="ec-build-placeholder">
-            <div class="ec-build-placeholder-kicker">MASTER APP SHELL ACTIVE</div>
-            <div class="ec-build-placeholder-title">{workspace.label} workspace container is ready.</div>
-            <div class="ec-build-placeholder-copy">
-                Stage 1-C.1 establishes the production shell and cross-screen state contract only.
-                The institutional engines from v10 remain loaded underneath this shell. Page-specific
-                cards, tables, charts and interactions will be rebuilt from the locked Stage 1-B
-                specifications rather than carrying forward the legacy ten-tab presentation layer.
-            </div>
-            <div class="ec-engine-grid">
-                <div class="ec-engine-card"><div class="ec-engine-label">Relationships</div><div class="ec-engine-value">{len(df)}</div><div class="ec-engine-sub">S&P baseline loaded</div></div>
-                <div class="ec-engine-card"><div class="ec-engine-label">Average Score</div><div class="ec-engine-value">{avg_score:.1f}</div><div class="ec-engine-sub">Legacy MAS engine retained</div></div>
-                <div class="ec-engine-card"><div class="ec-engine-label">Attention</div><div class="ec-engine-value">{attention}</div><div class="ec-engine-sub">Score ≥ 61</div></div>
-                <div class="ec-engine-card"><div class="ec-engine-label">Execution</div><div class="ec-engine-value">{open_actions}</div><div class="ec-engine-sub">Open workflow actions</div></div>
-                <div class="ec-engine-card"><div class="ec-engine-label">Engines</div><div class="ec-engine-value">Ready</div><div class="ec-engine-sub">Wallet · AI · Export</div></div>
-            </div>
+        <div class="ec-note">
+          <b>Executive Summary</b><br>
+          EC-AI identifies <b>{attention_count}</b> relationship(s) at Management Attention or above.
+          The highest-ranked relationship is <b>{top['Company']}</b> with Score <b>{top['MAS']:.1f}</b>,
+          driven by <b>{top['Primary_Driver']}</b>. Recommended action: <b>{top['Recommended_Action']}</b>.
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.markdown('</div>', unsafe_allow_html=True)
 
+    _stage1c_metric_row([
+        ("Relationships", f"{len(df)}", "Public-company universe"),
+        ("Average Score", f"{avg_score:.1f}", "Portfolio attention level"),
+        ("Attention", f"{attention_count}", "Score ≥ 61"),
+        ("Open Actions", f"{open_actions}", "Execution workflow"),
+        ("Total Revenue", fmt_b(total_revenue), "S&P relationship universe"),
+    ])
+
+    st.markdown('<div class="ec-table-title">Top Relationships Requiring Management Attention</div>', unsafe_allow_html=True)
+    q = queue_table(df).head(6).copy()
+    q = q.rename(columns={"MAS": "Score", "MAS_Band": "Rating"})
+    st.dataframe(q, use_container_width=True, hide_index=True, height=255)
+
+    c1, c2 = st.columns([1.7, 1], gap="large")
+    with c1:
+        mas_plot_df = df.sort_values("MAS")
+        fig = px.bar(
+            mas_plot_df,
+            x="MAS",
+            y="Company",
+            orientation="h",
+            text="MAS",
+            color="Company",
+            color_discrete_map=RELATIONSHIP_CHART_COLORS,
+            title="Management Attention by Relationship",
+        )
+        fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+        apply_mckinsey_layout(fig, height=380)
+        fig.update_layout(showlegend=False, xaxis_title="Score", yaxis_title="")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with c2:
+        action_mix = df["Recommended_Action"].value_counts().reset_index()
+        action_mix.columns = ["Action", "Count"]
+        fig2 = px.pie(
+            action_mix,
+            values="Count",
+            names="Action",
+            title="Recommended Action Mix",
+            color="Action",
+            color_discrete_map=ACTION_COLORS,
+            hole=0.58,
+        )
+        fig2.update_traces(textinfo="percent", marker=dict(line=dict(color="white", width=2)))
+        apply_mckinsey_layout(fig2, height=380)
+        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+
+    st.markdown('<div class="ec-table-title">Recommended Management Agenda</div>', unsafe_allow_html=True)
+    agenda = [
+        f"Open with {top['Company']} as the highest management-attention signal.",
+        "Separate wallet-led growth opportunities from relationship-health remediation issues.",
+        "Confirm which recommendations require management judgement in Review.",
+        "Move approved actions requiring implementation into Execution with an accountable owner.",
+    ]
+    st.markdown("<div class='ec-note'><ol>" + "".join([f"<li>{x}</li>" for x in agenda]) + "</ol></div>", unsafe_allow_html=True)
+
+
+def render_stage_1c_review():
+    """Functional bridge for management review using the retained attention queue and explainability."""
+    attention = df[df["MAS"] >= 41].copy().sort_values("MAS", ascending=False)
+    high = int((df["MAS"] >= 61).sum())
+    review_count = int(((df["MAS"] >= 41) & (df["MAS"] < 61)).sum())
+    _stage1c_metric_row([
+        ("Review Items", f"{len(attention)}", "Score ≥ 41"),
+        ("Management Attention", f"{high}", "Score ≥ 61"),
+        ("Review Band", f"{review_count}", "Score 41–60"),
+        ("Action Types", f"{df['Recommended_Action'].nunique()}", "Recommendation engine"),
+    ])
+
+    st.markdown('<div class="ec-table-title">Review Queue</div>', unsafe_allow_html=True)
+    review_table = attention[["Rank", "Company", "MAS", "MAS_Band", "Primary_Driver", "Recommended_Action", "Expected_Outcome"]].copy()
+    review_table.columns = ["Priority", "Relationship", "Score", "Rating", "Primary Driver", "Recommendation", "Expected Outcome"]
+    review_table["Score"] = review_table["Score"].map(lambda x: f"{x:.1f}")
+    st.dataframe(review_table, use_container_width=True, hide_index=True, height=320)
+
+    default_row = _selected_relationship_row()
+    options = attention["Company"].tolist() if len(attention) else df["Company"].tolist()
+    default_company = default_row["Company"] if default_row is not None and default_row["Company"] in options else options[0]
+    selected = st.selectbox("Review relationship", options, index=options.index(default_company), key="stage1c_review_relationship")
+    st.session_state.selected_relationship = selected
+    row = df[df["Company"] == selected].iloc[0]
+
+    st.markdown(
+        f"""
+        <div class="rw-alert">
+          <div class="rw-alert-title">Management Review Item · {row['Company']}</div>
+          <b>Score / Rating:</b> {row['MAS']:.1f} · {row['MAS_Band']}<br>
+          <b>Management question:</b> Should management proceed with <b>{row['Recommended_Action']}</b>?<br>
+          <b>AI situation report:</b> {row['AI_Reasoning']}<br><br>
+          <b>Expected outcome:</b> {row['Expected_Outcome']}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    render_explainability_native(row)
+
+
+def render_stage_1c_relationships():
+    """Functional bridge for the locked consolidated Relationships workspace."""
+    row = _selected_relationship_row()
+    default_company = row["Company"] if row is not None else df.iloc[0]["Company"]
+    options = df["Company"].tolist()
+    selected = st.selectbox("Select relationship", options, index=options.index(default_company), key="stage1c_relationship_profile")
+    st.session_state.selected_relationship = selected
+    r = df[df["Company"] == selected].iloc[0]
+
+    wallet_engine_df_local = build_wallet_engine(illustrative_wallet_data(df))
+    wr = wallet_engine_df_local[wallet_engine_df_local["Company"] == selected].iloc[0]
+    current_wallet_m = safe_float(wr.get("Current_MUFG_Revenue_M"), 0) or 0
+    estimated_wallet_m = safe_float(wr.get("Estimated_Total_Wallet_M"), 0) or 0
+    wallet_gap_m = safe_float(wr.get("Wallet_Gap_M"), 0) or 0
+    capture_rate = (safe_float(wr.get("Total_Wallet_Capture_Rate"), 0) or 0) * 100
+
+    st.markdown(
+        f"""
+        <div class="rel360-header-card">
+          <div class="rel360-name">{r['Company']}</div>
+          <div class="rel360-meta">{r['Country']} · {r['Sector']} · Rating {r['Rating']} / {r['Outlook']}</div>
+          <span class="ec-pill {band_pill_class(r['MAS'])}">{r['MAS_Band']} · Score {r['MAS']:.1f}</span>
+          <span class="ec-pill ec-pill-blue">Driver: {r['Primary_Driver']}</span>
+          <span class="ec-pill ec-pill-green">Action: {r['Recommended_Action']}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    _stage1c_metric_row([
+        ("Revenue", fmt_b(r["Revenue_B"]), f"Growth {fmt_pct(r['Revenue_Growth'])}"),
+        ("Assets", fmt_b(r["Assets_B"]), "Balance-sheet scale"),
+        ("Debt", fmt_b(r["Debt_B"]), "Funding wallet proxy"),
+        ("Market Cap", fmt_b(r["MarketCap_B"]), "Strategic importance proxy"),
+    ])
+
+    st.markdown(
+        f"""
+        <div class="rel360-command">
+          <div class="rel360-command-title">Relationship Interpretation</div>
+          <div class="ec-text">{r['AI_Reasoning']} <b>Expected outcome:</b> {r['Expected_Outcome']}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="ec-table-title">Wallet Opportunity</div>', unsafe_allow_html=True)
+    _stage1c_metric_row([
+        ("Current Wallet Proxy", f"USD {current_wallet_m:,.1f}M", "Illustrative current revenue"),
+        ("Estimated Wallet", f"USD {estimated_wallet_m:,.1f}M", "Coalition TB + GM proxy"),
+        ("Wallet Gap", f"USD {wallet_gap_m:,.1f}M", "Potential upside"),
+        ("Capture Rate", f"{capture_rate:,.0f}%", "Current / estimated"),
+    ])
+    st.markdown(f"<div class='ec-note'><b>Wallet interpretation:</b> {wallet_reasoning(wr)} <b>Mode:</b> Illustrative demo placeholders.</div>", unsafe_allow_html=True)
+
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        timeline_html = "".join([
+            f'<div class="timeline-item"><div class="timeline-date">{dt}</div><div class="timeline-event">{ev}</div></div>'
+            for dt, ev in relationship_timeline(r["Company"])
+        ])
+        st.markdown(f'<div class="rel360-panel-clean"><div class="rel360-panel-title-clean">Relationship Timeline</div>{timeline_html}</div>', unsafe_allow_html=True)
+    with right:
+        pp = product_penetration(r).copy()
+        pp["Penetration / Potential"] = pp["Penetration / Potential"].map(status_badge)
+        st.markdown(
+            f'<div class="rel360-panel-clean"><div class="rel360-panel-title-clean">Product Penetration & Wallet Opportunity</div><div class="product-table-clean">{pp.to_html(index=False, escape=False)}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="ec-table-title">Score / Rating Breakdown</div>', unsafe_allow_html=True)
+    render_explainability_native(r)
+
+
+def render_stage_1c_decisions():
+    """Decision-preparation bridge. Actual decision persistence is implemented in Stage 1-C.6."""
+    decision_candidates = df[df["MAS"] >= 41].copy().sort_values("MAS", ascending=False)
+    implementation = int((decision_candidates["Recommended_Action"] != "Portfolio Monitoring").sum())
+    _stage1c_metric_row([
+        ("Decision Candidates", f"{len(decision_candidates)}", "Material review items"),
+        ("Implementation Likely", f"{implementation}", "Recommendation requires action"),
+        ("Deferred / Rejected", "—", "No persisted decisions yet"),
+        ("Audit Trail", "Pending", "Stage 1-C.6 build"),
+    ])
+
+    st.markdown(
+        """
+        <div class="ec-note"><b>Decision layer migration bridge.</b><br>
+        The v10 application did not persist Approved / Modified / Deferred / Rejected management decisions.
+        This workspace therefore shows the decision-preparation queue without inventing historical decisions.
+        Decision persistence and audit history will be implemented in Stage 1-C.6.</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    d = decision_candidates[["Rank", "Company", "MAS", "Primary_Driver", "Recommended_Action", "Expected_Outcome"]].copy()
+    d["Proposed Decision Path"] = d.apply(
+        lambda r: "Management judgement required" if r["MAS"] >= 61 else "Review / confirm recommendation",
+        axis=1,
+    )
+    d["Execution if Approved"] = d["Recommended_Action"].map(lambda x: "Yes" if x != "Portfolio Monitoring" else "No")
+    d = d.rename(columns={"Rank": "Priority", "Company": "Relationship", "MAS": "Score", "Recommended_Action": "Recommendation", "Primary_Driver": "Primary Driver"})
+    d["Score"] = d["Score"].map(lambda x: f"{x:.1f}")
+    st.markdown('<div class="ec-table-title">Decision Preparation Queue</div>', unsafe_allow_html=True)
+    st.dataframe(d, use_container_width=True, hide_index=True, height=360)
+
+
+def render_stage_1c_execution():
+    """Functional bridge from the retained Management Execution Hub."""
+    total_actions = len(execution_df)
+    actioned = int((execution_df["Status"].isin(["Assigned", "In Progress", "Monitoring", "Completed"])).sum())
+    at_risk = int((execution_df["SLA Status"] == "At Risk").sum())
+    exceptions = execution_df[(execution_df["SLA Status"] == "At Risk") | (execution_df["Priority"] == "High")].copy()
+    closure_ready = int((execution_df["Status"].isin(["Monitoring", "Completed"])).sum())
+    coverage_pct = (actioned / total_actions * 100) if total_actions else 0
+
+    _stage1c_metric_row([
+        ("Total Actions", f"{total_actions}", "Execution register"),
+        ("Action Coverage", f"{coverage_pct:.0f}%", "Assigned / active / closed"),
+        ("Exceptions", f"{len(exceptions)}", "High priority / at risk"),
+        ("Closure Ready", f"{closure_ready}", "Monitoring or completed"),
+    ])
+
+    st.markdown('<div class="ec-table-title">Execution Exceptions</div>', unsafe_allow_html=True)
+    if exceptions.empty:
+        st.info("No execution exceptions under the current v10 workflow data.")
+    else:
+        ex = exceptions[["Relationship", "MAS", "Action", "Owner", "Status", "Due", "SLA Status", "Next Step"]].copy()
+        ex = ex.rename(columns={"MAS": "Score"})
+        ex["Score"] = ex["Score"].map(lambda x: f"{x:.1f}")
+        st.dataframe(ex, use_container_width=True, hide_index=True, height=210)
+
+    st.markdown('<div class="ec-table-title">Action Register</div>', unsafe_allow_html=True)
+    exec_display = execution_df[["Rank", "Relationship", "MAS", "Action", "Owner", "Priority", "Due", "Status", "Progress_%", "Follow-up Cadence", "SLA Status", "Impact"]].copy()
+    exec_display = exec_display.rename(columns={"MAS": "Score"})
+    exec_display["Score"] = exec_display["Score"].map(lambda x: f"{x:.1f}")
+    st.dataframe(exec_display, use_container_width=True, hide_index=True, height=355)
+
+    c1, c2 = st.columns([1, 1.7], gap="large")
+    with c1:
+        status_order = ["Not Started", "Assigned", "In Progress", "Monitoring", "Completed", "Deferred"]
+        status_df = execution_df["Status"].value_counts().reindex(status_order).fillna(0).reset_index()
+        status_df.columns = ["Status", "Count"]
+        status_df = status_df[status_df["Count"] > 0]
+        fig_status = px.bar(status_df, x="Count", y="Status", orientation="h", text="Count", title="Execution Status")
+        fig_status.update_traces(marker_color=MCKINSEY_BLUE, textposition="outside")
+        apply_mckinsey_layout(fig_status, height=330)
+        fig_status.update_layout(showlegend=False, xaxis_title="Actions", yaxis_title="")
+        st.plotly_chart(fig_status, use_container_width=True, config={"displayModeBar": False})
+    with c2:
+        tracker = execution_df[["Relationship", "Owner", "Action", "Status", "Due", "Follow-up Cadence", "Next Step", "Closure Criteria"]].copy()
+        st.markdown('<div class="ec-table-title">Owner Follow-up Tracker</div>', unsafe_allow_html=True)
+        st.dataframe(tracker, use_container_width=True, hide_index=True, height=300)
+
+
+def render_stage_1c_portfolio():
+    """Functional bridge from the retained Portfolio Intelligence evidence layer."""
+    largest = df.sort_values("Revenue_B", ascending=False).iloc[0]["Company"]
+    _stage1c_metric_row([
+        ("Relationships", f"{len(df)}", "Public-company universe"),
+        ("Rated", f"{int((df['Rating'] != 'NR').sum())}", "External rating available"),
+        ("Data Quality", f"{df['Data_Quality'].mean():.0f}%", "Average field coverage"),
+        ("Largest Revenue", largest, "By LTM revenue"),
+    ])
+
+    st.markdown("<div class='ec-note'><b>Portfolio Intelligence is the supporting evidence layer.</b><br>Material patterns should be promoted into Review rather than decided directly from this screen.</div>", unsafe_allow_html=True)
+
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        plot_df = df.dropna(subset=["Revenue_B", "Debt_B"]).copy()
+        fig = px.scatter(
+            plot_df,
+            x="Revenue_B",
+            y="Debt_B",
+            size="Assets_B",
+            color="MAS_Band",
+            color_discrete_map=MAS_BAND_COLORS,
+            hover_name="Company",
+            text="Company",
+            title="Revenue vs Debt · Wallet Opportunity Evidence",
+        )
+        fig.update_traces(textposition="top center")
+        apply_mckinsey_layout(fig, height=430)
+        fig.update_layout(xaxis_title="Revenue (USD B)", yaxis_title="Debt (USD B)")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with c2:
+        debt_df = df.dropna(subset=["Debt_B"]).sort_values("Debt_B", ascending=False)
+        fig2 = px.bar(debt_df, x="Company", y="Debt_B", title="Debt by Relationship", text="Debt_B")
+        fig2.update_traces(texttemplate="%{text:.1f}B", textposition="outside", marker_color=MCKINSEY_BLUE)
+        apply_mckinsey_layout(fig2, height=430)
+        fig2.update_layout(xaxis_title="", yaxis_title="Debt (USD B)")
+        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+
+    st.markdown('<div class="ec-table-title">Relationship Master Table</div>', unsafe_allow_html=True)
+    display = raw_table(df)
+    for c in ["Revenue_B", "Assets_B", "Debt_B", "Equity_B", "Cash_B", "InterestExpense_B", "MarketCap_B", "EV_B"]:
+        display[c] = display[c].map(lambda x: None if pd.isna(x) else round(float(x), 1))
+    st.dataframe(display, use_container_width=True, hide_index=True, height=330)
+
+
+def render_stage_1c_workspace(workspace):
+    """Route the new shell to functional v10-backed workspace content."""
+    renderers = {
+        "briefing": render_stage_1c_briefing,
+        "review": render_stage_1c_review,
+        "relationships": render_stage_1c_relationships,
+        "decisions": render_stage_1c_decisions,
+        "execution": render_stage_1c_execution,
+        "portfolio": render_stage_1c_portfolio,
+    }
+    renderer = renderers.get(workspace.key)
+    if renderer is None:
+        st.error(f"No renderer configured for {workspace.label}.")
+        return
+    renderer()
 
 def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-C.1 Full Build · v10 institutional engines retained
+            EC-AI Executive Review Workspace · Stage 1-C.1 Functional Full Build · v10 institutional engines retained
         </div>
         """,
         unsafe_allow_html=True,
