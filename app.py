@@ -1,6 +1,7 @@
 
 # EC-AI Executive Review Workspace — Stage 1-C.1 Full Build
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
+# Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
 #   python -m streamlit run ecai_stage_1_c_1_full_build.py
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
@@ -1499,19 +1501,28 @@ def render_stage_1c_briefing():
     c1, c2 = st.columns([1.7, 1], gap="large")
     with c1:
         mas_plot_df = df.sort_values("MAS")
-        fig = px.bar(
-            mas_plot_df,
-            x="MAS",
-            y="Company",
-            orientation="h",
-            text="MAS",
-            color="Company",
-            color_discrete_map=RELATIONSHIP_CHART_COLORS,
-            title="Management Attention by Relationship",
+        briefing_bar_colors = [RELATIONSHIP_CHART_COLORS.get(c, MCKINSEY_BLUE) for c in mas_plot_df["Company"]]
+        fig = go.Figure(
+            go.Bar(
+                x=mas_plot_df["MAS"],
+                y=mas_plot_df["Company"],
+                orientation="h",
+                text=[f"{v:.1f}" for v in mas_plot_df["MAS"]],
+                textposition="outside",
+                marker=dict(color=briefing_bar_colors),
+                hovertemplate="<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>",
+            )
         )
-        fig.update_traces(texttemplate="%{text:.1f}", textposition="outside")
-        apply_mckinsey_layout(fig, height=380)
-        fig.update_layout(showlegend=False, xaxis_title="Score", yaxis_title="")
+        fig.update_traces(textfont=dict(size=12), cliponaxis=False)
+        apply_mckinsey_layout(fig, height=420)
+        fig.update_layout(
+            title="Management Attention by Relationship",
+            showlegend=False,
+            xaxis_title="Score",
+            yaxis_title="",
+            bargap=0.28,
+            margin=dict(l=20, r=40, t=52, b=30),
+        )
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     with c2:
         action_mix = df["Recommended_Action"].value_counts().reset_index()
