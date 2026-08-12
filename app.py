@@ -1,7 +1,8 @@
 
-# EC-AI Executive Review Workspace — Stage 1-C.1 Full Build
+# EC-AI Executive Review Workspace — Stage 1-C.2 Polish Build
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
+# Stage 1-C.2: shared visual polish across Briefing, Review, Relationships, Execution and Portfolio.
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
 #   python -m streamlit run ecai_stage_1_c_1_full_build.py
@@ -19,7 +20,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-C.1",
+    page_title="EC-AI Executive Review Workspace — Stage 1-C.2",
     page_icon="🏦",
     layout="wide",
 )
@@ -1300,8 +1301,22 @@ section[data-testid="stSidebar"] [data-baseweb="select"] span { color:#FFFFFF !i
 .ec-context-chip-label { color:var(--ec-slate-500); font-size:9.5px; font-weight:850; text-transform:uppercase; letter-spacing:.06em; }
 .ec-context-chip-value { color:var(--ec-navy-950); font-size:12.5px; font-weight:820; margin-top:3px; }
 
-/* Stage 1-C.1 workspace frame */
+/* Stage 1-C.2 shared workspace polish */
 .ec-workspace { min-height:0; }
+.ec-card { min-height:112px; display:flex; flex-direction:column; justify-content:flex-start; }
+.ec-card-value { overflow-wrap:anywhere; }
+.ec-table-title { margin-top:18px !important; margin-bottom:9px !important; }
+.ec-note { margin-top:10px !important; margin-bottom:16px !important; }
+.stage1c-rel-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:stretch; margin-top:10px; }
+.stage1c-rel-grid .rel360-panel-clean { min-height:338px; height:100%; box-sizing:border-box; }
+.stage1c-rel-grid .product-table-clean table { table-layout:fixed; }
+.stage1c-rel-grid .product-table-clean th:nth-child(1), .stage1c-rel-grid .product-table-clean td:nth-child(1) { width:24%; }
+.stage1c-rel-grid .product-table-clean th:nth-child(2), .stage1c-rel-grid .product-table-clean td:nth-child(2) { width:25%; }
+.stage1c-rel-grid .product-table-clean th:nth-child(3), .stage1c-rel-grid .product-table-clean td:nth-child(3) { width:51%; }
+div[data-testid="stDataFrame"] { border-radius:12px; overflow:hidden; }
+div[data-testid="stDataFrame"] [role="columnheader"] { font-weight:800 !important; }
+
+/* Stage 1-C.1 workspace frame */
 .ec-build-placeholder { background:#FFF; border:1px solid var(--ec-slate-200); border-radius:14px; padding:22px 24px; box-shadow:var(--ec-shadow-sm); }
 .ec-build-placeholder-kicker { color:var(--ec-blue-700); font-size:10.5px; font-weight:900; text-transform:uppercase; letter-spacing:.07em; }
 .ec-build-placeholder-title { color:var(--ec-navy-950); font-size:18px; font-weight:850; margin-top:6px; }
@@ -1318,6 +1333,7 @@ section[data-testid="stSidebar"] [data-baseweb="select"] span { color:#FFFFFF !i
     .ec-shell-topbar { flex-direction:column; }
     .ec-top-context { width:100%; flex-wrap:wrap; }
     .ec-engine-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .stage1c-rel-grid { grid-template-columns:1fr; }
 }
 </style>
 """
@@ -1338,7 +1354,7 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-C.1",
+        "shell_version": "Stage 1-C.2",
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1447,6 +1463,17 @@ def _stage1c_metric_row(cards):
             )
 
 
+def _stage1c_dataframe(data, *, height=320, column_config=None):
+    """Shared executive table renderer for Stage 1-C.2."""
+    st.dataframe(
+        data,
+        use_container_width=True,
+        hide_index=True,
+        height=height,
+        column_config=column_config or {},
+    )
+
+
 def _selected_relationship_row(default_to_top=True):
     selected = st.session_state.get("selected_relationship")
     if selected and selected in df["Company"].tolist():
@@ -1496,9 +1523,25 @@ def render_stage_1c_briefing():
         "Recommended_Action": "Recommendation",
         "Expected_Outcome": "Expected Outcome",
     })
-    st.dataframe(q, use_container_width=True, hide_index=True, height=255)
+    _stage1c_dataframe(
+        q,
+        height=270,
+        column_config={
+            "Priority": st.column_config.NumberColumn("Priority", width="small"),
+            "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+            "Country": st.column_config.TextColumn("Country", width="small"),
+            "Sector": st.column_config.TextColumn("Sector", width="medium"),
+            "External Rating": st.column_config.TextColumn("External Rating", width="small"),
+            "Outlook": st.column_config.TextColumn("Outlook", width="small"),
+            "Score": st.column_config.TextColumn("Score", width="small"),
+            "Attention Rating": st.column_config.TextColumn("Attention Rating", width="medium"),
+            "Primary Driver": st.column_config.TextColumn("Primary Driver", width="medium"),
+            "Recommendation": st.column_config.TextColumn("Recommendation", width="large"),
+            "Expected Outcome": st.column_config.TextColumn("Expected Outcome", width="large"),
+        },
+    )
 
-    c1, c2 = st.columns([1.7, 1], gap="large")
+    c1, c2 = st.columns([1.75, 1], gap="large")
     with c1:
         mas_plot_df = df.sort_values("MAS")
         briefing_bar_colors = [RELATIONSHIP_CHART_COLORS.get(c, MCKINSEY_BLUE) for c in mas_plot_df["Company"]]
@@ -1514,15 +1557,16 @@ def render_stage_1c_briefing():
             )
         )
         fig.update_traces(textfont=dict(size=12), cliponaxis=False)
-        apply_mckinsey_layout(fig, height=420)
+        apply_mckinsey_layout(fig, height=430)
         fig.update_layout(
             title="Management Attention by Relationship",
             showlegend=False,
             xaxis_title="Score",
             yaxis_title="",
-            bargap=0.28,
-            margin=dict(l=20, r=40, t=52, b=30),
+            bargap=0.24,
+            margin=dict(l=20, r=48, t=52, b=30),
         )
+        fig.update_xaxes(range=[0, max(70, float(mas_plot_df["MAS"].max()) + 8)], dtick=10)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     with c2:
         action_mix = df["Recommended_Action"].value_counts().reset_index()
@@ -1536,8 +1580,9 @@ def render_stage_1c_briefing():
             color_discrete_map=ACTION_COLORS,
             hole=0.58,
         )
-        fig2.update_traces(textinfo="percent", marker=dict(line=dict(color="white", width=2)))
-        apply_mckinsey_layout(fig2, height=380)
+        fig2.update_traces(textinfo="percent", marker=dict(line=dict(color="white", width=2.5)), pull=0)
+        apply_mckinsey_layout(fig2, height=430)
+        fig2.update_layout(legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02))
         st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="ec-table-title">Recommended Management Agenda</div>', unsafe_allow_html=True)
@@ -1564,9 +1609,21 @@ def render_stage_1c_review():
 
     st.markdown('<div class="ec-table-title">Review Queue</div>', unsafe_allow_html=True)
     review_table = attention[["Rank", "Company", "MAS", "MAS_Band", "Primary_Driver", "Recommended_Action", "Expected_Outcome"]].copy()
-    review_table.columns = ["Priority", "Relationship", "Score", "Rating", "Primary Driver", "Recommendation", "Expected Outcome"]
+    review_table.columns = ["Priority", "Relationship", "Score", "Attention Rating", "Primary Driver", "Recommendation", "Expected Outcome"]
     review_table["Score"] = review_table["Score"].map(lambda x: f"{x:.1f}")
-    st.dataframe(review_table, use_container_width=True, hide_index=True, height=320)
+    _stage1c_dataframe(
+        review_table,
+        height=350,
+        column_config={
+            "Priority": st.column_config.NumberColumn("Priority", width="small"),
+            "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+            "Score": st.column_config.TextColumn("Score", width="small"),
+            "Attention Rating": st.column_config.TextColumn("Attention Rating", width="medium"),
+            "Primary Driver": st.column_config.TextColumn("Primary Driver", width="medium"),
+            "Recommendation": st.column_config.TextColumn("Recommendation", width="large"),
+            "Expected Outcome": st.column_config.TextColumn("Expected Outcome", width="large"),
+        },
+    )
 
     default_row = _selected_relationship_row()
     options = attention["Company"].tolist() if len(attention) else df["Company"].tolist()
@@ -1645,20 +1702,24 @@ def render_stage_1c_relationships():
     ])
     st.markdown(f"<div class='ec-note'><b>Wallet interpretation:</b> {wallet_reasoning(wr)} <b>Mode:</b> Illustrative demo placeholders.</div>", unsafe_allow_html=True)
 
-    left, right = st.columns([1, 1], gap="large")
-    with left:
-        timeline_html = "".join([
-            f'<div class="timeline-item"><div class="timeline-date">{dt}</div><div class="timeline-event">{ev}</div></div>'
-            for dt, ev in relationship_timeline(r["Company"])
-        ])
-        st.markdown(f'<div class="rel360-panel-clean"><div class="rel360-panel-title-clean">Relationship Timeline</div>{timeline_html}</div>', unsafe_allow_html=True)
-    with right:
-        pp = product_penetration(r).copy()
-        pp["Penetration / Potential"] = pp["Penetration / Potential"].map(status_badge)
-        st.markdown(
-            f'<div class="rel360-panel-clean"><div class="rel360-panel-title-clean">Product Penetration & Wallet Opportunity</div><div class="product-table-clean">{pp.to_html(index=False, escape=False)}</div></div>',
-            unsafe_allow_html=True,
-        )
+    timeline_html = "".join([
+        f'<div class="timeline-item"><div class="timeline-date">{dt}</div><div class="timeline-event">{ev}</div></div>'
+        for dt, ev in relationship_timeline(r["Company"])
+    ])
+    pp = product_penetration(r).copy()
+    pp["Penetration / Potential"] = pp["Penetration / Potential"].map(status_badge)
+    relationship_panels_html = f'''    <div class="stage1c-rel-grid">
+      <div class="rel360-panel-clean">
+        <div class="rel360-panel-title-clean">Relationship Timeline</div>
+        {timeline_html}
+      </div>
+      <div class="rel360-panel-clean">
+        <div class="rel360-panel-title-clean">Product Penetration & Wallet Opportunity</div>
+        <div class="product-table-clean">{pp.to_html(index=False, escape=False)}</div>
+      </div>
+    </div>
+    '''
+    st.markdown(relationship_panels_html, unsafe_allow_html=True)
 
     st.markdown('<div class="ec-table-title">Score / Rating Breakdown</div>', unsafe_allow_html=True)
     render_explainability_native(r)
@@ -1694,7 +1755,7 @@ def render_stage_1c_decisions():
     d = d.rename(columns={"Rank": "Priority", "Company": "Relationship", "MAS": "Score", "Recommended_Action": "Recommendation", "Primary_Driver": "Primary Driver"})
     d["Score"] = d["Score"].map(lambda x: f"{x:.1f}")
     st.markdown('<div class="ec-table-title">Decision Preparation Queue</div>', unsafe_allow_html=True)
-    st.dataframe(d, use_container_width=True, hide_index=True, height=360)
+    _stage1c_dataframe(d, height=365)
 
 
 def render_stage_1c_execution():
@@ -1720,15 +1781,45 @@ def render_stage_1c_execution():
         ex = exceptions[["Relationship", "MAS", "Action", "Owner", "Status", "Due", "SLA Status", "Next Step"]].copy()
         ex = ex.rename(columns={"MAS": "Score"})
         ex["Score"] = ex["Score"].map(lambda x: f"{x:.1f}")
-        st.dataframe(ex, use_container_width=True, hide_index=True, height=210)
+        _stage1c_dataframe(
+            ex,
+            height=205,
+            column_config={
+                "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+                "Action": st.column_config.TextColumn("Action", width="large"),
+                "Owner": st.column_config.TextColumn("Owner", width="medium"),
+                "Status": st.column_config.TextColumn("Status", width="medium"),
+                "Due": st.column_config.TextColumn("Due", width="small"),
+                "SLA Status": st.column_config.TextColumn("SLA Status", width="small"),
+                "Next Step": st.column_config.TextColumn("Next Step", width="large"),
+            },
+        )
 
     st.markdown('<div class="ec-table-title">Action Register</div>', unsafe_allow_html=True)
     exec_display = execution_df[["Rank", "Relationship", "MAS", "Action", "Owner", "Priority", "Due", "Status", "Progress_%", "Follow-up Cadence", "SLA Status", "Impact"]].copy()
     exec_display = exec_display.rename(columns={"MAS": "Score"})
     exec_display["Score"] = exec_display["Score"].map(lambda x: f"{x:.1f}")
-    st.dataframe(exec_display, use_container_width=True, hide_index=True, height=355)
+    _stage1c_dataframe(
+        exec_display,
+        height=365,
+        column_config={
+            "Rank": st.column_config.NumberColumn("Rank", width="small"),
+            "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+            "Score": st.column_config.TextColumn("Score", width="small"),
+            "Action": st.column_config.TextColumn("Action", width="large"),
+            "Owner": st.column_config.TextColumn("Owner", width="medium"),
+            "Priority": st.column_config.TextColumn("Priority", width="small"),
+            "Due": st.column_config.TextColumn("Due", width="small"),
+            "Status": st.column_config.TextColumn("Status", width="medium"),
+            "Progress_%": st.column_config.NumberColumn("Progress %", width="small", format="%d%%"),
+            "Follow-up Cadence": st.column_config.TextColumn("Follow-up", width="small"),
+            "SLA Status": st.column_config.TextColumn("SLA", width="small"),
+            "Impact": st.column_config.TextColumn("Impact", width="medium"),
+        },
+    )
 
-    c1, c2 = st.columns([1, 1.7], gap="large")
+    c1, c2 = st.columns([0.9, 2.1], gap="large")
     with c1:
         status_order = ["Not Started", "Assigned", "In Progress", "Monitoring", "Completed", "Deferred"]
         status_df = execution_df["Status"].value_counts().reindex(status_order).fillna(0).reset_index()
@@ -1736,13 +1827,27 @@ def render_stage_1c_execution():
         status_df = status_df[status_df["Count"] > 0]
         fig_status = px.bar(status_df, x="Count", y="Status", orientation="h", text="Count", title="Execution Status")
         fig_status.update_traces(marker_color=MCKINSEY_BLUE, textposition="outside")
-        apply_mckinsey_layout(fig_status, height=330)
-        fig_status.update_layout(showlegend=False, xaxis_title="Actions", yaxis_title="")
+        apply_mckinsey_layout(fig_status, height=350)
+        fig_status.update_layout(showlegend=False, xaxis_title="Actions", yaxis_title="", bargap=0.30, margin=dict(l=18, r=34, t=52, b=30))
+        fig_status.update_xaxes(dtick=1)
         st.plotly_chart(fig_status, use_container_width=True, config={"displayModeBar": False})
     with c2:
         tracker = execution_df[["Relationship", "Owner", "Action", "Status", "Due", "Follow-up Cadence", "Next Step", "Closure Criteria"]].copy()
         st.markdown('<div class="ec-table-title">Owner Follow-up Tracker</div>', unsafe_allow_html=True)
-        st.dataframe(tracker, use_container_width=True, hide_index=True, height=300)
+        _stage1c_dataframe(
+            tracker,
+            height=350,
+            column_config={
+                "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+                "Owner": st.column_config.TextColumn("Owner", width="medium"),
+                "Action": st.column_config.TextColumn("Action", width="large"),
+                "Status": st.column_config.TextColumn("Status", width="medium"),
+                "Due": st.column_config.TextColumn("Due", width="small"),
+                "Follow-up Cadence": st.column_config.TextColumn("Follow-up", width="small"),
+                "Next Step": st.column_config.TextColumn("Next Step", width="large"),
+                "Closure Criteria": st.column_config.TextColumn("Closure Criteria", width="large"),
+            },
+        )
 
 
 def render_stage_1c_portfolio():
@@ -1765,29 +1870,51 @@ def render_stage_1c_portfolio():
             x="Revenue_B",
             y="Debt_B",
             size="Assets_B",
+            size_max=34,
             color="MAS_Band",
             color_discrete_map=MAS_BAND_COLORS,
             hover_name="Company",
             text="Company",
             title="Revenue vs Debt · Wallet Opportunity Evidence",
         )
-        fig.update_traces(textposition="top center")
-        apply_mckinsey_layout(fig, height=430)
-        fig.update_layout(xaxis_title="Revenue (USD B)", yaxis_title="Debt (USD B)")
+        label_positions = {
+            "Toyota": "top center", "DBS": "top left", "CK Hutchison": "middle left",
+            "Tencent": "top left", "TSMC": "top right", "Alibaba": "bottom right",
+            "Jardine Matheson": "bottom left", "HSBC": "top right", "BHP": "top center", "Rio Tinto": "top center",
+        }
+        for trace in fig.data:
+            trace.update(
+                textposition=[label_positions.get(str(company), "top center") for company in trace.text],
+                marker_line_width=1.4,
+                marker_line_color="white",
+            )
+        apply_mckinsey_layout(fig, height=440)
+        fig.update_layout(xaxis_title="Revenue (USD B)", yaxis_title="Debt (USD B)", legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0))
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     with c2:
         debt_df = df.dropna(subset=["Debt_B"]).sort_values("Debt_B", ascending=False)
         fig2 = px.bar(debt_df, x="Company", y="Debt_B", title="Debt by Relationship", text="Debt_B")
-        fig2.update_traces(texttemplate="%{text:.1f}B", textposition="outside", marker_color=MCKINSEY_BLUE)
-        apply_mckinsey_layout(fig2, height=430)
-        fig2.update_layout(xaxis_title="", yaxis_title="Debt (USD B)")
+        fig2.update_traces(texttemplate="%{text:.1f}B", textposition="outside", marker_color=MCKINSEY_BLUE, width=0.58, cliponaxis=False)
+        apply_mckinsey_layout(fig2, height=440)
+        fig2.update_layout(xaxis_title="", yaxis_title="Debt (USD B)", bargap=0.32, margin=dict(l=20, r=25, t=52, b=42))
+        fig2.update_xaxes(showgrid=False, tickangle=0)
         st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="ec-table-title">Relationship Master Table</div>', unsafe_allow_html=True)
     display = raw_table(df)
     for c in ["Revenue_B", "Assets_B", "Debt_B", "Equity_B", "Cash_B", "InterestExpense_B", "MarketCap_B", "EV_B"]:
         display[c] = display[c].map(lambda x: None if pd.isna(x) else round(float(x), 1))
-    st.dataframe(display, use_container_width=True, hide_index=True, height=330)
+    _stage1c_dataframe(
+        display,
+        height=355,
+        column_config={
+            "Company": st.column_config.TextColumn("Company", width="medium"),
+            "Country": st.column_config.TextColumn("Country", width="medium"),
+            "Sector": st.column_config.TextColumn("Sector", width="large"),
+            "Rating": st.column_config.TextColumn("Rating", width="small"),
+            "Outlook": st.column_config.TextColumn("Outlook", width="small"),
+        },
+    )
 
 
 def render_stage_1c_workspace(workspace):
@@ -1810,7 +1937,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-C.1 Functional Full Build · v10 institutional engines retained
+            EC-AI Executive Review Workspace · Stage 1-C.2 Polish Build · v10 institutional engines retained
         </div>
         """,
         unsafe_allow_html=True,
