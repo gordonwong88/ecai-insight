@@ -1,5 +1,6 @@
 
 # EC-AI Executive Review Workspace — Stage 1-C.1 Full Build
+# Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
 #   python -m streamlit run ecai_stage_1_c_1_full_build.py
@@ -1481,7 +1482,18 @@ def render_stage_1c_briefing():
 
     st.markdown('<div class="ec-table-title">Top Relationships Requiring Management Attention</div>', unsafe_allow_html=True)
     q = queue_table(df).head(6).copy()
-    q = q.rename(columns={"MAS": "Score", "MAS_Band": "Rating"})
+    # Keep the external credit rating distinct from EC-AI's attention rating.
+    # Streamlit/PyArrow requires unique dataframe column names.
+    q = q.rename(columns={
+        "Rank": "Priority",
+        "Company": "Relationship",
+        "Rating": "External Rating",
+        "MAS": "Score",
+        "MAS_Band": "Attention Rating",
+        "Primary_Driver": "Primary Driver",
+        "Recommended_Action": "Recommendation",
+        "Expected_Outcome": "Expected Outcome",
+    })
     st.dataframe(q, use_container_width=True, hide_index=True, height=255)
 
     c1, c2 = st.columns([1.7, 1], gap="large")
