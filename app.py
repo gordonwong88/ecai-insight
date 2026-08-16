@@ -1,8 +1,8 @@
 
-# EC-AI Executive Review Workspace — Stage 1-C.2 Polish Build
+# EC-AI Executive Review Workspace — Stage 1-C.7 Execution Build
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
-# Stage 1-C.2: shared visual polish across Briefing, Review, Relationships, Execution and Portfolio.
+# Stage 1-C.7: authoritative Execution workspace — exceptions, action register, updates, outcomes and closure.
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
 #   python -m streamlit run ecai_stage_1_c_1_full_build.py
@@ -20,7 +20,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-C.2",
+    page_title="EC-AI Executive Review Workspace — Stage 1-C.7",
     page_icon="🏦",
     layout="wide",
 )
@@ -1341,6 +1341,92 @@ st.markdown(STAGE_1C_SHELL_CSS, unsafe_allow_html=True)
 
 
 # =============================================================================
+# STAGE 1-C.7 EXECUTION STATE MIGRATION
+# =============================================================================
+def _migrate_v10_execution_actions():
+    """Seed the Stage 1-C execution register from the retained v10 workflow.
+
+    These records keep the demo useful before new management decisions are recorded.
+    Decision-created actions replace matching migrated relationship/action records.
+    """
+    records = []
+    for _, r in execution_df.iterrows():
+        company = r["Relationship"]
+        score_row = df[df["Company"] == company]
+        attention_rating = score_row.iloc[0]["MAS_Band"] if not score_row.empty else "N/A"
+        status = r["Status"]
+        outcome_status = "Pending"
+        outcome = "Pending"
+        if status == "Monitoring":
+            outcome_status = "In Evaluation"
+            outcome = "Implementation completed sufficiently to monitor the emerging relationship outcome."
+        elif status == "Completed":
+            outcome_status = "Pending Validation"
+            outcome = "Legacy completion requires outcome validation in the Stage 1-C.7 workflow."
+
+        records.append({
+            "Execution Action ID": f"MIG-{int(r['Rank']):04d}",
+            "Decision ID": "—",
+            "Source": "Migrated v10",
+            "Relationship": company,
+            "Score": float(r["MAS"]),
+            "Attention Rating": attention_rating,
+            "Action": r["Action"],
+            "Owner": r["Owner"],
+            "Priority": r["Priority"],
+            "Due": r["Due"],
+            "Status": status,
+            "Progress_%": int(r["Progress_%"]),
+            "Follow-up Cadence": r["Follow-up Cadence"],
+            "SLA Status": r["SLA Status"],
+            "Impact": r["Impact"],
+            "Next Step": r["Next Step"],
+            "Closure Criteria": r["Closure Criteria"],
+            "Outcome Status": outcome_status,
+            "Outcome": outcome,
+            "Closure Evidence": "",
+            "Created": "Migrated from v10",
+            "Last Updated": "",
+        })
+    return records
+
+
+def _execution_actions_df():
+    records = st.session_state.get("execution_actions", [])
+    if not records:
+        return pd.DataFrame()
+    return pd.DataFrame(records)
+
+
+def _execution_exception_reason(record):
+    reasons = []
+    status = str(record.get("Status", ""))
+    priority = str(record.get("Priority", ""))
+    sla = str(record.get("SLA Status", ""))
+    outcome_status = str(record.get("Outcome Status", "Pending"))
+
+    if sla == "At Risk":
+        reasons.append("SLA at risk")
+    if priority == "High" and status in {"Not Started", "Assigned"}:
+        reasons.append("High-priority action not yet in execution")
+    if status == "Escalated":
+        reasons.append("Escalated for management attention")
+    if status == "Deferred":
+        reasons.append("Execution deferred")
+    if status == "Completed" and outcome_status in {"", "Pending", "Pending Validation"}:
+        reasons.append("Completed without validated outcome")
+    return "; ".join(reasons)
+
+
+def _execution_history_df(action_id=None):
+    history = st.session_state.get("execution_history", [])
+    if action_id:
+        history = [h for h in history if h.get("Execution Action ID") == action_id]
+    if not history:
+        return pd.DataFrame()
+    return pd.DataFrame(history).iloc[::-1].reset_index(drop=True)
+
+# =============================================================================
 # SHARED APPLICATION STATE CONTRACT
 # =============================================================================
 def init_stage_1c_state():
@@ -1354,14 +1440,18 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-C.6",
+        "shell_version": "Stage 1-C.7",
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
+        "execution_history": [],
+        "execution_flash": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
+    if "execution_actions" not in st.session_state:
+        st.session_state.execution_actions = _migrate_v10_execution_actions()
 
 
 def render_stage_1c_sidebar():
@@ -1540,8 +1630,10 @@ def _record_stage1c_decision(
         action_record = {
             "Execution Action ID": execution_id,
             "Decision ID": decision_id,
+            "Source": "Management Decision",
             "Relationship": row["Company"],
             "Score": float(row["MAS"]),
+            "Attention Rating": row["MAS_Band"],
             "Action": final_action,
             "Owner": execution_owner or default_owner,
             "Priority": priority_for_row(row_for_execution),
@@ -1553,10 +1645,35 @@ def _record_stage1c_decision(
             "Impact": impact_for_action(final_action),
             "Next Step": execution_next_step or default_next,
             "Closure Criteria": default_closure,
+            "Outcome Status": "Pending",
             "Outcome": "Pending",
+            "Closure Evidence": "",
             "Created": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
-        st.session_state.decision_execution_actions.append(action_record)
+        st.session_state.decision_execution_actions.append(action_record.copy())
+
+        # One authoritative Stage 1-C.7 register. A new decision-created action
+        # supersedes any matching migrated v10 placeholder for the same relationship/action.
+        st.session_state.execution_actions = [
+            a for a in st.session_state.get("execution_actions", [])
+            if not (
+                a.get("Source") == "Migrated v10"
+                and a.get("Relationship") == row["Company"]
+                and a.get("Action") == final_action
+            )
+        ]
+        st.session_state.execution_actions.append(action_record.copy())
+        st.session_state.execution_history.append({
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "Execution Action ID": execution_id,
+            "Relationship": row["Company"],
+            "Event": "Action created from management decision",
+            "Status": "Assigned",
+            "Owner": action_record["Owner"],
+            "Outcome Status": "Pending",
+            "Note": f"Created from {decision_id}: {final_action}",
+        })
 
     record = {
         "Decision ID": decision_id,
@@ -1578,6 +1695,81 @@ def _record_stage1c_decision(
     if execution_id:
         st.session_state.active_execution_action_id = execution_id
     return record
+
+
+def _update_stage1c_execution_action(
+    action_id: str,
+    *,
+    owner: str,
+    due: str,
+    status: str,
+    progress: int,
+    follow_up: str,
+    sla_status: str,
+    next_step: str,
+    outcome_status: str,
+    outcome: str,
+    closure_evidence: str,
+):
+    """Update one execution action and append an auditable execution event."""
+    actions = st.session_state.get("execution_actions", [])
+    target = None
+    for record in actions:
+        if record.get("Execution Action ID") == action_id:
+            target = record
+            break
+    if target is None:
+        raise ValueError(f"Execution action {action_id} not found.")
+
+    if status == "Completed":
+        if outcome_status in {"Pending", "Pending Validation", ""}:
+            raise ValueError("A completed action requires a validated Outcome Status.")
+        if not outcome.strip():
+            raise ValueError("A completed action requires an outcome narrative.")
+        if not closure_evidence.strip():
+            raise ValueError("A completed action requires closure evidence.")
+        progress = 100
+        sla_status = "Closed"
+
+    before_status = target.get("Status", "")
+    before_outcome = target.get("Outcome Status", "Pending")
+    target.update({
+        "Owner": owner.strip(),
+        "Due": due.strip(),
+        "Status": status,
+        "Progress_%": int(progress),
+        "Follow-up Cadence": follow_up,
+        "SLA Status": sla_status,
+        "Next Step": next_step.strip(),
+        "Outcome Status": outcome_status,
+        "Outcome": outcome.strip() or "Pending",
+        "Closure Evidence": closure_evidence.strip(),
+        "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    })
+
+    # Keep the decision-origin subset synchronized for the Decisions audit view.
+    for record in st.session_state.get("decision_execution_actions", []):
+        if record.get("Execution Action ID") == action_id:
+            record.update(target)
+
+    note_bits = []
+    if before_status != status:
+        note_bits.append(f"status {before_status or 'N/A'} → {status}")
+    if before_outcome != outcome_status:
+        note_bits.append(f"outcome {before_outcome or 'N/A'} → {outcome_status}")
+    note = "; ".join(note_bits) if note_bits else "Execution details updated"
+    st.session_state.execution_history.append({
+        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "Execution Action ID": action_id,
+        "Relationship": target.get("Relationship", ""),
+        "Event": "Execution update",
+        "Status": status,
+        "Owner": owner.strip(),
+        "Outcome Status": outcome_status,
+        "Note": note,
+    })
+    st.session_state.active_execution_action_id = action_id
+    return target
 
 
 def _selected_relationship_row(default_to_top=True):
@@ -2131,81 +2323,109 @@ def render_stage_1c_decisions():
 
 
 def render_stage_1c_execution():
-    """Execution bridge with Stage 1-C.6 decision-created actions surfaced above the retained v10 register."""
-    decision_actions = st.session_state.get("decision_execution_actions", [])
-    total_actions = len(execution_df)
-    actioned = int((execution_df["Status"].isin(["Assigned", "In Progress", "Monitoring", "Completed"])).sum())
-    at_risk = int((execution_df["SLA Status"] == "At Risk").sum())
-    exceptions = execution_df[(execution_df["SLA Status"] == "At Risk") | (execution_df["Priority"] == "High")].copy()
-    closure_ready = int((execution_df["Status"].isin(["Monitoring", "Completed"])).sum())
-    coverage_pct = (actioned / total_actions * 100) if total_actions else 0
+    """Stage 1-C.7 authoritative Execution workspace.
+
+    Locked hierarchy: Execution Exceptions → Action Register → Action Detail / Update → Outcome / Closure.
+    Execution is the source of truth for implementation outcome.
+    """
+    actions_df = _execution_actions_df()
+    if actions_df.empty:
+        st.info("No execution actions exist yet. Approved or Modified decisions requiring implementation will create actions here.")
+        return
+
+    # Derive exceptions from the authoritative register.
+    exception_rows = []
+    for record in st.session_state.get("execution_actions", []):
+        reason = _execution_exception_reason(record)
+        if reason:
+            row = record.copy()
+            row["Exception Reason"] = reason
+            exception_rows.append(row)
+    exceptions_df = pd.DataFrame(exception_rows)
+
+    active_mask = ~actions_df["Status"].isin(["Completed", "Deferred"])
+    in_progress_count = int(actions_df["Status"].isin(["In Progress", "Monitoring"]).sum())
+    outcome_pending = int(actions_df["Outcome Status"].isin(["Pending", "Pending Validation"]).sum())
+    decision_linked = int((actions_df["Source"] == "Management Decision").sum())
 
     _stage1c_metric_row([
-        ("Decision-Linked", f"{len(decision_actions)}", "Created from Approved / Modified decisions"),
-        ("Execution Register", f"{total_actions}", "Retained v10 migration baseline"),
-        ("Exceptions", f"{len(exceptions)}", "High priority / at risk"),
-        ("Closure Ready", f"{closure_ready}", "Monitoring or completed"),
+        ("Active Actions", f"{int(active_mask.sum())}", "Not completed / deferred"),
+        ("Exceptions", f"{len(exceptions_df)}", "Requires management follow-up"),
+        ("In Progress", f"{in_progress_count}", "Executing or monitoring"),
+        ("Outcome Pending", f"{outcome_pending}", "Execution owns outcome"),
+        ("Decision-Linked", f"{decision_linked}", "Created from management decisions"),
     ])
 
-    st.markdown('<div class="ec-table-title">Decision-Created Execution Actions</div>', unsafe_allow_html=True)
-    if not decision_actions:
-        st.info("No execution actions have been created from Decisions yet. Approve or modify a Review Item and mark implementation as required.")
-    else:
-        decision_exec = pd.DataFrame(decision_actions).iloc[::-1].reset_index(drop=True)
-        decision_exec["Score"] = decision_exec["Score"].map(lambda x: f"{float(x):.1f}")
-        _stage1c_dataframe(
-            decision_exec[["Execution Action ID", "Decision ID", "Relationship", "Score", "Action", "Owner", "Due", "Status", "Next Step", "Outcome"]],
-            height=230,
-            column_config={
-                "Execution Action ID": st.column_config.TextColumn("Action ID", width="small"),
-                "Decision ID": st.column_config.TextColumn("Decision ID", width="small"),
-                "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
-                "Score": st.column_config.TextColumn("Score", width="small"),
-                "Action": st.column_config.TextColumn("Action", width="large"),
-                "Owner": st.column_config.TextColumn("Owner", width="medium"),
-                "Due": st.column_config.TextColumn("Due", width="small"),
-                "Status": st.column_config.TextColumn("Status", width="medium"),
-                "Next Step": st.column_config.TextColumn("Next Step", width="large"),
-                "Outcome": st.column_config.TextColumn("Outcome", width="medium"),
-            },
-        )
+    flash = st.session_state.get("execution_flash")
+    if flash:
+        st.success(flash)
+        st.session_state.execution_flash = None
 
-    st.markdown(
-        "<div class='ec-note'><b>Migration note.</b><br>The decision-linked actions above follow the locked Review → Decision → Execution workflow. The retained v10 execution register remains below as the migration baseline until Stage 1-C.7 rebuilds Execution around decision-created actions.</div>",
-        unsafe_allow_html=True,
-    )
-
+    # -------------------------------------------------------------------------
+    # 1. EXECUTION EXCEPTIONS — always above the register
+    # -------------------------------------------------------------------------
     st.markdown('<div class="ec-table-title">Execution Exceptions</div>', unsafe_allow_html=True)
-    if exceptions.empty:
-        st.info("No execution exceptions under the current v10 workflow data.")
+    if exceptions_df.empty:
+        st.success("No execution exceptions. All active actions are within the current execution controls.")
     else:
-        ex = exceptions[["Relationship", "MAS", "Action", "Owner", "Status", "Due", "SLA Status", "Next Step"]].copy()
-        ex = ex.rename(columns={"MAS": "Score"})
-        ex["Score"] = ex["Score"].map(lambda x: f"{x:.1f}")
+        ex = exceptions_df[[
+            "Execution Action ID", "Relationship", "Score", "Action", "Owner", "Status",
+            "Due", "SLA Status", "Outcome Status", "Exception Reason", "Next Step"
+        ]].copy()
+        ex["Score"] = ex["Score"].map(lambda x: f"{float(x):.1f}")
         _stage1c_dataframe(
             ex,
-            height=205,
+            height=min(260, 70 + len(ex) * 38),
             column_config={
+                "Execution Action ID": st.column_config.TextColumn("Action ID", width="small"),
                 "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
                 "Score": st.column_config.TextColumn("Score", width="small"),
                 "Action": st.column_config.TextColumn("Action", width="large"),
                 "Owner": st.column_config.TextColumn("Owner", width="medium"),
                 "Status": st.column_config.TextColumn("Status", width="medium"),
                 "Due": st.column_config.TextColumn("Due", width="small"),
-                "SLA Status": st.column_config.TextColumn("SLA Status", width="small"),
+                "SLA Status": st.column_config.TextColumn("SLA", width="small"),
+                "Outcome Status": st.column_config.TextColumn("Outcome", width="medium"),
+                "Exception Reason": st.column_config.TextColumn("Exception", width="large"),
                 "Next Step": st.column_config.TextColumn("Next Step", width="large"),
             },
         )
 
+    # -------------------------------------------------------------------------
+    # 2. ACTION REGISTER — primary executive view
+    # -------------------------------------------------------------------------
     st.markdown('<div class="ec-table-title">Action Register</div>', unsafe_allow_html=True)
-    exec_display = execution_df[["Rank", "Relationship", "MAS", "Action", "Owner", "Priority", "Due", "Status", "Progress_%", "Follow-up Cadence", "SLA Status", "Impact"]].copy()
-    exec_display = exec_display.rename(columns={"MAS": "Score"})
-    exec_display["Score"] = exec_display["Score"].map(lambda x: f"{x:.1f}")
+    f1, f2, f3 = st.columns(3, gap="small")
+    with f1:
+        status_options = ["All"] + sorted(actions_df["Status"].dropna().astype(str).unique().tolist())
+        filter_status = st.selectbox("Status", status_options, key="exec_filter_status")
+    with f2:
+        owner_options = ["All"] + sorted(actions_df["Owner"].dropna().astype(str).unique().tolist())
+        filter_owner = st.selectbox("Owner", owner_options, key="exec_filter_owner")
+    with f3:
+        rel_options = ["All"] + sorted(actions_df["Relationship"].dropna().astype(str).unique().tolist())
+        filter_rel = st.selectbox("Relationship", rel_options, key="exec_filter_relationship")
+
+    register = actions_df.copy()
+    if filter_status != "All":
+        register = register[register["Status"] == filter_status]
+    if filter_owner != "All":
+        register = register[register["Owner"] == filter_owner]
+    if filter_rel != "All":
+        register = register[register["Relationship"] == filter_rel]
+
+    register = register[[
+        "Execution Action ID", "Decision ID", "Relationship", "Score", "Action", "Owner",
+        "Priority", "Due", "Status", "Progress_%", "Follow-up Cadence", "SLA Status",
+        "Outcome Status", "Source"
+    ]].copy()
+    register["Score"] = register["Score"].map(lambda x: f"{float(x):.1f}")
     _stage1c_dataframe(
-        exec_display,
+        register,
         height=365,
         column_config={
-            "Rank": st.column_config.NumberColumn("Rank", width="small"),
+            "Execution Action ID": st.column_config.TextColumn("Action ID", width="small"),
+            "Decision ID": st.column_config.TextColumn("Decision", width="small"),
             "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
             "Score": st.column_config.TextColumn("Score", width="small"),
             "Action": st.column_config.TextColumn("Action", width="large"),
@@ -2216,14 +2436,167 @@ def render_stage_1c_execution():
             "Progress_%": st.column_config.NumberColumn("Progress %", width="small", format="%d%%"),
             "Follow-up Cadence": st.column_config.TextColumn("Follow-up", width="small"),
             "SLA Status": st.column_config.TextColumn("SLA", width="small"),
-            "Impact": st.column_config.TextColumn("Impact", width="medium"),
+            "Outcome Status": st.column_config.TextColumn("Outcome", width="medium"),
+            "Source": st.column_config.TextColumn("Source", width="medium"),
         },
     )
 
+    # -------------------------------------------------------------------------
+    # 3. SELECTED ACTION — implementation and outcome control
+    # -------------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Execution Action Detail</div>', unsafe_allow_html=True)
+    actions = st.session_state.get("execution_actions", [])
+    action_ids = [a["Execution Action ID"] for a in actions]
+    current_action_id = st.session_state.get("active_execution_action_id")
+    if current_action_id not in action_ids:
+        # Prefer a decision-created action, then the first active action.
+        preferred = next((a["Execution Action ID"] for a in actions if a.get("Source") == "Management Decision"), None)
+        current_action_id = preferred or action_ids[0]
+    action_index = action_ids.index(current_action_id)
+
+    def _action_label(action_id):
+        rec = next(a for a in actions if a["Execution Action ID"] == action_id)
+        return f"{action_id} · {rec['Relationship']} · {rec['Action']}"
+
+    selected_action_id = st.selectbox(
+        "Select execution action",
+        action_ids,
+        index=action_index,
+        format_func=_action_label,
+        key="stage1c_execution_action_select",
+    )
+    st.session_state.active_execution_action_id = selected_action_id
+    selected = next(a for a in actions if a["Execution Action ID"] == selected_action_id)
+
+    st.markdown(
+        f"""
+        <div class="ec-note">
+          <b>{selected['Relationship']} · {selected['Action']}</b><br>
+          Action <b>{selected['Execution Action ID']}</b> · Decision <b>{selected.get('Decision ID','—')}</b> · Source <b>{selected.get('Source','N/A')}</b><br>
+          Score / Rating: <b>{float(selected['Score']):.1f} · {selected.get('Attention Rating','N/A')}</b><br>
+          <b>Closure criteria:</b> {selected.get('Closure Criteria','')}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([1, 1], gap="large")
+    with left:
+        st.markdown("#### Implementation Control")
+        owner_value = st.text_input("Execution owner", value=str(selected.get("Owner", "")), key=f"exec_owner_{selected_action_id}")
+        due_value = st.text_input("Due", value=str(selected.get("Due", "")), key=f"exec_due_{selected_action_id}")
+        status_options = ["Not Started", "Assigned", "In Progress", "Monitoring", "Completed", "Deferred", "Escalated"]
+        current_status = selected.get("Status", "Assigned")
+        status_value = st.selectbox(
+            "Status",
+            status_options,
+            index=status_options.index(current_status) if current_status in status_options else 1,
+            key=f"exec_status_{selected_action_id}",
+        )
+        progress_value = st.slider(
+            "Progress",
+            min_value=0,
+            max_value=100,
+            value=int(selected.get("Progress_%", 0)),
+            step=10,
+            key=f"exec_progress_{selected_action_id}",
+        )
+        follow_options = ["Weekly", "Bi-weekly", "Monthly", "Quarterly", "Ad hoc"]
+        current_follow = selected.get("Follow-up Cadence", "Bi-weekly")
+        follow_value = st.selectbox(
+            "Follow-up cadence",
+            follow_options,
+            index=follow_options.index(current_follow) if current_follow in follow_options else 1,
+            key=f"exec_follow_{selected_action_id}",
+        )
+        sla_options = ["On Track", "At Risk", "Monitor", "Closed"]
+        current_sla = selected.get("SLA Status", "On Track")
+        sla_value = st.selectbox(
+            "SLA status",
+            sla_options,
+            index=sla_options.index(current_sla) if current_sla in sla_options else 0,
+            key=f"exec_sla_{selected_action_id}",
+        )
+        next_step_value = st.text_area(
+            "Next step",
+            value=str(selected.get("Next Step", "")),
+            height=100,
+            key=f"exec_next_{selected_action_id}",
+        )
+
+    with right:
+        st.markdown("#### Outcome & Closure")
+        outcome_options = ["Pending", "Pending Validation", "In Evaluation", "Achieved", "Partially Achieved", "Not Achieved"]
+        current_outcome_status = selected.get("Outcome Status", "Pending")
+        outcome_status_value = st.selectbox(
+            "Outcome status",
+            outcome_options,
+            index=outcome_options.index(current_outcome_status) if current_outcome_status in outcome_options else 0,
+            key=f"exec_outcome_status_{selected_action_id}",
+            help="Execution is the source of truth for the final management outcome.",
+        )
+        outcome_value = st.text_area(
+            "Outcome",
+            value=str(selected.get("Outcome", "Pending")),
+            height=120,
+            key=f"exec_outcome_{selected_action_id}",
+            placeholder="Record what changed in the relationship, wallet, risk or execution result.",
+        )
+        closure_evidence_value = st.text_area(
+            "Closure evidence",
+            value=str(selected.get("Closure Evidence", "")),
+            height=120,
+            key=f"exec_closure_{selected_action_id}",
+            placeholder="Evidence that the closure criteria were met — e.g. senior meeting completed, wallet review completed, risk stance refreshed.",
+        )
+        st.caption(f"Last updated: {selected.get('Last Updated') or 'Not yet updated in Stage 1-C.7'}")
+        st.caption(f"Impact objective: {selected.get('Impact','N/A')}")
+
+    if st.button("Update Execution Action", type="primary", use_container_width=True, key=f"exec_save_{selected_action_id}"):
+        try:
+            _update_stage1c_execution_action(
+                selected_action_id,
+                owner=owner_value,
+                due=due_value,
+                status=status_value,
+                progress=progress_value,
+                follow_up=follow_value,
+                sla_status=sla_value,
+                next_step=next_step_value,
+                outcome_status=outcome_status_value,
+                outcome=outcome_value,
+                closure_evidence=closure_evidence_value,
+            )
+            st.session_state.execution_flash = f"{selected_action_id} updated. Execution remains the source of truth for outcome and closure."
+            st.rerun()
+        except Exception as exc:
+            st.error(str(exc))
+
+    # -------------------------------------------------------------------------
+    # 4. EXECUTION HISTORY + SUPPORTING PORTFOLIO VIEW
+    # -------------------------------------------------------------------------
+    history = _execution_history_df(selected_action_id)
+    st.markdown('<div class="ec-table-title">Execution History</div>', unsafe_allow_html=True)
+    if history.empty:
+        st.info("No Stage 1-C.7 execution updates have been recorded for this action yet.")
+    else:
+        _stage1c_dataframe(
+            history[["Timestamp", "Event", "Status", "Owner", "Outcome Status", "Note"]],
+            height=min(245, 70 + len(history) * 38),
+            column_config={
+                "Timestamp": st.column_config.TextColumn("Timestamp", width="medium"),
+                "Event": st.column_config.TextColumn("Event", width="medium"),
+                "Status": st.column_config.TextColumn("Status", width="medium"),
+                "Owner": st.column_config.TextColumn("Owner", width="medium"),
+                "Outcome Status": st.column_config.TextColumn("Outcome", width="medium"),
+                "Note": st.column_config.TextColumn("Change", width="large"),
+            },
+        )
+
     c1, c2 = st.columns([0.9, 2.1], gap="large")
     with c1:
-        status_order = ["Not Started", "Assigned", "In Progress", "Monitoring", "Completed", "Deferred"]
-        status_df = execution_df["Status"].value_counts().reindex(status_order).fillna(0).reset_index()
+        status_order = ["Not Started", "Assigned", "In Progress", "Monitoring", "Completed", "Deferred", "Escalated"]
+        status_df = actions_df["Status"].value_counts().reindex(status_order).fillna(0).reset_index()
         status_df.columns = ["Status", "Count"]
         status_df = status_df[status_df["Count"] > 0]
         fig_status = px.bar(status_df, x="Count", y="Status", orientation="h", text="Count", title="Execution Status")
@@ -2233,7 +2606,7 @@ def render_stage_1c_execution():
         fig_status.update_xaxes(dtick=1)
         st.plotly_chart(fig_status, use_container_width=True, config={"displayModeBar": False})
     with c2:
-        tracker = execution_df[["Relationship", "Owner", "Action", "Status", "Due", "Follow-up Cadence", "Next Step", "Closure Criteria"]].copy()
+        tracker = actions_df[["Relationship", "Owner", "Action", "Status", "Due", "Follow-up Cadence", "Next Step", "Outcome Status"]].copy()
         st.markdown('<div class="ec-table-title">Owner Follow-up Tracker</div>', unsafe_allow_html=True)
         _stage1c_dataframe(
             tracker,
@@ -2246,9 +2619,13 @@ def render_stage_1c_execution():
                 "Due": st.column_config.TextColumn("Due", width="small"),
                 "Follow-up Cadence": st.column_config.TextColumn("Follow-up", width="small"),
                 "Next Step": st.column_config.TextColumn("Next Step", width="large"),
-                "Closure Criteria": st.column_config.TextColumn("Closure Criteria", width="large"),
+                "Outcome Status": st.column_config.TextColumn("Outcome", width="medium"),
             },
         )
+
+    st.caption(
+        "Stage 1-C.7 prototype persistence: execution state and history persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
+    )
 
 
 def render_stage_1c_portfolio():
@@ -2338,7 +2715,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-C.6 Decisions Build · v10 institutional engines retained
+            EC-AI Executive Review Workspace · Stage 1-C.7 Execution Build · v10 institutional engines retained
         </div>
         """,
         unsafe_allow_html=True,
