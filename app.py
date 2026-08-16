@@ -10,7 +10,7 @@
 import io
 import math
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict
 from dataclasses import dataclass
 
@@ -1142,7 +1142,7 @@ def wallet_reasoning(row) -> str:
 # memo/PDF export functions, visual helpers, Relationship 360 helpers and
 # Wallet Sizing Engine v1.0.
 #
-# Stage 1-C.1 replaces the application shell and primary navigation, while
+# Stage 1-C replaces the application shell and primary navigation, while
 # mapping proven v10 content into the six locked workspaces as a functional
 # migration bridge. The legacy ten-tab source remains below st.stop() for
 # reference and is intentionally not executed.
@@ -1354,7 +1354,10 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-C.2",
+        "shell_version": "Stage 1-C.6",
+        "decision_history": [],
+        "decision_execution_actions": [],
+        "decision_flash": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1472,6 +1475,109 @@ def _stage1c_dataframe(data, *, height=320, column_config=None):
         height=height,
         column_config=column_config or {},
     )
+
+
+def _decision_history_df():
+    """Return decision audit history as a dataframe (latest first)."""
+    records = st.session_state.get("decision_history", [])
+    if not records:
+        return pd.DataFrame()
+    return pd.DataFrame(records).iloc[::-1].reset_index(drop=True)
+
+
+def _latest_decision_by_relationship():
+    """Return the latest decision record for each relationship."""
+    latest = {}
+    for record in st.session_state.get("decision_history", []):
+        latest[record.get("Relationship")] = record
+    return latest
+
+
+def _next_stage1c_id(prefix: str, collection_key: str) -> str:
+    """Generate compact human-readable IDs within the current Streamlit session."""
+    return f"{prefix}-{len(st.session_state.get(collection_key, [])) + 1:04d}"
+
+
+def _execution_fields_for_decision(row, final_action: str):
+    """Derive sensible execution defaults from retained v10 engines without changing their rules."""
+    row_copy = row.copy()
+    row_copy["Recommended_Action"] = final_action
+    owner = owner_for_action(final_action, row_copy.get("Primary_Driver", ""))
+    due = due_for_row(row_copy)
+    next_step = next_step_for_row(row_copy)
+    closure = closure_criteria_for_action(final_action)
+    return owner, due, next_step, closure
+
+
+def _record_stage1c_decision(
+    row,
+    *,
+    decision: str,
+    final_action: str,
+    rationale: str,
+    decision_owner: str,
+    decision_date,
+    requires_execution: bool,
+    execution_owner: str | None = None,
+    execution_due: str | None = None,
+    execution_next_step: str | None = None,
+):
+    """Persist one management decision in session state and optionally create an execution action."""
+    if decision not in {"Approved", "Modified", "Deferred", "Rejected"}:
+        raise ValueError("Unsupported management decision.")
+
+    execution_id = None
+    if decision in {"Deferred", "Rejected"}:
+        requires_execution = False
+
+    decision_id = _next_stage1c_id("DEC", "decision_history")
+
+    if requires_execution:
+        execution_id = _next_stage1c_id("ACT", "decision_execution_actions")
+        default_owner, default_due, default_next, default_closure = _execution_fields_for_decision(row, final_action)
+        row_for_execution = row.copy()
+        row_for_execution["Recommended_Action"] = final_action
+        action_record = {
+            "Execution Action ID": execution_id,
+            "Decision ID": decision_id,
+            "Relationship": row["Company"],
+            "Score": float(row["MAS"]),
+            "Action": final_action,
+            "Owner": execution_owner or default_owner,
+            "Priority": priority_for_row(row_for_execution),
+            "Due": execution_due or default_due,
+            "Status": "Assigned",
+            "Progress_%": 0,
+            "Follow-up Cadence": "Weekly" if float(row["MAS"]) >= 61 else "Bi-weekly",
+            "SLA Status": "On Track",
+            "Impact": impact_for_action(final_action),
+            "Next Step": execution_next_step or default_next,
+            "Closure Criteria": default_closure,
+            "Outcome": "Pending",
+            "Created": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+        st.session_state.decision_execution_actions.append(action_record)
+
+    record = {
+        "Decision ID": decision_id,
+        "Decision Date": decision_date.strftime("%Y-%m-%d") if hasattr(decision_date, "strftime") else str(decision_date),
+        "Relationship": row["Company"],
+        "Score": float(row["MAS"]),
+        "Attention Rating": row["MAS_Band"],
+        "Original Recommendation": row["Recommended_Action"],
+        "Management Decision": decision,
+        "Final Action": final_action,
+        "Rationale": rationale.strip(),
+        "Decision Owner": decision_owner.strip(),
+        "Execution Required": "Yes" if requires_execution else "No",
+        "Execution Action ID": execution_id or "—",
+        "Recorded": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    st.session_state.decision_history.append(record)
+    st.session_state.active_decision_id = decision_id
+    if execution_id:
+        st.session_state.active_execution_action_id = execution_id
+    return record
 
 
 def _selected_relationship_row(default_to_top=True):
@@ -1726,40 +1832,307 @@ def render_stage_1c_relationships():
 
 
 def render_stage_1c_decisions():
-    """Decision-preparation bridge. Actual decision persistence is implemented in Stage 1-C.6."""
+    """Stage 1-C.6 management decision capture, audit trail and execution hand-off."""
     decision_candidates = df[df["MAS"] >= 41].copy().sort_values("MAS", ascending=False)
-    implementation = int((decision_candidates["Recommended_Action"] != "Portfolio Monitoring").sum())
+    history = st.session_state.get("decision_history", [])
+    execution_actions = st.session_state.get("decision_execution_actions", [])
+    latest_by_rel = _latest_decision_by_relationship()
+
+    approved = sum(1 for r in history if r.get("Management Decision") == "Approved")
+    modified = sum(1 for r in history if r.get("Management Decision") == "Modified")
+    deferred_rejected = sum(1 for r in history if r.get("Management Decision") in {"Deferred", "Rejected"})
+    pending = sum(1 for company in decision_candidates["Company"] if company not in latest_by_rel)
+
     _stage1c_metric_row([
-        ("Decision Candidates", f"{len(decision_candidates)}", "Material review items"),
-        ("Implementation Likely", f"{implementation}", "Recommendation requires action"),
-        ("Deferred / Rejected", "—", "No persisted decisions yet"),
-        ("Audit Trail", "Pending", "Stage 1-C.6 build"),
+        ("Pending Decisions", f"{pending}", "Material Review Items awaiting judgement"),
+        ("Approved / Modified", f"{approved + modified}", "Management decisions requiring follow-through"),
+        ("Deferred / Rejected", f"{deferred_rejected}", "No execution action created"),
+        ("Execution Actions", f"{len(execution_actions)}", "Created only when implementation is required"),
     ])
+
+    if st.session_state.get("decision_flash"):
+        st.success(st.session_state.decision_flash)
+        st.session_state.decision_flash = None
 
     st.markdown(
         """
-        <div class="ec-note"><b>Decision layer migration bridge.</b><br>
-        The v10 application did not persist Approved / Modified / Deferred / Rejected management decisions.
-        This workspace therefore shows the decision-preparation queue without inventing historical decisions.
-        Decision persistence and audit history will be implemented in Stage 1-C.6.</div>
+        <div class="ec-note"><b>Management decision rule.</b><br>
+        EC-AI recommends; management decides. Record <b>Approved</b>, <b>Modified</b>, <b>Deferred</b> or <b>Rejected</b> with rationale.
+        Approved or Modified decisions create an Execution Action <b>only when implementation is actually required</b>.
+        Deferred and Rejected decisions never create execution work.</div>
         """,
         unsafe_allow_html=True,
     )
 
-    d = decision_candidates[["Rank", "Company", "MAS", "Primary_Driver", "Recommended_Action", "Expected_Outcome"]].copy()
-    d["Proposed Decision Path"] = d.apply(
-        lambda r: "Management judgement required" if r["MAS"] >= 61 else "Review / confirm recommendation",
-        axis=1,
+    # Decision queue with current status
+    d = decision_candidates[["Rank", "Company", "MAS", "MAS_Band", "Primary_Driver", "Recommended_Action", "Expected_Outcome"]].copy()
+    d["Decision Status"] = d["Company"].map(
+        lambda c: latest_by_rel.get(c, {}).get("Management Decision", "Pending")
     )
-    d["Execution if Approved"] = d["Recommended_Action"].map(lambda x: "Yes" if x != "Portfolio Monitoring" else "No")
-    d = d.rename(columns={"Rank": "Priority", "Company": "Relationship", "MAS": "Score", "Recommended_Action": "Recommendation", "Primary_Driver": "Primary Driver"})
+    d["Final Action"] = d["Company"].map(
+        lambda c: latest_by_rel.get(c, {}).get("Final Action", "—")
+    )
+    d = d.rename(columns={
+        "Rank": "Priority",
+        "Company": "Relationship",
+        "MAS": "Score",
+        "MAS_Band": "Attention Rating",
+        "Primary_Driver": "Primary Driver",
+        "Recommended_Action": "Recommendation",
+        "Expected_Outcome": "Expected Outcome",
+    })
     d["Score"] = d["Score"].map(lambda x: f"{x:.1f}")
-    st.markdown('<div class="ec-table-title">Decision Preparation Queue</div>', unsafe_allow_html=True)
-    _stage1c_dataframe(d, height=365)
+    st.markdown('<div class="ec-table-title">Decision Queue</div>', unsafe_allow_html=True)
+    _stage1c_dataframe(
+        d,
+        height=330,
+        column_config={
+            "Priority": st.column_config.NumberColumn("Priority", width="small"),
+            "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+            "Score": st.column_config.TextColumn("Score", width="small"),
+            "Attention Rating": st.column_config.TextColumn("Attention Rating", width="medium"),
+            "Primary Driver": st.column_config.TextColumn("Primary Driver", width="medium"),
+            "Recommendation": st.column_config.TextColumn("Recommendation", width="large"),
+            "Decision Status": st.column_config.TextColumn("Decision Status", width="medium"),
+            "Final Action": st.column_config.TextColumn("Final Action", width="large"),
+            "Expected Outcome": st.column_config.TextColumn("Expected Outcome", width="large"),
+        },
+    )
+
+    # Decision capture
+    st.markdown('<div class="ec-table-title">Record Management Decision</div>', unsafe_allow_html=True)
+    candidates = decision_candidates["Company"].tolist()
+    current_rel = st.session_state.get("selected_relationship")
+    default_index = candidates.index(current_rel) if current_rel in candidates else 0
+    selected_company = st.selectbox(
+        "Review item",
+        candidates,
+        index=default_index,
+        key="stage1c_decision_relationship",
+    )
+    st.session_state.selected_relationship = selected_company
+    row = decision_candidates[decision_candidates["Company"] == selected_company].iloc[0]
+    latest = latest_by_rel.get(selected_company)
+
+    latest_note = ""
+    if latest:
+        latest_note = (
+            f"<br><br><b>Latest recorded decision:</b> {latest['Management Decision']} · "
+            f"{latest['Final Action']} · {latest['Decision Date']} · {latest['Decision Owner']}"
+        )
+
+    st.markdown(
+        f"""
+        <div class="ec-note">
+          <b>{selected_company}</b> · Score / Rating {row['MAS']:.1f} · {row['MAS_Band']}<br>
+          <b>EC-AI recommendation:</b> {row['Recommended_Action']}<br>
+          <b>Management question:</b> Should management proceed with this recommendation, modify it, defer it or reject it?<br>
+          <b>Expected outcome:</b> {row['Expected_Outcome']}{latest_note}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    left, right = st.columns([1.05, 1], gap="large")
+    with left:
+        management_decision = st.radio(
+            "Management decision",
+            ["Approved", "Modified", "Deferred", "Rejected"],
+            horizontal=True,
+            key="stage1c_management_decision",
+        )
+
+        action_taxonomy = [
+            "Strategic Relationship Investment",
+            "Portfolio Monitoring",
+            "Relationship Recovery",
+            "Treasury Deep Dive",
+            "Cross-Border Expansion",
+            "Credit Review",
+            "Executive Engagement",
+        ]
+        if row["Recommended_Action"] not in action_taxonomy:
+            action_taxonomy.append(row["Recommended_Action"])
+
+        if management_decision == "Approved":
+            final_action = row["Recommended_Action"]
+            st.markdown(f"**Final action:** {final_action}")
+        elif management_decision == "Modified":
+            final_action = st.selectbox(
+                "Modified final action",
+                action_taxonomy,
+                index=action_taxonomy.index(row["Recommended_Action"]),
+                key="stage1c_modified_action",
+            )
+        elif management_decision == "Deferred":
+            final_action = "Deferred — no current action"
+            st.markdown("**Final action:** Deferred — no current action")
+        else:
+            final_action = "Rejected — no action"
+            st.markdown("**Final action:** Rejected — no action")
+
+        decision_owner = st.text_input(
+            "Decision owner / forum",
+            value="Management Review",
+            key="stage1c_decision_owner",
+        )
+        decision_date = st.date_input(
+            "Decision date",
+            value=date.today(),
+            key="stage1c_decision_date",
+        )
+        rationale = st.text_area(
+            "Decision rationale",
+            placeholder="Record the management judgement, modification, reason for deferral, or reason for rejection.",
+            height=120,
+            key="stage1c_decision_rationale",
+        )
+
+    with right:
+        execution_allowed = management_decision in {"Approved", "Modified"}
+        default_execution = execution_allowed and final_action != "Portfolio Monitoring"
+        if execution_allowed:
+            requires_execution = st.checkbox(
+                "Implementation is required — create Execution Action",
+                value=default_execution,
+                key=f"stage1c_requires_execution_{management_decision}_{selected_company}",
+                help="Only create an Execution Action when someone must actually implement the management decision.",
+            )
+        else:
+            requires_execution = False
+            st.info("Deferred and Rejected decisions do not create Execution Actions.")
+
+        default_exec_owner, default_due, default_next, default_closure = _execution_fields_for_decision(row, final_action)
+        if requires_execution:
+            execution_owner = st.text_input(
+                "Execution owner",
+                value=default_exec_owner,
+                key=f"stage1c_execution_owner_{selected_company}",
+            )
+            due_options = ["30 Days", "45 Days", "60 Days"]
+            due_index = due_options.index(default_due) if default_due in due_options else 1
+            execution_due = st.selectbox(
+                "Due",
+                due_options,
+                index=due_index,
+                key=f"stage1c_execution_due_{selected_company}",
+            )
+            execution_next_step = st.text_area(
+                "Initial next step",
+                value=default_next,
+                height=95,
+                key=f"stage1c_execution_next_step_{selected_company}",
+            )
+            st.caption(f"Closure criteria: {default_closure}")
+        else:
+            execution_owner = None
+            execution_due = None
+            execution_next_step = None
+            st.markdown(
+                "<div class='ec-note'><b>No execution hand-off.</b><br>The decision will be captured in the audit trail only.</div>",
+                unsafe_allow_html=True,
+            )
+
+    record_clicked = st.button(
+        "Record Decision",
+        type="primary",
+        use_container_width=True,
+        key="stage1c_record_decision",
+    )
+    if record_clicked:
+        if not rationale.strip():
+            st.error("Please enter the management rationale before recording the decision.")
+        elif not decision_owner.strip():
+            st.error("Please enter the decision owner or management forum.")
+        elif requires_execution and (not execution_owner or not execution_owner.strip()):
+            st.error("Please assign an execution owner.")
+        else:
+            record = _record_stage1c_decision(
+                row,
+                decision=management_decision,
+                final_action=final_action,
+                rationale=rationale,
+                decision_owner=decision_owner,
+                decision_date=decision_date,
+                requires_execution=requires_execution,
+                execution_owner=execution_owner,
+                execution_due=execution_due,
+                execution_next_step=execution_next_step,
+            )
+            if record["Execution Required"] == "Yes":
+                st.session_state.decision_flash = (
+                    f"{record['Decision ID']} recorded. Linked Execution Action {record['Execution Action ID']} created."
+                )
+            else:
+                st.session_state.decision_flash = f"{record['Decision ID']} recorded. No Execution Action created."
+            st.rerun()
+
+    # Audit trail
+    st.markdown('<div class="ec-table-title">Decision Audit Trail</div>', unsafe_allow_html=True)
+    audit = _decision_history_df()
+    if audit.empty:
+        st.info("No management decisions have been recorded in this session yet.")
+    else:
+        audit_display = audit.copy()
+        audit_display["Score"] = audit_display["Score"].map(lambda x: f"{float(x):.1f}")
+        _stage1c_dataframe(
+            audit_display,
+            height=285,
+            column_config={
+                "Decision ID": st.column_config.TextColumn("Decision ID", width="small"),
+                "Decision Date": st.column_config.TextColumn("Decision Date", width="small"),
+                "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+                "Management Decision": st.column_config.TextColumn("Decision", width="medium"),
+                "Original Recommendation": st.column_config.TextColumn("Original Recommendation", width="large"),
+                "Final Action": st.column_config.TextColumn("Final Action", width="large"),
+                "Rationale": st.column_config.TextColumn("Rationale", width="large"),
+                "Decision Owner": st.column_config.TextColumn("Decision Owner", width="medium"),
+                "Execution Required": st.column_config.TextColumn("Execution?", width="small"),
+                "Execution Action ID": st.column_config.TextColumn("Execution Action ID", width="small"),
+                "Recorded": st.column_config.TextColumn("Recorded", width="medium"),
+            },
+        )
+        st.download_button(
+            "Download Decision Audit CSV",
+            data=audit.to_csv(index=False).encode("utf-8"),
+            file_name="ecai_stage_1_c_6_decision_audit.csv",
+            mime="text/csv",
+            key="stage1c_download_decision_audit",
+        )
+
+    # Execution hand-off preview
+    st.markdown('<div class="ec-table-title">Execution Actions Created from Decisions</div>', unsafe_allow_html=True)
+    if not execution_actions:
+        st.info("No execution actions have been created from management decisions yet.")
+    else:
+        exec_from_decisions = pd.DataFrame(execution_actions).iloc[::-1].reset_index(drop=True)
+        exec_from_decisions["Score"] = exec_from_decisions["Score"].map(lambda x: f"{float(x):.1f}")
+        _stage1c_dataframe(
+            exec_from_decisions,
+            height=240,
+            column_config={
+                "Execution Action ID": st.column_config.TextColumn("Action ID", width="small"),
+                "Decision ID": st.column_config.TextColumn("Decision ID", width="small"),
+                "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+                "Action": st.column_config.TextColumn("Action", width="large"),
+                "Owner": st.column_config.TextColumn("Owner", width="medium"),
+                "Due": st.column_config.TextColumn("Due", width="small"),
+                "Status": st.column_config.TextColumn("Status", width="medium"),
+                "Next Step": st.column_config.TextColumn("Next Step", width="large"),
+                "Outcome": st.column_config.TextColumn("Outcome", width="medium"),
+            },
+        )
+
+    st.caption(
+        "Stage 1-C.6 prototype persistence: decision records and linked execution actions persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
+    )
 
 
 def render_stage_1c_execution():
-    """Functional bridge from the retained Management Execution Hub."""
+    """Execution bridge with Stage 1-C.6 decision-created actions surfaced above the retained v10 register."""
+    decision_actions = st.session_state.get("decision_execution_actions", [])
     total_actions = len(execution_df)
     actioned = int((execution_df["Status"].isin(["Assigned", "In Progress", "Monitoring", "Completed"])).sum())
     at_risk = int((execution_df["SLA Status"] == "At Risk").sum())
@@ -1768,11 +2141,39 @@ def render_stage_1c_execution():
     coverage_pct = (actioned / total_actions * 100) if total_actions else 0
 
     _stage1c_metric_row([
-        ("Total Actions", f"{total_actions}", "Execution register"),
-        ("Action Coverage", f"{coverage_pct:.0f}%", "Assigned / active / closed"),
+        ("Decision-Linked", f"{len(decision_actions)}", "Created from Approved / Modified decisions"),
+        ("Execution Register", f"{total_actions}", "Retained v10 migration baseline"),
         ("Exceptions", f"{len(exceptions)}", "High priority / at risk"),
         ("Closure Ready", f"{closure_ready}", "Monitoring or completed"),
     ])
+
+    st.markdown('<div class="ec-table-title">Decision-Created Execution Actions</div>', unsafe_allow_html=True)
+    if not decision_actions:
+        st.info("No execution actions have been created from Decisions yet. Approve or modify a Review Item and mark implementation as required.")
+    else:
+        decision_exec = pd.DataFrame(decision_actions).iloc[::-1].reset_index(drop=True)
+        decision_exec["Score"] = decision_exec["Score"].map(lambda x: f"{float(x):.1f}")
+        _stage1c_dataframe(
+            decision_exec[["Execution Action ID", "Decision ID", "Relationship", "Score", "Action", "Owner", "Due", "Status", "Next Step", "Outcome"]],
+            height=230,
+            column_config={
+                "Execution Action ID": st.column_config.TextColumn("Action ID", width="small"),
+                "Decision ID": st.column_config.TextColumn("Decision ID", width="small"),
+                "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+                "Score": st.column_config.TextColumn("Score", width="small"),
+                "Action": st.column_config.TextColumn("Action", width="large"),
+                "Owner": st.column_config.TextColumn("Owner", width="medium"),
+                "Due": st.column_config.TextColumn("Due", width="small"),
+                "Status": st.column_config.TextColumn("Status", width="medium"),
+                "Next Step": st.column_config.TextColumn("Next Step", width="large"),
+                "Outcome": st.column_config.TextColumn("Outcome", width="medium"),
+            },
+        )
+
+    st.markdown(
+        "<div class='ec-note'><b>Migration note.</b><br>The decision-linked actions above follow the locked Review → Decision → Execution workflow. The retained v10 execution register remains below as the migration baseline until Stage 1-C.7 rebuilds Execution around decision-created actions.</div>",
+        unsafe_allow_html=True,
+    )
 
     st.markdown('<div class="ec-table-title">Execution Exceptions</div>', unsafe_allow_html=True)
     if exceptions.empty:
@@ -1937,7 +2338,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-C.2 Polish Build · v10 institutional engines retained
+            EC-AI Executive Review Workspace · Stage 1-C.6 Decisions Build · v10 institutional engines retained
         </div>
         """,
         unsafe_allow_html=True,
