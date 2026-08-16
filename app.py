@@ -1,10 +1,11 @@
 
-# EC-AI Executive Review Workspace — Stage 1-C.9 Cross-Screen Integration Build
+# EC-AI Executive Review Workspace — Stage 1-C.10 Release Candidate
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
 # Stage 1-C.7: authoritative Execution workspace — exceptions, action register, updates, outcomes and closure.
 # Stage 1-C.8: Portfolio intelligence — Attention × Urgency, material patterns, relationship drill-down and Review promotion.
 # Stage 1-C.9: Cross-screen integration — portfolio-first Executive Briefing and contextual workflow hand-offs.
+# Stage 1-C.10: final state consistency, 1440px visual QA and Executive Review Pack export.
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
 #   python -m streamlit run ecai_stage_1_c_1_full_build.py
@@ -22,7 +23,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-C.8",
+    page_title="EC-AI Executive Review Workspace — Stage 1-C.10",
     page_icon="🏦",
     layout="wide",
 )
@@ -1330,6 +1331,36 @@ div[data-testid="stDataFrame"] [role="columnheader"] { font-weight:800 !importan
 .ec-engine-sub { color:#526173; font-size:10.5px; margin-top:3px; }
 .ec-shell-footer { color:var(--ec-slate-500); font-size:11px; padding-top:28px; margin-top:32px; border-top:1px solid var(--ec-slate-200); }
 
+/* Stage 1-C.10 release-candidate polish */
+div.stButton > button[kind="primary"], div[data-testid="stDownloadButton"] > button {
+    border-radius:9px !important;
+    font-weight:800 !important;
+}
+div.stButton > button[kind="primary"] {
+    background:var(--ec-navy-950) !important;
+    border-color:var(--ec-navy-950) !important;
+    color:#FFF !important;
+}
+div.stButton > button[kind="primary"]:hover {
+    background:var(--ec-blue-700) !important;
+    border-color:var(--ec-blue-700) !important;
+}
+div[data-testid="stDownloadButton"] > button:hover {
+    border-color:var(--ec-blue-700) !important;
+    color:var(--ec-navy-950) !important;
+}
+.ec-export-panel {
+    background:#FFF; border:1px solid var(--ec-slate-200); border-radius:14px; padding:16px 18px;
+    box-shadow:var(--ec-shadow-sm); margin:15px 0 8px;
+}
+.ec-export-title { color:var(--ec-navy-950); font-size:16px; font-weight:900; }
+.ec-export-copy { color:var(--ec-slate-700); font-size:13px; line-height:1.45; margin-top:4px; }
+@media (min-width:1200px) and (max-width:1520px) {
+    .block-container { max-width:1380px !important; padding-left:1.7rem !important; padding-right:1.7rem !important; }
+    .ec-page-title { font-size:30px; }
+    .ec-card-value { font-size:27px !important; }
+}
+
 @media (max-width:1100px) {
     .block-container { padding-left:1.2rem !important; padding-right:1.2rem !important; }
     .ec-shell-topbar { flex-direction:column; }
@@ -1442,7 +1473,7 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-C.9",
+        "shell_version": "Stage 1-C.10",
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
@@ -1849,8 +1880,207 @@ def _selected_relationship_row(default_to_top=True):
     return df.iloc[0] if default_to_top and len(df) else None
 
 
+
+def _stage1c_pdf_text(value) -> str:
+    """Sanitize dynamic text for built-in ReportLab Helvetica fonts."""
+    if value is None:
+        return ""
+    s = str(value)
+    replacements = {
+        "×": "x", "≥": ">=", "≤": "<=", "→": "->", "—": "-", "–": "-",
+        "’": "'", "“": '"', "”": '"', "·": " | ", "…": "...",
+    }
+    for old, new in replacements.items():
+        s = s.replace(old, new)
+    return s
+
+
+def build_stage1c_executive_review_pack_pdf(selected_company: str | None = None) -> bytes:
+    """Build the Stage 1-C.10 Executive Review Pack from the current app state.
+
+    The pack follows the operating workflow rather than the legacy v10 tabs:
+    Executive Briefing -> Review -> Decisions -> Execution -> Portfolio -> Relationship context.
+    """
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepTogether
+
+    portfolio_df = _portfolio_analysis_df()
+    signals = _portfolio_signal_definitions(portfolio_df)
+    decisions = _decision_history_df()
+    actions = _execution_actions_df()
+    promoted = pd.DataFrame(st.session_state.get("portfolio_review_items", []))
+
+    selected_company = selected_company or st.session_state.get("selected_relationship")
+    if selected_company not in df["Company"].tolist():
+        selected_company = portfolio_df.sort_values("Portfolio Priority", ascending=False).iloc[0]["Company"]
+    relationship = df[df["Company"] == selected_company].iloc[0]
+
+    exception_rows = []
+    for record in st.session_state.get("execution_actions", []):
+        reason = _execution_exception_reason(record)
+        if reason:
+            item = record.copy()
+            item["Exception Reason"] = reason
+            exception_rows.append(item)
+    exceptions = pd.DataFrame(exception_rows)
+
+    attention_count = int((portfolio_df["MAS"] >= 61).sum())
+    high_urgency = int((portfolio_df["Urgency"] >= 50).sum())
+    material_signals = [s for s in signals if s.get("Severity") in {"High", "Medium"}]
+    top_priority = portfolio_df.sort_values("Portfolio Priority", ascending=False).iloc[0]
+    act_now = portfolio_df[(portfolio_df["MAS"] >= 61) & (portfolio_df["Urgency"] >= 50)]
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=landscape(A4),
+        leftMargin=0.45 * inch,
+        rightMargin=0.45 * inch,
+        topMargin=0.42 * inch,
+        bottomMargin=0.42 * inch,
+        title="EC-AI Executive Review Pack",
+        author="EC-AI",
+    )
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="EC10Title", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=22, leading=25, textColor=colors.HexColor("#071B3A"), alignment=TA_LEFT, spaceAfter=7))
+    styles.add(ParagraphStyle(name="EC10H1", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=15, leading=18, textColor=colors.HexColor("#071B3A"), spaceBefore=5, spaceAfter=7))
+    styles.add(ParagraphStyle(name="EC10H2", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=11.5, leading=14, textColor=colors.HexColor("#0B2C55"), spaceBefore=5, spaceAfter=5))
+    styles.add(ParagraphStyle(name="EC10Body", parent=styles["BodyText"], fontName="Helvetica", fontSize=8.7, leading=12, textColor=colors.HexColor("#26374A"), spaceAfter=4))
+    styles.add(ParagraphStyle(name="EC10Small", parent=styles["BodyText"], fontName="Helvetica", fontSize=7.6, leading=10, textColor=colors.HexColor("#526173"), spaceAfter=3))
+
+    story = []
+    story.append(Paragraph("EC-AI Executive Review Pack", styles["EC10Title"]))
+    story.append(Paragraph(_stage1c_pdf_text(f"Review cycle: {st.session_state.get('review_cycle', 'Current Review')} | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Stage 1-C.10 Release Candidate"), styles["EC10Small"]))
+    story.append(Spacer(1, 8))
+
+    # 1. Executive Briefing
+    story.append(Paragraph("1. Executive Briefing", styles["EC10H1"]))
+    opening = (
+        f"{len(act_now)} relationship(s) sit in the Act Now quadrant. "
+        if len(act_now) else "No relationship currently sits in the Act Now quadrant. "
+    )
+    opening += f"{top_priority['Company']} is the highest combined portfolio priority. There are {len(material_signals)} material portfolio pattern(s) and {len(exceptions)} execution exception(s)."
+    story.append(Paragraph(_stage1c_pdf_text(opening), styles["EC10Body"]))
+    summary_data = [
+        ["Relationships", "Avg Score", "Management Attention", "High Urgency", "Execution Exceptions"],
+        [str(len(portfolio_df)), f"{portfolio_df['MAS'].mean():.1f}", str(attention_count), str(high_urgency), str(len(exceptions))],
+    ]
+    summary_table = Table(summary_data, colWidths=[1.55*inch]*5)
+    summary_table.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#071B3A")), ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"), ("FONTNAME", (0,1), (-1,1), "Helvetica-Bold"),
+        ("FONTSIZE", (0,0), (-1,-1), 8.2), ("ALIGN", (0,0), (-1,-1), "CENTER"),
+        ("GRID", (0,0), (-1,-1), 0.35, colors.HexColor("#D8DEE6")), ("BACKGROUND", (0,1), (-1,1), colors.HexColor("#F5F7FA")),
+        ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+    ]))
+    story.append(summary_table)
+    story.append(Spacer(1, 8))
+
+    top_rows = portfolio_df.sort_values("Portfolio Priority", ascending=False).head(6)
+    top_table_data = [["Priority", "Relationship", "Score", "Attention", "Urgency", "Primary Driver", "Recommendation"]]
+    for i, (_, r) in enumerate(top_rows.iterrows(), 1):
+        top_table_data.append([str(i), _stage1c_pdf_text(r["Company"]), f"{r['MAS']:.1f}", _stage1c_pdf_text(r["MAS_Band"]), f"{r['Urgency']:.1f}", _stage1c_pdf_text(r["Primary_Driver"]), _stage1c_pdf_text(r["Recommended_Action"])])
+    top_table = Table(top_table_data, colWidths=[0.5*inch,1.1*inch,0.55*inch,1.05*inch,0.65*inch,1.35*inch,2.0*inch], repeatRows=1)
+    top_table.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0B2C55")), ("TEXTCOLOR",(0,0),(-1,0),colors.white),
+        ("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"), ("FONTSIZE",(0,0),(-1,-1),7.3),
+        ("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#D8DEE6")), ("VALIGN",(0,0),(-1,-1),"TOP"),
+        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")]),
+        ("TOPPADDING",(0,0),(-1,-1),4), ("BOTTOMPADDING",(0,0),(-1,-1),4),
+    ]))
+    story.append(top_table)
+    story.append(PageBreak())
+
+    # 2. Review
+    story.append(Paragraph("2. Review", styles["EC10H1"]))
+    story.append(Paragraph("Management judgement begins here. Portfolio patterns may be promoted into Review, while relationship recommendations remain explicit review items.", styles["EC10Body"]))
+    if not promoted.empty:
+        story.append(Paragraph("Portfolio-promoted review items", styles["EC10H2"]))
+        p_data = [["Review Item", "Pattern", "Severity", "Relationships", "Management Question"]]
+        for _, r in promoted.tail(6).iterrows():
+            p_data.append([_stage1c_pdf_text(r.get("Review Item ID","")), _stage1c_pdf_text(r.get("Pattern","")), _stage1c_pdf_text(r.get("Severity","")), _stage1c_pdf_text(r.get("Relationships","")), _stage1c_pdf_text(r.get("Management Question",""))])
+        p_table = Table(p_data, colWidths=[0.75*inch,1.55*inch,0.7*inch,2.0*inch,4.0*inch], repeatRows=1)
+        p_table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0B2C55")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),7.2),("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#D8DEE6")),("VALIGN",(0,0),(-1,-1),"TOP"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")])]))
+        story.append(p_table)
+        story.append(Spacer(1, 8))
+    story.append(Paragraph("Relationship review agenda", styles["EC10H2"]))
+    review_data = [["Relationship", "Score", "Attention", "Primary Driver", "EC-AI Recommendation", "Expected Outcome"]]
+    for _, r in df.sort_values("MAS", ascending=False).head(8).iterrows():
+        review_data.append([_stage1c_pdf_text(r["Company"]),f"{r['MAS']:.1f}",_stage1c_pdf_text(r["MAS_Band"]),_stage1c_pdf_text(r["Primary_Driver"]),_stage1c_pdf_text(r["Recommended_Action"]),_stage1c_pdf_text(r["Expected_Outcome"])])
+    review_table = Table(review_data, colWidths=[1.0*inch,0.55*inch,1.05*inch,1.3*inch,1.75*inch,4.0*inch], repeatRows=1)
+    review_table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0B2C55")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),7.1),("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#D8DEE6")),("VALIGN",(0,0),(-1,-1),"TOP"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")])]))
+    story.append(review_table)
+    story.append(PageBreak())
+
+    # 3. Decisions
+    story.append(Paragraph("3. Management Decisions", styles["EC10H1"]))
+    if decisions.empty:
+        story.append(Paragraph("No management decisions have been recorded in the current active session.", styles["EC10Body"]))
+    else:
+        d_data = [["Decision", "Date", "Relationship", "Decision", "Final Action", "Execution", "Owner / Forum"]]
+        for _, r in decisions.head(10).iterrows():
+            d_data.append([_stage1c_pdf_text(r.get("Decision ID","")),_stage1c_pdf_text(r.get("Decision Date","")),_stage1c_pdf_text(r.get("Relationship","")),_stage1c_pdf_text(r.get("Management Decision","")),_stage1c_pdf_text(r.get("Final Action","")),_stage1c_pdf_text(r.get("Execution Required","")),_stage1c_pdf_text(r.get("Decision Owner",""))])
+        d_table = Table(d_data, colWidths=[0.8*inch,0.8*inch,1.1*inch,0.85*inch,2.1*inch,0.7*inch,1.5*inch], repeatRows=1)
+        d_table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#071B3A")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),7.3),("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#D8DEE6")),("VALIGN",(0,0),(-1,-1),"TOP")]))
+        story.append(d_table)
+    story.append(Spacer(1, 10))
+
+    # 4. Execution
+    story.append(Paragraph("4. Execution and Outcomes", styles["EC10H1"]))
+    if actions.empty:
+        story.append(Paragraph("No execution actions are currently available.", styles["EC10Body"]))
+    else:
+        e_data = [["Action ID", "Relationship", "Action", "Owner", "Status", "Progress", "SLA", "Outcome"]]
+        for _, r in actions.sort_values(["Status","Score"], ascending=[True,False]).head(12).iterrows():
+            e_data.append([_stage1c_pdf_text(r.get("Execution Action ID","")),_stage1c_pdf_text(r.get("Relationship","")),_stage1c_pdf_text(r.get("Action","")),_stage1c_pdf_text(r.get("Owner","")),_stage1c_pdf_text(r.get("Status","")),f"{int(r.get('Progress_%',0))}%",_stage1c_pdf_text(r.get("SLA Status","")),_stage1c_pdf_text(r.get("Outcome Status",""))])
+        e_table = Table(e_data, colWidths=[0.8*inch,1.0*inch,2.0*inch,1.2*inch,0.9*inch,0.65*inch,0.65*inch,1.15*inch], repeatRows=1)
+        e_table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#071B3A")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),7.2),("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#D8DEE6")),("VALIGN",(0,0),(-1,-1),"TOP"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")])]))
+        story.append(e_table)
+    if len(exceptions):
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(_stage1c_pdf_text(f"Execution exceptions requiring management follow-up: {len(exceptions)}."), styles["EC10Body"]))
+    story.append(PageBreak())
+
+    # 5. Portfolio
+    story.append(Paragraph("5. Portfolio Intelligence", styles["EC10H1"]))
+    story.append(Paragraph("Portfolio is the supporting evidence layer. Material patterns are promoted into Review rather than decided directly from Portfolio.", styles["EC10Body"]))
+    s_data = [["Signal", "Pattern", "Severity", "Relationships", "Management Question"]]
+    for s in signals:
+        s_data.append([_stage1c_pdf_text(s["Signal ID"]),_stage1c_pdf_text(s["Pattern"]),_stage1c_pdf_text(s["Severity"]),_stage1c_pdf_text(s["Relationships"]),_stage1c_pdf_text(s["Management Question"])])
+    s_table = Table(s_data, colWidths=[0.85*inch,1.7*inch,0.7*inch,2.2*inch,4.0*inch], repeatRows=1)
+    s_table.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0B2C55")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("FONTNAME",(0,0),(-1,0),"Helvetica-Bold"),("FONTSIZE",(0,0),(-1,-1),7.2),("GRID",(0,0),(-1,-1),0.25,colors.HexColor("#D8DEE6")),("VALIGN",(0,0),(-1,-1),"TOP"),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#F8FAFC")])]))
+    story.append(s_table)
+    story.append(Spacer(1, 10))
+
+    # 6. Selected relationship
+    story.append(Paragraph(_stage1c_pdf_text(f"6. Relationship Context - {selected_company}"), styles["EC10H1"]))
+    rel_lines = [
+        f"Country / Sector: {relationship['Country']} / {relationship['Sector']}",
+        f"External rating / Outlook: {relationship['Rating']} / {relationship['Outlook']}",
+        f"Score / Attention Rating: {relationship['MAS']:.1f} / {relationship['MAS_Band']}",
+        f"Primary Driver: {relationship['Primary_Driver']}",
+        f"EC-AI Recommendation: {relationship['Recommended_Action']}",
+        f"Expected Outcome: {relationship['Expected_Outcome']}",
+        f"Revenue: {fmt_b(relationship['Revenue_B'])} | Assets: {fmt_b(relationship['Assets_B'])} | Debt: {fmt_b(relationship['Debt_B'])}",
+    ]
+    for line in rel_lines:
+        story.append(Paragraph(_stage1c_pdf_text(line), styles["EC10Body"]))
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("AI / Management Interpretation", styles["EC10H2"]))
+    story.append(Paragraph(_stage1c_pdf_text(relationship["AI_Reasoning"]), styles["EC10Body"]))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph("EC-AI Executive Review Workspace | Stage 1-C.10 Release Candidate | Session-state prototype persistence", styles["EC10Small"]))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
 def render_stage_1c_briefing():
-    """Stage 1-C.9 portfolio-first Executive Briefing.
+    """Stage 1-C.10 portfolio-first Executive Briefing.
 
     Portfolio supplies the signature intelligence; Briefing distils it into the
     immediate management agenda and provides contextual hand-offs into Review,
@@ -2077,6 +2307,47 @@ def render_stage_1c_briefing():
         "Escalate execution exceptions where an approved action is not progressing or outcome remains unresolved.",
     ]
     st.markdown("<div class='ec-note'><ol>" + "".join([f"<li>{x}</li>" for x in agenda]) + "</ol></div>", unsafe_allow_html=True)
+
+    # ------------------------------------------------------------------
+    # EXECUTIVE REVIEW PACK — Stage 1-C.10 workflow-aligned export
+    # ------------------------------------------------------------------
+    st.markdown(
+        """
+        <div class="ec-export-panel">
+          <div class="ec-export-title">Executive Review Pack</div>
+          <div class="ec-export-copy">Export the current management state in workflow order: Executive Briefing, Review, Decisions, Execution & Outcomes, Portfolio Intelligence and the selected relationship context.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    export1, export2 = st.columns([1.25, 1], gap="small")
+    with export1:
+        review_pack = build_stage1c_executive_review_pack_pdf(selected_company=focus_company)
+        st.download_button(
+            "Download Executive Review Pack PDF",
+            data=review_pack,
+            file_name=f"ecai_executive_review_pack_{date.today().isoformat()}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            key="stage1c_download_review_pack",
+        )
+    with export2:
+        scorecard_export = portfolio_df[[
+            "Company", "Country", "Sector", "Rating", "Outlook", "MAS", "MAS_Band", "Urgency",
+            "Primary_Driver", "Recommended_Action", "Data_Quality"
+        ]].copy()
+        scorecard_export = scorecard_export.rename(columns={
+            "MAS": "Score", "MAS_Band": "Attention Rating", "Primary_Driver": "Primary Driver",
+            "Recommended_Action": "Recommendation", "Data_Quality": "Data Quality %",
+        })
+        st.download_button(
+            "Download Portfolio Scorecard CSV",
+            data=scorecard_export.to_csv(index=False).encode("utf-8"),
+            file_name=f"ecai_portfolio_scorecard_{date.today().isoformat()}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="stage1c_download_scorecard",
+        )
 
 
 def render_stage_1c_review():
@@ -2557,7 +2828,7 @@ def render_stage_1c_decisions():
 
 
 def render_stage_1c_execution():
-    """Stage 1-C.7 authoritative Execution workspace.
+    """Stage 1-C.10 authoritative Execution workspace.
 
     Locked hierarchy: Execution Exceptions → Action Register → Action Detail / Update → Outcome / Closure.
     Execution is the source of truth for implementation outcome.
@@ -2788,7 +3059,7 @@ def render_stage_1c_execution():
 
     if st.button("Update Execution Action", type="primary", use_container_width=True, key=f"exec_save_{selected_action_id}"):
         try:
-            _update_stage1c_execution_action(
+            updated_action = _update_stage1c_execution_action(
                 selected_action_id,
                 owner=owner_value,
                 due=due_value,
@@ -2801,7 +3072,19 @@ def render_stage_1c_execution():
                 outcome=outcome_value,
                 closure_evidence=closure_evidence_value,
             )
-            st.session_state.execution_flash = f"{selected_action_id} updated. Execution remains the source of truth for outcome and closure."
+            # Streamlit widgets retain keyed values across reruns. Synchronize them
+            # with the authoritative action after C.10 auto-closure rules are applied.
+            st.session_state[f"exec_owner_{selected_action_id}"] = updated_action.get("Owner", "")
+            st.session_state[f"exec_due_{selected_action_id}"] = updated_action.get("Due", "")
+            st.session_state[f"exec_status_{selected_action_id}"] = updated_action.get("Status", "Assigned")
+            st.session_state[f"exec_progress_{selected_action_id}"] = int(updated_action.get("Progress_%", 0))
+            st.session_state[f"exec_follow_{selected_action_id}"] = updated_action.get("Follow-up Cadence", "Bi-weekly")
+            st.session_state[f"exec_sla_{selected_action_id}"] = updated_action.get("SLA Status", "On Track")
+            st.session_state[f"exec_next_{selected_action_id}"] = updated_action.get("Next Step", "")
+            st.session_state[f"exec_outcome_status_{selected_action_id}"] = updated_action.get("Outcome Status", "Pending")
+            st.session_state[f"exec_outcome_{selected_action_id}"] = updated_action.get("Outcome", "Pending")
+            st.session_state[f"exec_closure_{selected_action_id}"] = updated_action.get("Closure Evidence", "")
+            st.session_state.execution_flash = f"{selected_action_id} updated. Execution state and closure fields are synchronized."
             st.rerun()
         except Exception as exc:
             st.error(str(exc))
@@ -2858,7 +3141,7 @@ def render_stage_1c_execution():
         )
 
     st.caption(
-        "Stage 1-C.9 prototype persistence: execution and portfolio-promotion state persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
+        "Stage 1-C.10 release-candidate persistence: execution and portfolio-promotion state persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
     )
 
 
@@ -3192,7 +3475,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-C.9 Cross-Screen Integration Build · v10 institutional engines retained
+            EC-AI Executive Review Workspace · Stage 1-C.10 Release Candidate · workflow-integrated institutional engines
         </div>
         """,
         unsafe_allow_html=True,
