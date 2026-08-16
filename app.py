@@ -1,8 +1,9 @@
 
-# EC-AI Executive Review Workspace — Stage 1-C.7 Execution Build
+# EC-AI Executive Review Workspace — Stage 1-C.8 Portfolio Build
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
 # Stage 1-C.7: authoritative Execution workspace — exceptions, action register, updates, outcomes and closure.
+# Stage 1-C.8: Portfolio intelligence — Attention × Urgency, material patterns, relationship drill-down and Review promotion.
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
 #   python -m streamlit run ecai_stage_1_c_1_full_build.py
@@ -20,7 +21,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-C.7",
+    page_title="EC-AI Executive Review Workspace — Stage 1-C.8",
     page_icon="🏦",
     layout="wide",
 )
@@ -1440,12 +1441,14 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-C.7",
+        "shell_version": "Stage 1-C.8",
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
         "execution_history": [],
         "execution_flash": None,
+        "portfolio_review_items": [],
+        "portfolio_signal_flash": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1721,15 +1724,23 @@ def _update_stage1c_execution_action(
     if target is None:
         raise ValueError(f"Execution action {action_id} not found.")
 
-    if status == "Completed":
-        if outcome_status in {"Pending", "Pending Validation", ""}:
-            raise ValueError("A completed action requires a validated Outcome Status.")
-        if not outcome.strip():
-            raise ValueError("A completed action requires an outcome narrative.")
-        if not closure_evidence.strip():
-            raise ValueError("A completed action requires closure evidence.")
+    validated_outcome = outcome_status not in {"Pending", "Pending Validation", ""}
+    has_outcome = bool(outcome.strip()) and outcome.strip().lower() != "pending"
+    has_closure_evidence = bool(closure_evidence.strip())
+
+    # Stage 1-C.7 state-consistency refinement carried into C.8:
+    # a 100% action with a validated outcome and closure evidence is closed, not left In Progress.
+    if status == "Completed" or int(progress) >= 100:
+        if not validated_outcome:
+            raise ValueError("100% / Completed execution requires a validated Outcome Status.")
+        if not has_outcome:
+            raise ValueError("100% / Completed execution requires an outcome narrative.")
+        if not has_closure_evidence:
+            raise ValueError("100% / Completed execution requires closure evidence.")
+        status = "Completed"
         progress = 100
         sla_status = "Closed"
+        next_step = "Action closed — no further execution required."
 
     before_status = target.get("Status", "")
     before_outcome = target.get("Outcome Status", "Pending")
@@ -1905,7 +1916,29 @@ def render_stage_1c_review():
         ("Action Types", f"{df['Recommended_Action'].nunique()}", "Recommendation engine"),
     ])
 
-    st.markdown('<div class="ec-table-title">Review Queue</div>', unsafe_allow_html=True)
+    promoted_portfolio_items = st.session_state.get("portfolio_review_items", [])
+    if promoted_portfolio_items:
+        st.markdown('<div class="ec-table-title">Portfolio-Promoted Review Items</div>', unsafe_allow_html=True)
+        promoted_df = pd.DataFrame(promoted_portfolio_items)
+        promoted_cols = [
+            "Review Item ID", "Pattern", "Severity", "Relationships",
+            "Management Question", "Promoted"
+        ]
+        _stage1c_dataframe(
+            promoted_df[[c for c in promoted_cols if c in promoted_df.columns]],
+            height=min(245, 82 + 42 * len(promoted_df)),
+            column_config={
+                "Review Item ID": st.column_config.TextColumn("Review Item", width="small"),
+                "Pattern": st.column_config.TextColumn("Portfolio Pattern", width="large"),
+                "Severity": st.column_config.TextColumn("Severity", width="small"),
+                "Relationships": st.column_config.TextColumn("Relationships", width="large"),
+                "Management Question": st.column_config.TextColumn("Management Question", width="large"),
+                "Promoted": st.column_config.TextColumn("Promoted", width="medium"),
+            },
+        )
+        st.caption("These items originated in Portfolio Intelligence and were explicitly promoted into Review for management judgement.")
+
+    st.markdown('<div class="ec-table-title">Relationship Review Queue</div>', unsafe_allow_html=True)
     review_table = attention[["Rank", "Company", "MAS", "MAS_Band", "Primary_Driver", "Recommended_Action", "Expected_Outcome"]].copy()
     review_table.columns = ["Priority", "Relationship", "Score", "Attention Rating", "Primary Driver", "Recommendation", "Expected Outcome"]
     review_table["Score"] = review_table["Score"].map(lambda x: f"{x:.1f}")
@@ -2624,75 +2657,311 @@ def render_stage_1c_execution():
         )
 
     st.caption(
-        "Stage 1-C.7 prototype persistence: execution state and history persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
+        "Stage 1-C.8 prototype persistence: execution and portfolio-promotion state persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
     )
+
+
+def _portfolio_urgency_score(row) -> float:
+    """Translate retained health/risk attention pillars into a 0-100 urgency signal."""
+    health = safe_float(row.get("Health_Score"), 0) or 0
+    risk = safe_float(row.get("Risk_Score"), 0) or 0
+    # Existing health score is already deterioration-oriented; risk score is rating/outlook oriented.
+    urgency = (health / 25.0) * 70.0 + (risk / 10.0) * 30.0
+    return round(max(0.0, min(100.0, urgency)), 1)
+
+
+def _portfolio_urgency_band(score: float) -> str:
+    if score >= 55:
+        return "Immediate"
+    if score >= 40:
+        return "Near-term"
+    if score >= 25:
+        return "Watch"
+    return "Planned"
+
+
+def _portfolio_analysis_df() -> pd.DataFrame:
+    out = df.copy()
+    out["Urgency"] = out.apply(_portfolio_urgency_score, axis=1)
+    out["Urgency Band"] = out["Urgency"].apply(_portfolio_urgency_band)
+    out["Portfolio Priority"] = (out["MAS"] * 0.65 + out["Urgency"] * 0.35).round(1)
+    return out
+
+
+def _portfolio_signal_definitions(portfolio_df: pd.DataFrame):
+    """Material, explainable portfolio patterns derived only from retained relationship data."""
+    signals = []
+
+    attention = portfolio_df[portfolio_df["MAS"] >= 61].sort_values("MAS", ascending=False)
+    signals.append({
+        "Signal ID": "SIG-ATTENTION",
+        "Pattern": "Concentrated management attention",
+        "Severity": "High" if len(attention) else "Low",
+        "Relationships": ", ".join(attention["Company"].tolist()) if len(attention) else "None",
+        "Interpretation": f"{len(attention)} relationship(s) currently sit at Management Attention or above. The portfolio requires explicit management judgement on the highest-ranked cases." if len(attention) else "No relationship currently exceeds the Management Attention threshold.",
+        "Management Question": "Which high-attention relationships require explicit management action this review cycle?",
+    })
+
+    deteriorating = portfolio_df[pd.to_numeric(portfolio_df["Revenue_Growth"], errors="coerce") < 0].sort_values("Revenue_Growth")
+    signals.append({
+        "Signal ID": "SIG-MOMENTUM",
+        "Pattern": "Relationship momentum deterioration",
+        "Severity": "High" if len(deteriorating) >= 3 else "Medium" if len(deteriorating) else "Low",
+        "Relationships": ", ".join(deteriorating["Company"].tolist()) if len(deteriorating) else "None",
+        "Interpretation": f"{len(deteriorating)} relationship(s) show negative reported revenue growth, which may warrant closer relationship-health review." if len(deteriorating) else "No negative revenue-growth pattern is visible in the current public-company data.",
+        "Management Question": "Do deteriorating relationships require recovery actions or closer monitoring?",
+    })
+
+    debt_valid = portfolio_df.dropna(subset=["Debt_B"]).sort_values("Debt_B", ascending=False)
+    debt_total = float(debt_valid["Debt_B"].sum()) if len(debt_valid) else 0.0
+    top3_debt = float(debt_valid.head(3)["Debt_B"].sum()) if len(debt_valid) else 0.0
+    debt_share = top3_debt / debt_total if debt_total > 0 else 0.0
+    signals.append({
+        "Signal ID": "SIG-WALLET",
+        "Pattern": "Funding wallet concentration",
+        "Severity": "High" if debt_share >= 0.70 else "Medium" if debt_share >= 0.50 else "Low",
+        "Relationships": ", ".join(debt_valid.head(3)["Company"].tolist()) if len(debt_valid) else "None",
+        "Interpretation": f"The top three debt relationships represent {debt_share*100:.0f}% of observed portfolio debt, concentrating potential lending / DCM wallet in a small number of clients.",
+        "Management Question": "Should management prioritise wallet validation on the largest funding relationships?",
+    })
+
+    low_quality = portfolio_df[portfolio_df["Data_Quality"] < 75].sort_values("Data_Quality")
+    signals.append({
+        "Signal ID": "SIG-DATA",
+        "Pattern": "Portfolio data-quality gaps",
+        "Severity": "Medium" if len(low_quality) else "Low",
+        "Relationships": ", ".join(low_quality["Company"].tolist()) if len(low_quality) else "None",
+        "Interpretation": f"{len(low_quality)} relationship(s) have less than 75% coverage across the core public-company fields. Management should distinguish missing evidence from true low attention." if len(low_quality) else "Core public-company data coverage is above the current quality threshold across the universe.",
+        "Management Question": "Which data gaps are material enough to resolve before the next management review?",
+    })
+    return signals
+
+
+def _promote_portfolio_signal(signal: dict):
+    existing = st.session_state.get("portfolio_review_items", [])
+    for item in existing:
+        if item.get("Signal ID") == signal["Signal ID"] and item.get("Review Cycle") == st.session_state.get("review_cycle"):
+            return item, False
+    review_id = f"PRI-{len(existing)+1:04d}"
+    record = {
+        "Review Item ID": review_id,
+        "Signal ID": signal["Signal ID"],
+        "Pattern": signal["Pattern"],
+        "Severity": signal["Severity"],
+        "Relationships": signal["Relationships"],
+        "Management Question": signal["Management Question"],
+        "Interpretation": signal["Interpretation"],
+        "Source": "Portfolio Intelligence",
+        "Review Cycle": st.session_state.get("review_cycle", "Current Review"),
+        "Promoted": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "Status": "Open",
+    }
+    st.session_state.portfolio_review_items.append(record)
+    st.session_state.active_portfolio_signal_id = signal["Signal ID"]
+    st.session_state.portfolio_signal_flash = f"{review_id} created from {signal['Pattern']} and promoted into Review."
+    return record, True
 
 
 def render_stage_1c_portfolio():
-    """Functional bridge from the retained Portfolio Intelligence evidence layer."""
-    largest = df.sort_values("Revenue_B", ascending=False).iloc[0]["Company"]
+    """Stage 1-C.8 Portfolio — supporting intelligence with six locked overview components."""
+    portfolio_df = _portfolio_analysis_df()
+    signals = _portfolio_signal_definitions(portfolio_df)
+
+    flash = st.session_state.get("portfolio_signal_flash")
+    if flash:
+        st.success(flash)
+        st.session_state.portfolio_signal_flash = None
+
+    # ------------------------------------------------------------------
+    # 1. PORTFOLIO SNAPSHOT
+    # ------------------------------------------------------------------
+    attention_count = int((portfolio_df["MAS"] >= 61).sum())
+    urgent_count = int((portfolio_df["Urgency"] >= 50).sum())
+    largest = portfolio_df.sort_values("Revenue_B", ascending=False).iloc[0]["Company"]
     _stage1c_metric_row([
-        ("Relationships", f"{len(df)}", "Public-company universe"),
-        ("Rated", f"{int((df['Rating'] != 'NR').sum())}", "External rating available"),
-        ("Data Quality", f"{df['Data_Quality'].mean():.0f}%", "Average field coverage"),
-        ("Largest Revenue", largest, "By LTM revenue"),
+        ("Relationships", f"{len(portfolio_df)}", "Public-company universe"),
+        ("Average Score", f"{portfolio_df['MAS'].mean():.1f}", "Portfolio attention level"),
+        ("Management Attention", f"{attention_count}", "Score ≥ 61"),
+        ("High Urgency", f"{urgent_count}", "Urgency ≥ 50"),
+        ("Data Quality", f"{portfolio_df['Data_Quality'].mean():.0f}%", "Average field coverage"),
     ])
-
-    st.markdown("<div class='ec-note'><b>Portfolio Intelligence is the supporting evidence layer.</b><br>Material patterns should be promoted into Review rather than decided directly from this screen.</div>", unsafe_allow_html=True)
-
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
-        plot_df = df.dropna(subset=["Revenue_B", "Debt_B"]).copy()
-        fig = px.scatter(
-            plot_df,
-            x="Revenue_B",
-            y="Debt_B",
-            size="Assets_B",
-            size_max=34,
-            color="MAS_Band",
-            color_discrete_map=MAS_BAND_COLORS,
-            hover_name="Company",
-            text="Company",
-            title="Revenue vs Debt · Wallet Opportunity Evidence",
-        )
-        label_positions = {
-            "Toyota": "top center", "DBS": "top left", "CK Hutchison": "middle left",
-            "Tencent": "top left", "TSMC": "top right", "Alibaba": "bottom right",
-            "Jardine Matheson": "bottom left", "HSBC": "top right", "BHP": "top center", "Rio Tinto": "top center",
-        }
-        for trace in fig.data:
-            trace.update(
-                textposition=[label_positions.get(str(company), "top center") for company in trace.text],
-                marker_line_width=1.4,
-                marker_line_color="white",
-            )
-        apply_mckinsey_layout(fig, height=440)
-        fig.update_layout(xaxis_title="Revenue (USD B)", yaxis_title="Debt (USD B)", legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0))
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    with c2:
-        debt_df = df.dropna(subset=["Debt_B"]).sort_values("Debt_B", ascending=False)
-        fig2 = px.bar(debt_df, x="Company", y="Debt_B", title="Debt by Relationship", text="Debt_B")
-        fig2.update_traces(texttemplate="%{text:.1f}B", textposition="outside", marker_color=MCKINSEY_BLUE, width=0.58, cliponaxis=False)
-        apply_mckinsey_layout(fig2, height=440)
-        fig2.update_layout(xaxis_title="", yaxis_title="Debt (USD B)", bargap=0.32, margin=dict(l=20, r=25, t=52, b=42))
-        fig2.update_xaxes(showgrid=False, tickangle=0)
-        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
-
-    st.markdown('<div class="ec-table-title">Relationship Master Table</div>', unsafe_allow_html=True)
-    display = raw_table(df)
-    for c in ["Revenue_B", "Assets_B", "Debt_B", "Equity_B", "Cash_B", "InterestExpense_B", "MarketCap_B", "EV_B"]:
-        display[c] = display[c].map(lambda x: None if pd.isna(x) else round(float(x), 1))
-    _stage1c_dataframe(
-        display,
-        height=355,
-        column_config={
-            "Company": st.column_config.TextColumn("Company", width="medium"),
-            "Country": st.column_config.TextColumn("Country", width="medium"),
-            "Sector": st.column_config.TextColumn("Sector", width="large"),
-            "Rating": st.column_config.TextColumn("Rating", width="small"),
-            "Outlook": st.column_config.TextColumn("Outlook", width="small"),
-        },
+    st.markdown(
+        "<div class='ec-note'><b>Portfolio is the supporting intelligence layer.</b><br>It identifies material patterns and relationships that should be promoted into Review. Decisions are not made directly from Portfolio.</div>",
+        unsafe_allow_html=True,
     )
+
+    # ------------------------------------------------------------------
+    # 2. ATTENTION × URGENCY — SIGNATURE VISUAL
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Attention × Urgency</div>', unsafe_allow_html=True)
+    fig = px.scatter(
+        portfolio_df,
+        x="MAS",
+        y="Urgency",
+        size="Strategic_Score",
+        size_max=28,
+        color="MAS_Band",
+        color_discrete_map=MAS_BAND_COLORS,
+        text="Company",
+        hover_name="Company",
+        hover_data={"MAS": ":.1f", "Urgency": ":.1f", "Primary_Driver": True, "Strategic_Score": False},
+    )
+    fig.update_traces(marker=dict(line=dict(width=1.4, color="white")), textposition="top center")
+    apply_mckinsey_layout(fig, height=500, title="Which relationships deserve management attention first?")
+    fig.add_vline(x=61, line_dash="dash", line_color="#9AA4B2", line_width=1)
+    fig.add_hline(y=50, line_dash="dash", line_color="#9AA4B2", line_width=1)
+    fig.add_annotation(x=68, y=92, text="ACT NOW", showarrow=False, font=dict(size=11, color=MCKINSEY_NAVY))
+    fig.add_annotation(x=47, y=92, text="URGENT REVIEW", showarrow=False, font=dict(size=11, color=MCKINSEY_STEEL))
+    fig.add_annotation(x=68, y=12, text="STRATEGIC PRIORITY", showarrow=False, font=dict(size=11, color=MCKINSEY_STEEL))
+    fig.add_annotation(x=47, y=12, text="MONITOR", showarrow=False, font=dict(size=11, color=MCKINSEY_SLATE))
+    fig.update_layout(
+        xaxis_title="Attention Score",
+        yaxis_title="Urgency",
+        xaxis=dict(range=[max(0, min(40, float(portfolio_df['MAS'].min())-5)), min(100, float(portfolio_df['MAS'].max())+10)]),
+        yaxis=dict(range=[0, 100]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+        margin=dict(l=35, r=25, t=70, b=45),
+    )
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    high_high = portfolio_df[(portfolio_df["MAS"] >= 61) & (portfolio_df["Urgency"] >= 50)].sort_values("Portfolio Priority", ascending=False)
+    top_priority = portfolio_df.sort_values("Portfolio Priority", ascending=False).iloc[0]
+    if len(high_high):
+        matrix_interpretation = f"{len(high_high)} relationship(s) sit in the Act Now quadrant. {high_high.iloc[0]['Company']} is the highest combined attention-and-urgency priority."
+    else:
+        matrix_interpretation = f"No relationship currently sits in the high-attention / high-urgency quadrant. {top_priority['Company']} is the highest combined portfolio priority and should anchor drill-down review."
+    st.markdown(f"<div class='ec-note'><b>Management interpretation:</b> {matrix_interpretation}</div>", unsafe_allow_html=True)
+
+    portfolio_options = portfolio_df.sort_values("Portfolio Priority", ascending=False)["Company"].tolist()
+    current_rel = st.session_state.get("selected_relationship")
+    default_company = current_rel if current_rel in portfolio_options else portfolio_options[0]
+    selected_company = st.selectbox(
+        "Relationship drill-down from portfolio visuals",
+        portfolio_options,
+        index=portfolio_options.index(default_company),
+        key="stage1c_portfolio_relationship",
+    )
+    st.session_state.selected_relationship = selected_company
+
+    # ------------------------------------------------------------------
+    # 3. MATERIAL PORTFOLIO PATTERNS
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Material Portfolio Patterns</div>', unsafe_allow_html=True)
+    st.caption("Patterns are portfolio-level signals. Promote only material patterns into Review; do not decide them directly here.")
+    signal_cols = st.columns(2, gap="medium")
+    existing_signal_ids = {x.get("Signal ID") for x in st.session_state.get("portfolio_review_items", [])}
+    for i, signal in enumerate(signals):
+        with signal_cols[i % 2]:
+            with st.container(border=True):
+                st.markdown(f"**{signal['Pattern']}**")
+                st.caption(f"Severity: {signal['Severity']} · Signal: {signal['Signal ID']}")
+                st.write(signal["Interpretation"])
+                st.caption(f"Relationships: {signal['Relationships']}")
+                st.markdown(f"**Management question:** {signal['Management Question']}")
+                already = signal["Signal ID"] in existing_signal_ids
+                if st.button(
+                    "In Review" if already else "Promote to Review",
+                    key=f"promote_{signal['Signal ID']}",
+                    disabled=already or signal["Severity"] == "Low",
+                    use_container_width=True,
+                ):
+                    _, created = _promote_portfolio_signal(signal)
+                    if created:
+                        st.rerun()
+
+    # ------------------------------------------------------------------
+    # 4. WALLET / BALANCE-SHEET EVIDENCE
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Wallet & Balance-Sheet Evidence</div>', unsafe_allow_html=True)
+    plot_df = portfolio_df.dropna(subset=["Revenue_B", "Debt_B"]).copy()
+    wallet_fig = px.scatter(
+        plot_df,
+        x="Revenue_B",
+        y="Debt_B",
+        size="Assets_B",
+        size_max=36,
+        color="MAS_Band",
+        color_discrete_map=MAS_BAND_COLORS,
+        hover_name="Company",
+        text="Company",
+        title="Revenue vs Debt · Where funding wallet is concentrated",
+    )
+    label_positions = {
+        "Toyota": "top center", "DBS": "top left", "CK Hutchison": "middle left",
+        "Tencent": "top left", "TSMC": "top right", "Alibaba": "bottom right",
+        "Jardine Matheson": "bottom left", "HSBC": "top right", "BHP": "top center", "Rio Tinto": "top center",
+    }
+    for trace in wallet_fig.data:
+        trace.update(
+            textposition=[label_positions.get(str(company), "top center") for company in trace.text],
+            marker_line_width=1.4,
+            marker_line_color="white",
+        )
+    apply_mckinsey_layout(wallet_fig, height=450)
+    wallet_fig.update_layout(
+        xaxis_title="Revenue (USD B)", yaxis_title="Debt (USD B)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+    )
+    st.plotly_chart(wallet_fig, use_container_width=True, config={"displayModeBar": False})
+    debt_leader = portfolio_df.dropna(subset=["Debt_B"]).sort_values("Debt_B", ascending=False).iloc[0]
+    st.markdown(
+        f"<div class='ec-note'><b>Management interpretation:</b> {debt_leader['Company']} has the largest observed debt base at {fmt_b(debt_leader['Debt_B'])}. Use the relationship drill-down to distinguish large theoretical wallet from a genuine management action.</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ------------------------------------------------------------------
+    # 5. RELATIONSHIP DRILL-DOWN
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Relationship Drill-down</div>', unsafe_allow_html=True)
+    selected = portfolio_df[portfolio_df["Company"] == selected_company].iloc[0]
+    _stage1c_metric_row([
+        ("Score / Rating", f"{selected['MAS']:.1f}", selected["MAS_Band"]),
+        ("Urgency", f"{selected['Urgency']:.1f}", selected["Urgency Band"]),
+        ("Primary Driver", selected["Primary_Driver"], "Why it is visible"),
+        ("Revenue", fmt_b(selected["Revenue_B"]), f"Growth {fmt_pct(selected['Revenue_Growth'])}"),
+        ("Debt", fmt_b(selected["Debt_B"]), "Funding wallet proxy"),
+    ])
+    st.markdown(
+        f"<div class='ec-note'><b>{selected_company} — management interpretation:</b> {selected['AI_Reasoning']} <b>Portfolio recommendation:</b> drill into the relationship evidence and promote to Review only where management judgement is required.</div>",
+        unsafe_allow_html=True,
+    )
+    drill_cols = [
+        "Company", "Country", "Sector", "Rating", "Outlook", "MAS", "MAS_Band", "Urgency", "Urgency Band",
+        "Primary_Driver", "Recommended_Action", "Revenue_B", "Revenue_Growth", "Debt_B", "Assets_B", "Data_Quality"
+    ]
+    drill_df = pd.DataFrame([selected[drill_cols].to_dict()])
+    drill_df = drill_df.rename(columns={
+        "MAS": "Score", "MAS_Band": "Attention Rating", "Primary_Driver": "Primary Driver",
+        "Recommended_Action": "Recommendation", "Revenue_B": "Revenue (USD B)",
+        "Revenue_Growth": "Revenue Growth %", "Debt_B": "Debt (USD B)", "Assets_B": "Assets (USD B)",
+        "Data_Quality": "Data Quality %",
+    })
+    _stage1c_dataframe(drill_df, height=120)
+
+    # ------------------------------------------------------------------
+    # 6. REVIEW PROMOTION REGISTER
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Review Promotion Register</div>', unsafe_allow_html=True)
+    promoted = st.session_state.get("portfolio_review_items", [])
+    if not promoted:
+        st.info("No portfolio pattern has been promoted into Review in this session.")
+    else:
+        promoted_df = pd.DataFrame(promoted)
+        cols = ["Review Item ID", "Pattern", "Severity", "Relationships", "Management Question", "Status", "Promoted"]
+        _stage1c_dataframe(
+            promoted_df[[c for c in cols if c in promoted_df.columns]],
+            height=min(310, 90 + 44 * len(promoted_df)),
+            column_config={
+                "Review Item ID": st.column_config.TextColumn("Review Item", width="small"),
+                "Pattern": st.column_config.TextColumn("Portfolio Pattern", width="large"),
+                "Severity": st.column_config.TextColumn("Severity", width="small"),
+                "Relationships": st.column_config.TextColumn("Relationships", width="large"),
+                "Management Question": st.column_config.TextColumn("Management Question", width="large"),
+                "Status": st.column_config.TextColumn("Status", width="small"),
+                "Promoted": st.column_config.TextColumn("Promoted", width="medium"),
+            },
+        )
+        st.caption("Promoted portfolio patterns now appear in the Review workspace. Portfolio remains evidence; Review is where management judgement begins.")
 
 
 def render_stage_1c_workspace(workspace):
@@ -2715,7 +2984,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-C.7 Execution Build · v10 institutional engines retained
+            EC-AI Executive Review Workspace · Stage 1-C.8 Portfolio Build · v10 institutional engines retained
         </div>
         """,
         unsafe_allow_html=True,
