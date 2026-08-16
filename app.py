@@ -1,9 +1,10 @@
 
-# EC-AI Executive Review Workspace — Stage 1-C.8 Portfolio Build
+# EC-AI Executive Review Workspace — Stage 1-C.9 Cross-Screen Integration Build
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
 # Stage 1-C.7: authoritative Execution workspace — exceptions, action register, updates, outcomes and closure.
 # Stage 1-C.8: Portfolio intelligence — Attention × Urgency, material patterns, relationship drill-down and Review promotion.
+# Stage 1-C.9: Cross-screen integration — portfolio-first Executive Briefing and contextual workflow hand-offs.
 # v9.2: Real Top 10 S&P universe + MAS v1.2 + MAS explainability + top executive pack export
 # Run:
 #   python -m streamlit run ecai_stage_1_c_1_full_build.py
@@ -1163,7 +1164,7 @@ WORKSPACES: Dict[str, Workspace] = {
         label="Executive Briefing",
         eyebrow="EXECUTIVE REVIEW",
         title="Executive Briefing",
-        subtitle="What requires management attention now, what changed, and what should be reviewed next.",
+        subtitle="Portfolio intelligence distilled into the management agenda: what requires attention now, what changed, and what should be reviewed next.",
     ),
     "review": Workspace(
         key="review",
@@ -1441,7 +1442,7 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-C.8",
+        "shell_version": "Stage 1-C.9",
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
@@ -1449,6 +1450,7 @@ def init_stage_1c_state():
         "execution_flash": None,
         "portfolio_review_items": [],
         "portfolio_signal_flash": None,
+        "pending_stage1c_navigation": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -1457,7 +1459,64 @@ def init_stage_1c_state():
         st.session_state.execution_actions = _migrate_v10_execution_actions()
 
 
+
+def _queue_stage1c_navigation(
+    page_key: str,
+    *,
+    relationship: str | None = None,
+    review_item_id: str | None = None,
+    decision_id: str | None = None,
+    execution_action_id: str | None = None,
+    portfolio_signal_id: str | None = None,
+):
+    """Queue a context-preserving cross-screen hand-off and rerun safely.
+
+    Streamlit navigation widgets are instantiated in the sidebar early in each run,
+    so navigation is applied at the start of the next run rather than mutating an
+    already-instantiated widget.
+    """
+    if page_key not in WORKSPACES:
+        raise ValueError(f"Unknown Stage 1-C workspace: {page_key}")
+    st.session_state.pending_stage1c_navigation = {
+        "page_key": page_key,
+        "relationship": relationship,
+        "review_item_id": review_item_id,
+        "decision_id": decision_id,
+        "execution_action_id": execution_action_id,
+        "portfolio_signal_id": portfolio_signal_id,
+    }
+    st.rerun()
+
+
+def _apply_pending_stage1c_navigation():
+    """Apply a queued workflow hand-off before sidebar widgets are instantiated."""
+    pending = st.session_state.get("pending_stage1c_navigation")
+    if not pending:
+        return
+
+    page_key = pending.get("page_key", "briefing")
+    st.session_state.active_page = page_key
+    st.session_state.stage_1c_primary_navigation = KEY_TO_LABEL.get(page_key, KEY_TO_LABEL["briefing"])
+
+    relationship = pending.get("relationship")
+    if relationship and relationship in df["Company"].tolist():
+        st.session_state.selected_relationship = relationship
+        st.session_state.stage_1c_relationship_context = relationship
+
+    if pending.get("review_item_id"):
+        st.session_state.active_review_item_id = pending["review_item_id"]
+    if pending.get("decision_id"):
+        st.session_state.active_decision_id = pending["decision_id"]
+    if pending.get("execution_action_id"):
+        st.session_state.active_execution_action_id = pending["execution_action_id"]
+    if pending.get("portfolio_signal_id"):
+        st.session_state.active_portfolio_signal_id = pending["portfolio_signal_id"]
+
+    st.session_state.pending_stage1c_navigation = None
+
+
 def render_stage_1c_sidebar():
+    _apply_pending_stage1c_navigation()
     st.sidebar.markdown(
         """
         <div class="ec-brand">
@@ -1791,115 +1850,231 @@ def _selected_relationship_row(default_to_top=True):
 
 
 def render_stage_1c_briefing():
-    """Functional bridge: legacy executive/queue intelligence inside the new shell."""
-    total_revenue = df["Revenue_B"].sum(skipna=True)
-    avg_score = float(df["MAS"].mean())
-    attention_count = int((df["MAS"] >= 61).sum())
-    open_actions = int((execution_df["Status"] != "Completed").sum())
-    top = df.iloc[0]
+    """Stage 1-C.9 portfolio-first Executive Briefing.
+
+    Portfolio supplies the signature intelligence; Briefing distils it into the
+    immediate management agenda and provides contextual hand-offs into Review,
+    Relationships, Execution and the full Portfolio evidence layer.
+    """
+    portfolio_df = _portfolio_analysis_df()
+    signals = _portfolio_signal_definitions(portfolio_df)
+    actions_df = _execution_actions_df()
+
+    flash = st.session_state.get("portfolio_signal_flash")
+    if flash:
+        st.success(flash)
+        st.session_state.portfolio_signal_flash = None
+
+    attention_count = int((portfolio_df["MAS"] >= 61).sum())
+    high_urgency_count = int((portfolio_df["Urgency"] >= 50).sum())
+    top_priority = portfolio_df.sort_values("Portfolio Priority", ascending=False).iloc[0]
+    high_high = portfolio_df[(portfolio_df["MAS"] >= 61) & (portfolio_df["Urgency"] >= 50)].sort_values("Portfolio Priority", ascending=False)
+
+    exception_rows = []
+    for record in st.session_state.get("execution_actions", []):
+        reason = _execution_exception_reason(record)
+        if reason:
+            item = record.copy()
+            item["Exception Reason"] = reason
+            exception_rows.append(item)
+    exceptions_df = pd.DataFrame(exception_rows)
+
+    material_signals = [s for s in signals if s.get("Severity") in {"High", "Medium"}]
+    severity_order = {"High": 3, "Medium": 2, "Low": 1}
+    material_signals = sorted(material_signals, key=lambda s: severity_order.get(s.get("Severity"), 0), reverse=True)
+
+    if len(high_high):
+        opening = (
+            f"{len(high_high)} relationship(s) currently sit in the Act Now quadrant. "
+            f"{high_high.iloc[0]['Company']} is the highest combined attention-and-urgency priority."
+        )
+    else:
+        opening = (
+            f"No relationship currently combines high attention with high urgency. "
+            f"{top_priority['Company']} remains the highest overall portfolio priority."
+        )
 
     st.markdown(
         f"""
         <div class="ec-note">
           <b>Executive Summary</b><br>
-          EC-AI identifies <b>{attention_count}</b> relationship(s) at Management Attention or above.
-          The highest-ranked relationship is <b>{top['Company']}</b> with Score <b>{top['MAS']:.1f}</b>,
-          driven by <b>{top['Primary_Driver']}</b>. Recommended action: <b>{top['Recommended_Action']}</b>.
+          {opening} EC-AI identifies <b>{len(material_signals)}</b> material portfolio pattern(s)
+          and <b>{len(exceptions_df)}</b> execution exception(s) requiring management awareness this cycle.
+          The Briefing is the management view; Portfolio remains the deeper evidence layer.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
     _stage1c_metric_row([
-        ("Relationships", f"{len(df)}", "Public-company universe"),
-        ("Average Score", f"{avg_score:.1f}", "Portfolio attention level"),
-        ("Attention", f"{attention_count}", "Score ≥ 61"),
-        ("Open Actions", f"{open_actions}", "Execution workflow"),
-        ("Total Revenue", fmt_b(total_revenue), "S&P relationship universe"),
+        ("Relationships", f"{len(portfolio_df)}", "Public-company universe"),
+        ("Average Score", f"{portfolio_df['MAS'].mean():.1f}", "Portfolio attention level"),
+        ("Management Attention", f"{attention_count}", "Score ≥ 61"),
+        ("High Urgency", f"{high_urgency_count}", "Urgency ≥ 50"),
+        ("Execution Exceptions", f"{len(exceptions_df)}", "Approved work needing follow-up"),
     ])
 
+    # ------------------------------------------------------------------
+    # HERO: ATTENTION × URGENCY
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Attention × Urgency · Management View</div>', unsafe_allow_html=True)
+    hero = px.scatter(
+        portfolio_df,
+        x="MAS",
+        y="Urgency",
+        size="Strategic_Score",
+        size_max=31,
+        color="MAS_Band",
+        color_discrete_map=MAS_BAND_COLORS,
+        text="Company",
+        hover_name="Company",
+        hover_data={"MAS": ":.1f", "Urgency": ":.1f", "Primary_Driver": True, "Strategic_Score": False},
+    )
+    hero.update_traces(marker=dict(line=dict(width=1.5, color="white")), textposition="top center")
+    apply_mckinsey_layout(hero, height=485, title="Which relationships deserve management attention first?")
+    hero.add_vline(x=61, line_dash="dash", line_color="#9AA4B2", line_width=1)
+    hero.add_hline(y=50, line_dash="dash", line_color="#9AA4B2", line_width=1)
+    hero.add_annotation(x=68, y=92, text="ACT NOW", showarrow=False, font=dict(size=11, color=MCKINSEY_NAVY))
+    hero.add_annotation(x=47, y=92, text="URGENT REVIEW", showarrow=False, font=dict(size=11, color=MCKINSEY_STEEL))
+    hero.add_annotation(x=68, y=12, text="STRATEGIC PRIORITY", showarrow=False, font=dict(size=11, color=MCKINSEY_STEEL))
+    hero.add_annotation(x=47, y=12, text="MONITOR", showarrow=False, font=dict(size=11, color=MCKINSEY_SLATE))
+    hero.update_layout(
+        xaxis_title="Attention Score",
+        yaxis_title="Urgency",
+        xaxis=dict(range=[max(0, min(40, float(portfolio_df['MAS'].min())-5)), min(100, float(portfolio_df['MAS'].max())+10)]),
+        yaxis=dict(range=[0, 100]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
+        margin=dict(l=35, r=25, t=70, b=45),
+    )
+    st.plotly_chart(hero, use_container_width=True, config={"displayModeBar": False})
+    st.markdown(
+        f"<div class='ec-note'><b>Management interpretation:</b> {opening} Use the relationship focus below to move directly into Review or Relationship Intelligence, or open full Portfolio for the underlying evidence.</div>",
+        unsafe_allow_html=True,
+    )
+
+    portfolio_options = portfolio_df.sort_values("Portfolio Priority", ascending=False)["Company"].tolist()
+    current_rel = st.session_state.get("selected_relationship")
+    focus_company = current_rel if current_rel in portfolio_options else portfolio_options[0]
+    focus_company = st.selectbox(
+        "Briefing relationship focus",
+        portfolio_options,
+        index=portfolio_options.index(focus_company),
+        key="stage1c_briefing_relationship_focus",
+    )
+    st.session_state.selected_relationship = focus_company
+    nav1, nav2, nav3 = st.columns(3, gap="small")
+    with nav1:
+        if st.button("Open in Review", use_container_width=True, key="briefing_open_review"):
+            _queue_stage1c_navigation("review", relationship=focus_company)
+    with nav2:
+        if st.button("Open Relationship", use_container_width=True, key="briefing_open_relationship"):
+            _queue_stage1c_navigation("relationships", relationship=focus_company)
+    with nav3:
+        if st.button("Open Full Portfolio", use_container_width=True, key="briefing_open_portfolio"):
+            _queue_stage1c_navigation("portfolio", relationship=focus_company)
+
+    # ------------------------------------------------------------------
+    # MATERIAL PORTFOLIO PATTERNS — distilled, not the full Portfolio page
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Material Portfolio Patterns</div>', unsafe_allow_html=True)
+    existing_signal_ids = {x.get("Signal ID") for x in st.session_state.get("portfolio_review_items", [])}
+    display_signals = material_signals[:3] if material_signals else signals[:2]
+    signal_cols = st.columns(max(1, len(display_signals)), gap="medium")
+    for col, signal in zip(signal_cols, display_signals):
+        with col:
+            with st.container(border=True):
+                st.markdown(f"**{signal['Pattern']}**")
+                st.caption(f"{signal['Severity']} severity · {signal['Signal ID']}")
+                st.write(signal["Interpretation"])
+                st.markdown(f"**Management question:** {signal['Management Question']}")
+                already = signal["Signal ID"] in existing_signal_ids
+                if st.button(
+                    "In Review" if already else "Promote to Review",
+                    key=f"briefing_promote_{signal['Signal ID']}",
+                    disabled=already or signal["Severity"] == "Low",
+                    use_container_width=True,
+                ):
+                    _, created = _promote_portfolio_signal(signal)
+                    if created:
+                        st.rerun()
+
+    # ------------------------------------------------------------------
+    # TOP RELATIONSHIPS — compact executive table
+    # ------------------------------------------------------------------
     st.markdown('<div class="ec-table-title">Top Relationships Requiring Management Attention</div>', unsafe_allow_html=True)
-    q = queue_table(df).head(6).copy()
-    # Keep the external credit rating distinct from EC-AI's attention rating.
-    # Streamlit/PyArrow requires unique dataframe column names.
+    q = portfolio_df.sort_values("Portfolio Priority", ascending=False).head(6)[[
+        "Company", "MAS", "MAS_Band", "Urgency", "Urgency Band",
+        "Primary_Driver", "Recommended_Action"
+    ]].copy()
+    q.insert(0, "Priority", range(1, len(q) + 1))
     q = q.rename(columns={
-        "Rank": "Priority",
         "Company": "Relationship",
-        "Rating": "External Rating",
         "MAS": "Score",
         "MAS_Band": "Attention Rating",
+        "Urgency Band": "Urgency Rating",
         "Primary_Driver": "Primary Driver",
         "Recommended_Action": "Recommendation",
-        "Expected_Outcome": "Expected Outcome",
     })
+    q["Score"] = q["Score"].map(lambda x: f"{float(x):.1f}")
+    q["Urgency"] = q["Urgency"].map(lambda x: f"{float(x):.1f}")
     _stage1c_dataframe(
         q,
-        height=270,
+        height=275,
         column_config={
             "Priority": st.column_config.NumberColumn("Priority", width="small"),
             "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
-            "Country": st.column_config.TextColumn("Country", width="small"),
-            "Sector": st.column_config.TextColumn("Sector", width="medium"),
-            "External Rating": st.column_config.TextColumn("External Rating", width="small"),
-            "Outlook": st.column_config.TextColumn("Outlook", width="small"),
             "Score": st.column_config.TextColumn("Score", width="small"),
             "Attention Rating": st.column_config.TextColumn("Attention Rating", width="medium"),
+            "Urgency": st.column_config.TextColumn("Urgency", width="small"),
+            "Urgency Rating": st.column_config.TextColumn("Urgency Rating", width="medium"),
             "Primary Driver": st.column_config.TextColumn("Primary Driver", width="medium"),
             "Recommendation": st.column_config.TextColumn("Recommendation", width="large"),
-            "Expected Outcome": st.column_config.TextColumn("Expected Outcome", width="large"),
         },
     )
 
-    c1, c2 = st.columns([1.75, 1], gap="large")
-    with c1:
-        mas_plot_df = df.sort_values("MAS")
-        briefing_bar_colors = [RELATIONSHIP_CHART_COLORS.get(c, MCKINSEY_BLUE) for c in mas_plot_df["Company"]]
-        fig = go.Figure(
-            go.Bar(
-                x=mas_plot_df["MAS"],
-                y=mas_plot_df["Company"],
-                orientation="h",
-                text=[f"{v:.1f}" for v in mas_plot_df["MAS"]],
-                textposition="outside",
-                marker=dict(color=briefing_bar_colors),
-                hovertemplate="<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>",
+    # ------------------------------------------------------------------
+    # EXECUTION EXCEPTIONS — approved work that is now blocked / at risk
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Execution Exceptions</div>', unsafe_allow_html=True)
+    if exceptions_df.empty:
+        st.success("No execution exceptions. Approved implementation is within current controls.")
+    else:
+        ex = exceptions_df[[
+            "Execution Action ID", "Relationship", "Action", "Owner", "Status",
+            "Due", "SLA Status", "Exception Reason", "Next Step"
+        ]].head(5).copy()
+        _stage1c_dataframe(
+            ex,
+            height=min(245, 75 + 40 * len(ex)),
+            column_config={
+                "Execution Action ID": st.column_config.TextColumn("Action ID", width="small"),
+                "Relationship": st.column_config.TextColumn("Relationship", width="medium"),
+                "Action": st.column_config.TextColumn("Action", width="large"),
+                "Owner": st.column_config.TextColumn("Owner", width="medium"),
+                "Status": st.column_config.TextColumn("Status", width="medium"),
+                "Due": st.column_config.TextColumn("Due", width="small"),
+                "SLA Status": st.column_config.TextColumn("SLA", width="small"),
+                "Exception Reason": st.column_config.TextColumn("Exception", width="large"),
+                "Next Step": st.column_config.TextColumn("Next Step", width="large"),
+            },
+        )
+        first_exception = exceptions_df.iloc[0]
+        if st.button("Open Execution Exceptions", use_container_width=True, key="briefing_open_execution"):
+            _queue_stage1c_navigation(
+                "execution",
+                relationship=first_exception.get("Relationship"),
+                execution_action_id=first_exception.get("Execution Action ID"),
             )
-        )
-        fig.update_traces(textfont=dict(size=12), cliponaxis=False)
-        apply_mckinsey_layout(fig, height=430)
-        fig.update_layout(
-            title="Management Attention by Relationship",
-            showlegend=False,
-            xaxis_title="Score",
-            yaxis_title="",
-            bargap=0.24,
-            margin=dict(l=20, r=48, t=52, b=30),
-        )
-        fig.update_xaxes(range=[0, max(70, float(mas_plot_df["MAS"].max()) + 8)], dtick=10)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
-    with c2:
-        action_mix = df["Recommended_Action"].value_counts().reset_index()
-        action_mix.columns = ["Action", "Count"]
-        fig2 = px.pie(
-            action_mix,
-            values="Count",
-            names="Action",
-            title="Recommended Action Mix",
-            color="Action",
-            color_discrete_map=ACTION_COLORS,
-            hole=0.58,
-        )
-        fig2.update_traces(textinfo="percent", marker=dict(line=dict(color="white", width=2.5)), pull=0)
-        apply_mckinsey_layout(fig2, height=430)
-        fig2.update_layout(legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02))
-        st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
-    st.markdown('<div class="ec-table-title">Recommended Management Agenda</div>', unsafe_allow_html=True)
+    # ------------------------------------------------------------------
+    # MANAGEMENT AGENDA — the distilled Monday-morning sequence
+    # ------------------------------------------------------------------
+    st.markdown('<div class="ec-table-title">Management Agenda</div>', unsafe_allow_html=True)
     agenda = [
-        f"Open with {top['Company']} as the highest management-attention signal.",
-        "Separate wallet-led growth opportunities from relationship-health remediation issues.",
-        "Confirm which recommendations require management judgement in Review.",
-        "Move approved actions requiring implementation into Execution with an accountable owner.",
+        f"Open with {top_priority['Company']} as the highest combined portfolio priority.",
+        "Resolve any high-severity portfolio pattern that warrants explicit management judgement in Review.",
+        "Confirm the recommendation and management decision for the highest-priority relationship items.",
+        "Escalate execution exceptions where an approved action is not progressing or outcome remains unresolved.",
     ]
     st.markdown("<div class='ec-note'><ol>" + "".join([f"<li>{x}</li>" for x in agenda]) + "</ol></div>", unsafe_allow_html=True)
 
@@ -1976,6 +2151,14 @@ def render_stage_1c_review():
         unsafe_allow_html=True,
     )
     render_explainability_native(row)
+
+    review_nav1, review_nav2 = st.columns(2, gap="small")
+    with review_nav1:
+        if st.button("Open Relationship Intelligence", use_container_width=True, key="review_open_relationship"):
+            _queue_stage1c_navigation("relationships", relationship=row["Company"])
+    with review_nav2:
+        if st.button("Prepare Management Decision", use_container_width=True, key="review_prepare_decision"):
+            _queue_stage1c_navigation("decisions", relationship=row["Company"])
 
 
 def render_stage_1c_relationships():
@@ -2054,6 +2237,17 @@ def render_stage_1c_relationships():
 
     st.markdown('<div class="ec-table-title">Score / Rating Breakdown</div>', unsafe_allow_html=True)
     render_explainability_native(r)
+
+    rel_nav1, rel_nav2, rel_nav3 = st.columns(3, gap="small")
+    with rel_nav1:
+        if st.button("Open in Review", use_container_width=True, key="relationship_open_review"):
+            _queue_stage1c_navigation("review", relationship=r["Company"])
+    with rel_nav2:
+        if st.button("Prepare Decision", use_container_width=True, key="relationship_prepare_decision"):
+            _queue_stage1c_navigation("decisions", relationship=r["Company"])
+    with rel_nav3:
+        if st.button("Back to Portfolio", use_container_width=True, key="relationship_back_portfolio"):
+            _queue_stage1c_navigation("portfolio", relationship=r["Company"])
 
 
 def render_stage_1c_decisions():
@@ -2349,6 +2543,13 @@ def render_stage_1c_decisions():
                 "Outcome": st.column_config.TextColumn("Outcome", width="medium"),
             },
         )
+        latest_exec = exec_from_decisions.iloc[0]
+        if st.button("Open Latest Execution Action", use_container_width=True, key="decisions_open_latest_execution"):
+            _queue_stage1c_navigation(
+                "execution",
+                relationship=latest_exec.get("Relationship"),
+                execution_action_id=latest_exec.get("Execution Action ID"),
+            )
 
     st.caption(
         "Stage 1-C.6 prototype persistence: decision records and linked execution actions persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
@@ -2657,7 +2858,7 @@ def render_stage_1c_execution():
         )
 
     st.caption(
-        "Stage 1-C.8 prototype persistence: execution and portfolio-promotion state persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
+        "Stage 1-C.9 prototype persistence: execution and portfolio-promotion state persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
     )
 
 
@@ -2937,6 +3138,13 @@ def render_stage_1c_portfolio():
         "Data_Quality": "Data Quality %",
     })
     _stage1c_dataframe(drill_df, height=120)
+    port_nav1, port_nav2 = st.columns(2, gap="small")
+    with port_nav1:
+        if st.button("Open Relationship Intelligence", use_container_width=True, key="portfolio_open_relationship"):
+            _queue_stage1c_navigation("relationships", relationship=selected_company)
+    with port_nav2:
+        if st.button("Open Relationship in Review", use_container_width=True, key="portfolio_open_review"):
+            _queue_stage1c_navigation("review", relationship=selected_company)
 
     # ------------------------------------------------------------------
     # 6. REVIEW PROMOTION REGISTER
@@ -2984,7 +3192,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-C.8 Portfolio Build · v10 institutional engines retained
+            EC-AI Executive Review Workspace · Stage 1-C.9 Cross-Screen Integration Build · v10 institutional engines retained
         </div>
         """,
         unsafe_allow_html=True,
