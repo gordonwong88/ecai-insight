@@ -1,5 +1,6 @@
 
-# EC-AI Executive Review Workspace — Stage 1-C.10 Release Candidate
+# EC-AI Executive Review Workspace — Stage 1-D.1 Persistent Data Model
+# Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
 # Stage 1-C.7: authoritative Execution workspace — exceptions, action register, updates, outcomes and closure.
@@ -13,6 +14,10 @@
 import io
 import math
 import re
+import os
+import json
+import sqlite3
+from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any, Dict
 from dataclasses import dataclass
@@ -23,7 +28,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-C.10",
+    page_title="EC-AI Executive Review Workspace — Stage 1-D.1",
     page_icon="🏦",
     layout="wide",
 )
@@ -1424,12 +1429,763 @@ def _migrate_v10_execution_actions():
     return records
 
 
+# =============================================================================
+# STAGE 1-D.1 — SQLITE PERSISTENCE LAYER
+# =============================================================================
+# Founder-facing operating model:
+#   One Python application file -> one automatically-created SQLite database file.
+# The Stage 1-C.10 UI remains unchanged. SQLite becomes the durable source of
+# truth for Decisions and Execution first; the remaining Stage 1-D.1 entities
+# are created now so migration can continue without redesigning the product.
+
+ECAI_DB_PATH = os.environ.get(
+    "ECAI_DB_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_1.db"),
+)
+ECAI_SCHEMA_VERSION = 1
+
+
+def _db_now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _db_connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(ECAI_DB_PATH, timeout=10, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
+@contextmanager
+def _db_transaction():
+    conn = _db_connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+ECAI_STAGE_1_D_1_SCHEMA = r"""
+CREATE TABLE IF NOT EXISTS review_cycle (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_cycle_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active','Closed','Archived')),
+    started_at TEXT NOT NULL,
+    closed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_review_cycle_one_active
+ON review_cycle(status) WHERE status = 'Active';
+
+CREATE TABLE IF NOT EXISTS relationship (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    relationship_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL UNIQUE,
+    country TEXT,
+    sector TEXT,
+    external_rating TEXT,
+    outlook TEXT,
+    score REAL,
+    attention_rating TEXT,
+    primary_driver TEXT,
+    recommended_action TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS portfolio_signal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id TEXT NOT NULL UNIQUE,
+    review_cycle_id INTEGER NOT NULL REFERENCES review_cycle(id),
+    pattern TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    interpretation TEXT,
+    management_question TEXT,
+    status TEXT NOT NULL DEFAULT 'Open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS portfolio_signal_relationship (
+    portfolio_signal_id INTEGER NOT NULL REFERENCES portfolio_signal(id) ON DELETE CASCADE,
+    relationship_id INTEGER NOT NULL REFERENCES relationship(id),
+    PRIMARY KEY (portfolio_signal_id, relationship_id)
+);
+
+CREATE TABLE IF NOT EXISTS review_item (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_item_id TEXT NOT NULL UNIQUE,
+    review_cycle_id INTEGER NOT NULL REFERENCES review_cycle(id),
+    relationship_id INTEGER REFERENCES relationship(id),
+    portfolio_signal_id INTEGER REFERENCES portfolio_signal(id),
+    title TEXT NOT NULL,
+    management_question TEXT,
+    recommendation TEXT,
+    expected_outcome TEXT,
+    status TEXT NOT NULL DEFAULT 'Open',
+    source TEXT NOT NULL DEFAULT 'Relationship Review',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS decision (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id TEXT NOT NULL UNIQUE,
+    review_item_id INTEGER NOT NULL REFERENCES review_item(id),
+    relationship_id INTEGER NOT NULL REFERENCES relationship(id),
+    review_cycle_id INTEGER NOT NULL REFERENCES review_cycle(id),
+    decision_date TEXT NOT NULL,
+    original_recommendation TEXT NOT NULL,
+    management_decision TEXT NOT NULL CHECK (management_decision IN ('Approved','Modified','Deferred','Rejected')),
+    final_action TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    decision_owner TEXT NOT NULL,
+    execution_required INTEGER NOT NULL DEFAULT 0 CHECK (execution_required IN (0,1)),
+    lifecycle_status TEXT NOT NULL DEFAULT 'Open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_decision_relationship ON decision(relationship_id, id DESC);
+CREATE INDEX IF NOT EXISTS ix_decision_review_item ON decision(review_item_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS execution_action (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    execution_action_id TEXT NOT NULL UNIQUE,
+    decision_id INTEGER REFERENCES decision(id),
+    review_item_id INTEGER REFERENCES review_item(id),
+    relationship_id INTEGER NOT NULL REFERENCES relationship(id),
+    source TEXT NOT NULL,
+    score REAL,
+    attention_rating TEXT,
+    action TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    priority TEXT,
+    due TEXT,
+    status TEXT NOT NULL,
+    progress_pct INTEGER NOT NULL DEFAULT 0 CHECK (progress_pct BETWEEN 0 AND 100),
+    follow_up_cadence TEXT,
+    sla_status TEXT,
+    impact TEXT,
+    next_step TEXT,
+    closure_criteria TEXT,
+    outcome_status TEXT NOT NULL DEFAULT 'Pending',
+    outcome TEXT NOT NULL DEFAULT 'Pending',
+    closure_evidence TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT,
+    CHECK (
+        (source = 'Management Decision' AND decision_id IS NOT NULL)
+        OR (source = 'Migrated v10' AND decision_id IS NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS ix_execution_relationship ON execution_action(relationship_id, id DESC);
+CREATE INDEX IF NOT EXISTS ix_execution_decision ON execution_action(decision_id);
+CREATE INDEX IF NOT EXISTS ix_execution_status ON execution_action(status);
+
+CREATE TABLE IF NOT EXISTS audit_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audit_event_id TEXT NOT NULL UNIQUE,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    relationship_id INTEGER REFERENCES relationship(id),
+    event_type TEXT NOT NULL,
+    event_timestamp TEXT NOT NULL,
+    actor TEXT,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS ix_audit_entity ON audit_event(entity_type, entity_id, id DESC);
+CREATE INDEX IF NOT EXISTS ix_audit_relationship ON audit_event(relationship_id, id DESC);
+
+CREATE TRIGGER IF NOT EXISTS trg_audit_event_no_update
+BEFORE UPDATE ON audit_event
+BEGIN
+    SELECT RAISE(ABORT, 'AuditEvent is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_audit_event_no_delete
+BEFORE DELETE ON audit_event
+BEGIN
+    SELECT RAISE(ABORT, 'AuditEvent is append-only');
+END;
+"""
+
+
+def _db_init_schema():
+    conn = _db_connect()
+    try:
+        conn.executescript(ECAI_STAGE_1_D_1_SCHEMA)
+        conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _db_slug(value: str) -> str:
+    slug = re.sub(r"[^A-Z0-9]+", "-", str(value).upper()).strip("-")
+    return slug or "UNKNOWN"
+
+
+def _db_next_id(conn: sqlite3.Connection, table: str, column: str, prefix: str, width: int = 4) -> str:
+    rows = conn.execute(f"SELECT {column} FROM {table} WHERE {column} LIKE ?", (f"{prefix}-%",)).fetchall()
+    highest = 0
+    for row in rows:
+        value = str(row[0])
+        match = re.match(rf"^{re.escape(prefix)}-(\d+)$", value)
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return f"{prefix}-{highest + 1:0{width}d}"
+
+
+def _db_active_review_cycle(conn: sqlite3.Connection) -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM review_cycle WHERE status='Active' ORDER BY id DESC LIMIT 1").fetchone()
+    if row is None:
+        now = _db_now()
+        conn.execute(
+            "INSERT INTO review_cycle(review_cycle_id,name,status,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+            ("RC-CURRENT", "Current Review", "Active", now, now, now),
+        )
+        row = conn.execute("SELECT * FROM review_cycle WHERE review_cycle_id='RC-CURRENT'").fetchone()
+    return row
+
+
+def _db_relationship_row(conn: sqlite3.Connection, company: str) -> sqlite3.Row:
+    rel = conn.execute("SELECT * FROM relationship WHERE name=?", (str(company),)).fetchone()
+    if rel is None:
+        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.1.")
+    return rel
+
+
+def _db_append_audit(
+    conn: sqlite3.Connection,
+    *,
+    entity_type: str,
+    entity_id: str,
+    relationship_id: int | None,
+    event_type: str,
+    actor: str | None,
+    payload: dict | None = None,
+):
+    audit_id = _db_next_id(conn, "audit_event", "audit_event_id", "AUD", width=6)
+    conn.execute(
+        """INSERT INTO audit_event(
+               audit_event_id, entity_type, entity_id, relationship_id,
+               event_type, event_timestamp, actor, payload_json
+           ) VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            audit_id,
+            entity_type,
+            entity_id,
+            relationship_id,
+            event_type,
+            _db_now(),
+            actor or "EC-AI",
+            json.dumps(payload or {}, ensure_ascii=False, default=str),
+        ),
+    )
+
+
+def _db_seed_reference_data(review_cycle_name: str = "Current Review"):
+    """Idempotently seed the current ReviewCycle and the Stage 1-C.10 relationship universe."""
+    with _db_transaction() as conn:
+        now = _db_now()
+        cycle = conn.execute("SELECT * FROM review_cycle WHERE status='Active' ORDER BY id DESC LIMIT 1").fetchone()
+        if cycle is None:
+            conn.execute(
+                "INSERT INTO review_cycle(review_cycle_id,name,status,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                ("RC-CURRENT", review_cycle_name, "Active", now, now, now),
+            )
+        else:
+            conn.execute(
+                "UPDATE review_cycle SET name=?, updated_at=? WHERE id=?",
+                (review_cycle_name, now, cycle["id"]),
+            )
+
+        for _, r in df.iterrows():
+            relationship_id = f"REL-{_db_slug(r['Company'])}"
+            conn.execute(
+                """INSERT INTO relationship(
+                       relationship_id,name,country,sector,external_rating,outlook,score,
+                       attention_rating,primary_driver,recommended_action,created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(relationship_id) DO UPDATE SET
+                       name=excluded.name,
+                       country=excluded.country,
+                       sector=excluded.sector,
+                       external_rating=excluded.external_rating,
+                       outlook=excluded.outlook,
+                       score=excluded.score,
+                       attention_rating=excluded.attention_rating,
+                       primary_driver=excluded.primary_driver,
+                       recommended_action=excluded.recommended_action,
+                       updated_at=excluded.updated_at""",
+                (
+                    relationship_id,
+                    r["Company"], r["Country"], r["Sector"], r["Rating"], r["Outlook"],
+                    float(r["MAS"]), r["MAS_Band"], r["Primary_Driver"], r["Recommended_Action"],
+                    now, now,
+                ),
+            )
+
+
+def _db_migrate_legacy_execution_once():
+    """Persist the C.10 seeded execution register once, without inventing historical Decisions."""
+    legacy_records = _migrate_v10_execution_actions()
+    with _db_transaction() as conn:
+        for rec in legacy_records:
+            exists = conn.execute(
+                "SELECT 1 FROM execution_action WHERE execution_action_id=?",
+                (rec["Execution Action ID"],),
+            ).fetchone()
+            if exists:
+                continue
+            rel = _db_relationship_row(conn, rec["Relationship"])
+            now = _db_now()
+            conn.execute(
+                """INSERT INTO execution_action(
+                       execution_action_id,decision_id,review_item_id,relationship_id,source,score,
+                       attention_rating,action,owner,priority,due,status,progress_pct,follow_up_cadence,
+                       sla_status,impact,next_step,closure_criteria,outcome_status,outcome,closure_evidence,
+                       created_at,updated_at,closed_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    rec["Execution Action ID"], None, None, rel["id"], "Migrated v10",
+                    float(rec["Score"]), rec["Attention Rating"], rec["Action"], rec["Owner"],
+                    rec["Priority"], rec["Due"], rec["Status"], int(rec["Progress_%"]),
+                    rec["Follow-up Cadence"], rec["SLA Status"], rec["Impact"], rec["Next Step"],
+                    rec["Closure Criteria"], rec["Outcome Status"], rec["Outcome"],
+                    rec.get("Closure Evidence", ""), now, now,
+                    now if rec["Status"] == "Completed" else None,
+                ),
+            )
+            _db_append_audit(
+                conn,
+                entity_type="ExecutionAction",
+                entity_id=rec["Execution Action ID"],
+                relationship_id=rel["id"],
+                event_type="LEGACY_ACTION_MIGRATED",
+                actor="Stage 1-D.1 Migration",
+                payload={
+                    "status": rec["Status"],
+                    "owner": rec["Owner"],
+                    "outcome_status": rec["Outcome Status"],
+                    "note": "Migrated from Stage 1-C.10 / v10 seed without fabricating a historical decision.",
+                },
+            )
+
+
+def _db_get_or_create_review_item(conn: sqlite3.Connection, row) -> sqlite3.Row:
+    cycle = _db_active_review_cycle(conn)
+    rel = _db_relationship_row(conn, row["Company"])
+    existing = conn.execute(
+        """SELECT * FROM review_item
+           WHERE review_cycle_id=? AND relationship_id=? AND source='Relationship Review'
+             AND status IN ('Open','Deferred')
+           ORDER BY id DESC LIMIT 1""",
+        (cycle["id"], rel["id"]),
+    ).fetchone()
+    if existing is not None:
+        return existing
+
+    review_item_id = _db_next_id(conn, "review_item", "review_item_id", "REV")
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO review_item(
+               review_item_id,review_cycle_id,relationship_id,portfolio_signal_id,title,
+               management_question,recommendation,expected_outcome,status,source,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            review_item_id, cycle["id"], rel["id"], None,
+            f"Management Review Item · {row['Company']}",
+            f"Should management proceed with {row['Recommended_Action']}?",
+            row["Recommended_Action"], row["Expected_Outcome"], "Open", "Relationship Review", now, now,
+        ),
+    )
+    _db_append_audit(
+        conn,
+        entity_type="ReviewItem",
+        entity_id=review_item_id,
+        relationship_id=rel["id"],
+        event_type="REVIEW_ITEM_CREATED",
+        actor="EC-AI Review",
+        payload={"recommendation": row["Recommended_Action"]},
+    )
+    return conn.execute("SELECT * FROM review_item WHERE review_item_id=?", (review_item_id,)).fetchone()
+
+
+def _db_list_decisions() -> list[dict]:
+    conn = _db_connect()
+    try:
+        rows = conn.execute(
+            """SELECT d.*, r.name AS relationship_name,
+                      (SELECT ea.execution_action_id FROM execution_action ea WHERE ea.decision_id=d.id ORDER BY ea.id DESC LIMIT 1) AS execution_action_id
+               FROM decision d
+               JOIN relationship r ON r.id=d.relationship_id
+               ORDER BY d.id ASC"""
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "Decision ID": r["decision_id"],
+                "Decision Date": r["decision_date"],
+                "Relationship": r["relationship_name"],
+                "Score": float(r["score"] if r["score"] is not None else 0),
+                "Attention Rating": r["attention_rating"] or "N/A",
+                "Original Recommendation": r["original_recommendation"],
+                "Management Decision": r["management_decision"],
+                "Final Action": r["final_action"],
+                "Rationale": r["rationale"],
+                "Decision Owner": r["decision_owner"],
+                "Execution Required": "Yes" if int(r["execution_required"]) else "No",
+                "Execution Action ID": r["execution_action_id"] or "—",
+                "Recorded": r["created_at"],
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def _db_list_execution_actions() -> list[dict]:
+    conn = _db_connect()
+    try:
+        rows = conn.execute(
+            """SELECT ea.*, d.decision_id AS decision_public_id, r.name AS relationship_name
+               FROM execution_action ea
+               LEFT JOIN decision d ON d.id=ea.decision_id
+               JOIN relationship r ON r.id=ea.relationship_id
+               ORDER BY ea.id ASC"""
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "Execution Action ID": r["execution_action_id"],
+                "Decision ID": r["decision_public_id"] or "—",
+                "Source": r["source"],
+                "Relationship": r["relationship_name"],
+                "Score": float(r["score"] if r["score"] is not None else 0),
+                "Attention Rating": r["attention_rating"] or "N/A",
+                "Action": r["action"],
+                "Owner": r["owner"],
+                "Priority": r["priority"] or "",
+                "Due": r["due"] or "",
+                "Status": r["status"],
+                "Progress_%": int(r["progress_pct"] or 0),
+                "Follow-up Cadence": r["follow_up_cadence"] or "",
+                "SLA Status": r["sla_status"] or "",
+                "Impact": r["impact"] or "",
+                "Next Step": r["next_step"] or "",
+                "Closure Criteria": r["closure_criteria"] or "",
+                "Outcome Status": r["outcome_status"] or "Pending",
+                "Outcome": r["outcome"] or "Pending",
+                "Closure Evidence": r["closure_evidence"] or "",
+                "Created": "Migrated from v10" if r["source"] == "Migrated v10" else r["created_at"],
+                "Last Updated": r["updated_at"] or "",
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def _db_list_execution_history(action_id: str | None = None) -> list[dict]:
+    conn = _db_connect()
+    try:
+        sql = """SELECT ae.*, r.name AS relationship_name
+                 FROM audit_event ae
+                 LEFT JOIN relationship r ON r.id=ae.relationship_id
+                 WHERE ae.entity_type='ExecutionAction'"""
+        params = []
+        if action_id:
+            sql += " AND ae.entity_id=?"
+            params.append(action_id)
+        sql += " ORDER BY ae.id ASC"
+        rows = conn.execute(sql, params).fetchall()
+        out = []
+        for r in rows:
+            try:
+                payload = json.loads(r["payload_json"] or "{}")
+            except Exception:
+                payload = {}
+            event_name = {
+                "ACTION_CREATED": "Action created from management decision",
+                "EXECUTION_UPDATED": "Execution update",
+                "LEGACY_ACTION_MIGRATED": "Legacy action migrated",
+            }.get(r["event_type"], r["event_type"].replace("_", " ").title())
+            out.append({
+                "Timestamp": r["event_timestamp"],
+                "Execution Action ID": r["entity_id"],
+                "Relationship": r["relationship_name"] or "",
+                "Event": event_name,
+                "Status": payload.get("status", ""),
+                "Owner": payload.get("owner", r["actor"] or ""),
+                "Outcome Status": payload.get("outcome_status", ""),
+                "Note": payload.get("note", ""),
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def _refresh_persistent_state_cache():
+    """Compatibility cache: Stage 1-C renderers can stay unchanged while SQLite is authoritative."""
+    decisions = _db_list_decisions()
+    actions = _db_list_execution_actions()
+    st.session_state.decision_history = decisions
+    st.session_state.execution_actions = actions
+    st.session_state.decision_execution_actions = [a for a in actions if a.get("Source") == "Management Decision"]
+    st.session_state.execution_history = _db_list_execution_history()
+
+
+def _db_record_management_decision(
+    row,
+    *,
+    decision: str,
+    final_action: str,
+    rationale: str,
+    decision_owner: str,
+    decision_date,
+    requires_execution: bool,
+    execution_owner: str | None,
+    execution_due: str | None,
+    execution_next_step: str | None,
+) -> dict:
+    if decision not in {"Approved", "Modified", "Deferred", "Rejected"}:
+        raise ValueError("Unsupported management decision.")
+    if decision in {"Deferred", "Rejected"}:
+        requires_execution = False
+
+    with _db_transaction() as conn:
+        cycle = _db_active_review_cycle(conn)
+        rel = _db_relationship_row(conn, row["Company"])
+        review_item = _db_get_or_create_review_item(conn, row)
+        decision_id = _db_next_id(conn, "decision", "decision_id", "DEC")
+        now = _db_now()
+        decision_date_text = decision_date.strftime("%Y-%m-%d") if hasattr(decision_date, "strftime") else str(decision_date)
+
+        if decision == "Deferred":
+            lifecycle_status = "Deferred"
+            review_item_status = "Deferred"
+            closed_at = None
+        elif requires_execution:
+            lifecycle_status = "Open"
+            review_item_status = "Open"
+            closed_at = None
+        else:
+            lifecycle_status = "Closed"
+            review_item_status = "Closed"
+            closed_at = now
+
+        cur = conn.execute(
+            """INSERT INTO decision(
+                   decision_id,review_item_id,relationship_id,review_cycle_id,decision_date,
+                   original_recommendation,management_decision,final_action,rationale,decision_owner,
+                   execution_required,lifecycle_status,created_at,updated_at,closed_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                decision_id, review_item["id"], rel["id"], cycle["id"], decision_date_text,
+                row["Recommended_Action"], decision, final_action, rationale.strip(), decision_owner.strip(),
+                1 if requires_execution else 0, lifecycle_status, now, now, closed_at,
+            ),
+        )
+        decision_db_id = cur.lastrowid
+        conn.execute(
+            "UPDATE review_item SET status=?, recommendation=?, expected_outcome=?, updated_at=?, closed_at=? WHERE id=?",
+            (review_item_status, final_action, row["Expected_Outcome"], now, closed_at, review_item["id"]),
+        )
+        _db_append_audit(
+            conn,
+            entity_type="Decision",
+            entity_id=decision_id,
+            relationship_id=rel["id"],
+            event_type="DECISION_RECORDED",
+            actor=decision_owner.strip(),
+            payload={
+                "management_decision": decision,
+                "final_action": final_action,
+                "execution_required": bool(requires_execution),
+                "review_item_id": review_item["review_item_id"],
+            },
+        )
+
+        execution_id = None
+        if requires_execution:
+            execution_id = _db_next_id(conn, "execution_action", "execution_action_id", "ACT")
+            default_owner, default_due, default_next, default_closure = _execution_fields_for_decision(row, final_action)
+            row_for_execution = row.copy()
+            row_for_execution["Recommended_Action"] = final_action
+
+            # Supersede the matching C.10 seed row only after management has created
+            # a real decision-backed action. This preserves migration history without
+            # duplicating the live register.
+            conn.execute(
+                """DELETE FROM execution_action
+                   WHERE source='Migrated v10' AND relationship_id=? AND action=?""",
+                (rel["id"], final_action),
+            )
+
+            conn.execute(
+                """INSERT INTO execution_action(
+                       execution_action_id,decision_id,review_item_id,relationship_id,source,score,
+                       attention_rating,action,owner,priority,due,status,progress_pct,follow_up_cadence,
+                       sla_status,impact,next_step,closure_criteria,outcome_status,outcome,closure_evidence,
+                       created_at,updated_at,closed_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    execution_id, decision_db_id, review_item["id"], rel["id"], "Management Decision",
+                    float(row["MAS"]), row["MAS_Band"], final_action,
+                    execution_owner or default_owner,
+                    priority_for_row(row_for_execution), execution_due or default_due,
+                    "Assigned", 0, "Weekly" if float(row["MAS"]) >= 61 else "Bi-weekly",
+                    "On Track", impact_for_action(final_action), execution_next_step or default_next,
+                    default_closure, "Pending", "Pending", "", now, now, None,
+                ),
+            )
+            _db_append_audit(
+                conn,
+                entity_type="ExecutionAction",
+                entity_id=execution_id,
+                relationship_id=rel["id"],
+                event_type="ACTION_CREATED",
+                actor=decision_owner.strip(),
+                payload={
+                    "status": "Assigned",
+                    "owner": execution_owner or default_owner,
+                    "outcome_status": "Pending",
+                    "note": f"Created from {decision_id}: {final_action}",
+                    "decision_id": decision_id,
+                },
+            )
+
+    _refresh_persistent_state_cache()
+    # Return the same Stage 1-C dictionary contract so the UI does not change.
+    return next(r for r in st.session_state.decision_history if r["Decision ID"] == decision_id)
+
+
+def _db_update_execution(
+    action_id: str,
+    *,
+    owner: str,
+    due: str,
+    status: str,
+    progress: int,
+    follow_up: str,
+    sla_status: str,
+    next_step: str,
+    outcome_status: str,
+    outcome: str,
+    closure_evidence: str,
+) -> dict:
+    with _db_transaction() as conn:
+        target = conn.execute(
+            """SELECT ea.*, r.name AS relationship_name, d.decision_id AS decision_public_id
+               FROM execution_action ea
+               JOIN relationship r ON r.id=ea.relationship_id
+               LEFT JOIN decision d ON d.id=ea.decision_id
+               WHERE ea.execution_action_id=?""",
+            (action_id,),
+        ).fetchone()
+        if target is None:
+            raise ValueError(f"Execution action {action_id} not found.")
+
+        validated_outcome = outcome_status not in {"Pending", "Pending Validation", ""}
+        has_outcome = bool(outcome.strip()) and outcome.strip().lower() != "pending"
+        has_closure_evidence = bool(closure_evidence.strip())
+
+        if status == "Completed" or int(progress) >= 100:
+            if not validated_outcome:
+                raise ValueError("100% / Completed execution requires a validated Outcome Status.")
+            if not has_outcome:
+                raise ValueError("100% / Completed execution requires an outcome narrative.")
+            if not has_closure_evidence:
+                raise ValueError("100% / Completed execution requires closure evidence.")
+            status = "Completed"
+            progress = 100
+            sla_status = "Closed"
+            next_step = "Action closed — no further execution required."
+
+        before_status = target["status"]
+        before_outcome = target["outcome_status"]
+        now = _db_now()
+        closed_at = now if status == "Completed" else None
+        conn.execute(
+            """UPDATE execution_action SET
+                   owner=?,due=?,status=?,progress_pct=?,follow_up_cadence=?,sla_status=?,next_step=?,
+                   outcome_status=?,outcome=?,closure_evidence=?,updated_at=?,closed_at=?
+               WHERE execution_action_id=?""",
+            (
+                owner.strip(), due.strip(), status, int(progress), follow_up, sla_status, next_step.strip(),
+                outcome_status, outcome.strip() or "Pending", closure_evidence.strip(), now, closed_at, action_id,
+            ),
+        )
+
+        note_bits = []
+        if before_status != status:
+            note_bits.append(f"status {before_status or 'N/A'} → {status}")
+        if before_outcome != outcome_status:
+            note_bits.append(f"outcome {before_outcome or 'N/A'} → {outcome_status}")
+        note = "; ".join(note_bits) if note_bits else "Execution details updated"
+        _db_append_audit(
+            conn,
+            entity_type="ExecutionAction",
+            entity_id=action_id,
+            relationship_id=target["relationship_id"],
+            event_type="EXECUTION_UPDATED",
+            actor=owner.strip(),
+            payload={
+                "status": status,
+                "owner": owner.strip(),
+                "outcome_status": outcome_status,
+                "note": note,
+            },
+        )
+
+        # Toyota workflow rule generalized to every relationship:
+        # Review -> Decision -> Execution -> Outcome -> Closure.
+        if status == "Completed" and target["decision_id"] is not None:
+            conn.execute(
+                "UPDATE decision SET lifecycle_status='Closed', updated_at=?, closed_at=? WHERE id=?",
+                (now, now, target["decision_id"]),
+            )
+            if target["review_item_id"] is not None:
+                conn.execute(
+                    "UPDATE review_item SET status='Closed', updated_at=?, closed_at=? WHERE id=?",
+                    (now, now, target["review_item_id"]),
+                )
+            _db_append_audit(
+                conn,
+                entity_type="Decision",
+                entity_id=target["decision_public_id"] or "",
+                relationship_id=target["relationship_id"],
+                event_type="DECISION_CLOSED_FROM_EXECUTION",
+                actor=owner.strip(),
+                payload={"execution_action_id": action_id, "outcome_status": outcome_status},
+            )
+
+    _refresh_persistent_state_cache()
+    return next(a for a in st.session_state.execution_actions if a["Execution Action ID"] == action_id)
+
+
 def _execution_actions_df():
-    records = st.session_state.get("execution_actions", [])
+    """Return the authoritative SQLite execution register as a dataframe."""
+    records = _db_list_execution_actions()
     if not records:
         return pd.DataFrame()
     return pd.DataFrame(records)
-
 
 def _execution_exception_reason(record):
     reasons = []
@@ -1452,9 +2208,8 @@ def _execution_exception_reason(record):
 
 
 def _execution_history_df(action_id=None):
-    history = st.session_state.get("execution_history", [])
-    if action_id:
-        history = [h for h in history if h.get("Execution Action ID") == action_id]
+    """Return append-only execution events from AuditEvent (latest first)."""
+    history = _db_list_execution_history(action_id)
     if not history:
         return pd.DataFrame()
     return pd.DataFrame(history).iloc[::-1].reset_index(drop=True)
@@ -1473,7 +2228,7 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-C.10",
+        "shell_version": "Stage 1-D.1",
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
@@ -1486,10 +2241,14 @@ def init_stage_1c_state():
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
-    if "execution_actions" not in st.session_state:
-        st.session_state.execution_actions = _migrate_v10_execution_actions()
 
-
+    # Stage 1-D.1: initialize the database automatically and hydrate the existing
+    # Stage 1-C render contract from SQLite. Session state is now a UI cache only
+    # for Decisions / Execution, not their system of record.
+    _db_init_schema()
+    _db_seed_reference_data(st.session_state.review_cycle)
+    _db_migrate_legacy_execution_once()
+    _refresh_persistent_state_cache()
 
 def _queue_stage1c_navigation(
     page_key: str,
@@ -1553,7 +2312,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-C · Implementation</div>
+            <div class="ec-brand-stage">Stage 1-D.1 · Persistence</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1598,7 +2357,7 @@ def render_stage_1c_sidebar():
         </div>
         <div class="ec-sidebar-engine">
             Backend retained<br>
-            Score / MAS v1.2 · Action Matrix · Wallet Sizing · Execution Workflow · PDF/Memo Engine
+            Score / MAS v1.2 · SQLite Persistence · Action Matrix · Wallet Sizing · Execution Workflow · PDF/Memo Engine
         </div>
         """,
         unsafe_allow_html=True,
@@ -1661,20 +2420,18 @@ def _stage1c_dataframe(data, *, height=320, column_config=None):
 
 
 def _decision_history_df():
-    """Return decision audit history as a dataframe (latest first)."""
-    records = st.session_state.get("decision_history", [])
+    """Return persistent Decision history from SQLite (latest first)."""
+    records = _db_list_decisions()
     if not records:
         return pd.DataFrame()
     return pd.DataFrame(records).iloc[::-1].reset_index(drop=True)
 
-
 def _latest_decision_by_relationship():
-    """Return the latest decision record for each relationship."""
+    """Return the latest persistent Decision record for each relationship."""
     latest = {}
-    for record in st.session_state.get("decision_history", []):
+    for record in _db_list_decisions():
         latest[record.get("Relationship")] = record
     return latest
-
 
 def _next_stage1c_id(prefix: str, collection_key: str) -> str:
     """Generate compact human-readable IDs within the current Streamlit session."""
@@ -1705,90 +2462,28 @@ def _record_stage1c_decision(
     execution_due: str | None = None,
     execution_next_step: str | None = None,
 ):
-    """Persist one management decision in session state and optionally create an execution action."""
-    if decision not in {"Approved", "Modified", "Deferred", "Rejected"}:
-        raise ValueError("Unsupported management decision.")
+    """Persist a management Decision transactionally in SQLite.
 
-    execution_id = None
-    if decision in {"Deferred", "Rejected"}:
-        requires_execution = False
-
-    decision_id = _next_stage1c_id("DEC", "decision_history")
-
-    if requires_execution:
-        execution_id = _next_stage1c_id("ACT", "decision_execution_actions")
-        default_owner, default_due, default_next, default_closure = _execution_fields_for_decision(row, final_action)
-        row_for_execution = row.copy()
-        row_for_execution["Recommended_Action"] = final_action
-        action_record = {
-            "Execution Action ID": execution_id,
-            "Decision ID": decision_id,
-            "Source": "Management Decision",
-            "Relationship": row["Company"],
-            "Score": float(row["MAS"]),
-            "Attention Rating": row["MAS_Band"],
-            "Action": final_action,
-            "Owner": execution_owner or default_owner,
-            "Priority": priority_for_row(row_for_execution),
-            "Due": execution_due or default_due,
-            "Status": "Assigned",
-            "Progress_%": 0,
-            "Follow-up Cadence": "Weekly" if float(row["MAS"]) >= 61 else "Bi-weekly",
-            "SLA Status": "On Track",
-            "Impact": impact_for_action(final_action),
-            "Next Step": execution_next_step or default_next,
-            "Closure Criteria": default_closure,
-            "Outcome Status": "Pending",
-            "Outcome": "Pending",
-            "Closure Evidence": "",
-            "Created": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        }
-        st.session_state.decision_execution_actions.append(action_record.copy())
-
-        # One authoritative Stage 1-C.7 register. A new decision-created action
-        # supersedes any matching migrated v10 placeholder for the same relationship/action.
-        st.session_state.execution_actions = [
-            a for a in st.session_state.get("execution_actions", [])
-            if not (
-                a.get("Source") == "Migrated v10"
-                and a.get("Relationship") == row["Company"]
-                and a.get("Action") == final_action
-            )
-        ]
-        st.session_state.execution_actions.append(action_record.copy())
-        st.session_state.execution_history.append({
-            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "Execution Action ID": execution_id,
-            "Relationship": row["Company"],
-            "Event": "Action created from management decision",
-            "Status": "Assigned",
-            "Owner": action_record["Owner"],
-            "Outcome Status": "Pending",
-            "Note": f"Created from {decision_id}: {final_action}",
-        })
-
-    record = {
-        "Decision ID": decision_id,
-        "Decision Date": decision_date.strftime("%Y-%m-%d") if hasattr(decision_date, "strftime") else str(decision_date),
-        "Relationship": row["Company"],
-        "Score": float(row["MAS"]),
-        "Attention Rating": row["MAS_Band"],
-        "Original Recommendation": row["Recommended_Action"],
-        "Management Decision": decision,
-        "Final Action": final_action,
-        "Rationale": rationale.strip(),
-        "Decision Owner": decision_owner.strip(),
-        "Execution Required": "Yes" if requires_execution else "No",
-        "Execution Action ID": execution_id or "—",
-        "Recorded": datetime.now().strftime("%Y-%m-%d %H:%M"),
-    }
-    st.session_state.decision_history.append(record)
-    st.session_state.active_decision_id = decision_id
-    if execution_id:
-        st.session_state.active_execution_action_id = execution_id
+    Approved / Modified creates an ExecutionAction only when implementation is
+    required. The ReviewItem -> Decision -> ExecutionAction linkage is committed
+    as one transaction; the Stage 1-C.10 UI contract is returned unchanged.
+    """
+    record = _db_record_management_decision(
+        row,
+        decision=decision,
+        final_action=final_action,
+        rationale=rationale,
+        decision_owner=decision_owner,
+        decision_date=decision_date,
+        requires_execution=requires_execution,
+        execution_owner=execution_owner,
+        execution_due=execution_due,
+        execution_next_step=execution_next_step,
+    )
+    st.session_state.active_decision_id = record["Decision ID"]
+    if record["Execution Action ID"] != "—":
+        st.session_state.active_execution_action_id = record["Execution Action ID"]
     return record
-
 
 def _update_stage1c_execution_action(
     action_id: str,
@@ -1804,74 +2499,22 @@ def _update_stage1c_execution_action(
     outcome: str,
     closure_evidence: str,
 ):
-    """Update one execution action and append an auditable execution event."""
-    actions = st.session_state.get("execution_actions", [])
-    target = None
-    for record in actions:
-        if record.get("Execution Action ID") == action_id:
-            target = record
-            break
-    if target is None:
-        raise ValueError(f"Execution action {action_id} not found.")
-
-    validated_outcome = outcome_status not in {"Pending", "Pending Validation", ""}
-    has_outcome = bool(outcome.strip()) and outcome.strip().lower() != "pending"
-    has_closure_evidence = bool(closure_evidence.strip())
-
-    # Stage 1-C.7 state-consistency refinement carried into C.8:
-    # a 100% action with a validated outcome and closure evidence is closed, not left In Progress.
-    if status == "Completed" or int(progress) >= 100:
-        if not validated_outcome:
-            raise ValueError("100% / Completed execution requires a validated Outcome Status.")
-        if not has_outcome:
-            raise ValueError("100% / Completed execution requires an outcome narrative.")
-        if not has_closure_evidence:
-            raise ValueError("100% / Completed execution requires closure evidence.")
-        status = "Completed"
-        progress = 100
-        sla_status = "Closed"
-        next_step = "Action closed — no further execution required."
-
-    before_status = target.get("Status", "")
-    before_outcome = target.get("Outcome Status", "Pending")
-    target.update({
-        "Owner": owner.strip(),
-        "Due": due.strip(),
-        "Status": status,
-        "Progress_%": int(progress),
-        "Follow-up Cadence": follow_up,
-        "SLA Status": sla_status,
-        "Next Step": next_step.strip(),
-        "Outcome Status": outcome_status,
-        "Outcome": outcome.strip() or "Pending",
-        "Closure Evidence": closure_evidence.strip(),
-        "Last Updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
-    })
-
-    # Keep the decision-origin subset synchronized for the Decisions audit view.
-    for record in st.session_state.get("decision_execution_actions", []):
-        if record.get("Execution Action ID") == action_id:
-            record.update(target)
-
-    note_bits = []
-    if before_status != status:
-        note_bits.append(f"status {before_status or 'N/A'} → {status}")
-    if before_outcome != outcome_status:
-        note_bits.append(f"outcome {before_outcome or 'N/A'} → {outcome_status}")
-    note = "; ".join(note_bits) if note_bits else "Execution details updated"
-    st.session_state.execution_history.append({
-        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "Execution Action ID": action_id,
-        "Relationship": target.get("Relationship", ""),
-        "Event": "Execution update",
-        "Status": status,
-        "Owner": owner.strip(),
-        "Outcome Status": outcome_status,
-        "Note": note,
-    })
+    """Persist execution, outcome and closure in SQLite and append AuditEvent."""
+    target = _db_update_execution(
+        action_id,
+        owner=owner,
+        due=due,
+        status=status,
+        progress=progress,
+        follow_up=follow_up,
+        sla_status=sla_status,
+        next_step=next_step,
+        outcome_status=outcome_status,
+        outcome=outcome,
+        closure_evidence=closure_evidence,
+    )
     st.session_state.active_execution_action_id = action_id
     return target
-
 
 def _selected_relationship_row(default_to_top=True):
     selected = st.session_state.get("selected_relationship")
@@ -2823,7 +3466,7 @@ def render_stage_1c_decisions():
             )
 
     st.caption(
-        "Stage 1-C.6 prototype persistence: decision records and linked execution actions persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
+        "Stage 1-D.1 persistence: Decision records and linked Execution Actions are stored in SQLite and restored across app sessions. Session state is used only as a UI compatibility cache."
     )
 
 
@@ -3141,7 +3784,7 @@ def render_stage_1c_execution():
         )
 
     st.caption(
-        "Stage 1-C.10 release-candidate persistence: execution and portfolio-promotion state persist through Streamlit session state during the active app session. Durable database persistence is a later backend integration step."
+        "Stage 1-D.1 persistence: Decisions, Execution Actions and their audit history are stored in SQLite. Portfolio-promotion state remains session-based for progressive migration."
     )
 
 
@@ -3475,7 +4118,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-C.10 Release Candidate · workflow-integrated institutional engines
+            EC-AI Executive Review Workspace · Stage 1-D.1 Persistent Data Model · Stage 1-C.10 UI locked
         </div>
         """,
         unsafe_allow_html=True,
