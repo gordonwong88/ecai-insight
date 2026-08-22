@@ -1833,8 +1833,11 @@ def _db_list_decisions() -> list[dict]:
     conn = _db_connect()
     try:
         rows = conn.execute(
-            """SELECT d.*, r.name AS relationship_name,
-                      (SELECT ea.execution_action_id FROM execution_action ea WHERE ea.decision_id=d.id ORDER BY ea.id DESC LIMIT 1) AS execution_action_id
+            """SELECT d.*,
+                       r.name AS relationship_name,
+                       r.score AS score,
+                       r.attention_rating AS attention_rating,
+                       (SELECT ea.execution_action_id FROM execution_action ea WHERE ea.decision_id=d.id ORDER BY ea.id DESC LIMIT 1) AS execution_action_id
                FROM decision d
                JOIN relationship r ON r.id=d.relationship_id
                ORDER BY d.id ASC"""
