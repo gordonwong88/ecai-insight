@@ -1749,13 +1749,32 @@ def _db_migrate_legacy_execution_once():
     legacy_records = _migrate_v10_execution_actions()
     with _db_transaction() as conn:
         for rec in legacy_records:
+            rel = _db_relationship_row(conn, rec["Relationship"])
+
+            # Once a real management-decision action exists for the same
+            # relationship + action, the C.10 migrated placeholder is permanently
+            # superseded. Do not re-seed MIG-xxxx on later Streamlit reruns.
+            real_action = conn.execute(
+                """SELECT 1 FROM execution_action
+                   WHERE source='Management Decision' AND relationship_id=? AND action=?
+                   LIMIT 1""",
+                (rel["id"], rec["Action"]),
+            ).fetchone()
+            if real_action:
+                # Clean up a placeholder that may have been reintroduced by an
+                # earlier D.1 build before this guard existed.
+                conn.execute(
+                    "DELETE FROM execution_action WHERE execution_action_id=? AND source='Migrated v10'",
+                    (rec["Execution Action ID"],),
+                )
+                continue
+
             exists = conn.execute(
                 "SELECT 1 FROM execution_action WHERE execution_action_id=?",
                 (rec["Execution Action ID"],),
             ).fetchone()
             if exists:
                 continue
-            rel = _db_relationship_row(conn, rec["Relationship"])
             now = _db_now()
             conn.execute(
                 """INSERT INTO execution_action(
@@ -2237,6 +2256,7 @@ def init_stage_1c_state():
         "decision_flash": None,
         "execution_history": [],
         "execution_flash": None,
+        "pending_execution_widget_sync": None,
         "portfolio_review_items": [],
         "portfolio_signal_flash": None,
         "pending_stage1c_navigation": None,
@@ -3619,6 +3639,29 @@ def render_stage_1c_execution():
     st.session_state.active_execution_action_id = selected_action_id
     selected = next(a for a in actions if a["Execution Action ID"] == selected_action_id)
 
+    # Streamlit forbids assigning to a widget-backed session_state key after that
+    # widget has been instantiated in the same run. D.1.2 therefore queues any
+    # authoritative post-save normalization (for example SLA -> Closed) and applies
+    # it here, on the NEXT rerun, before the execution widgets below are created.
+    pending_sync = st.session_state.get("pending_execution_widget_sync")
+    if pending_sync and pending_sync.get("action_id") == selected_action_id:
+        values = pending_sync.get("values", {})
+        widget_values = {
+            f"exec_owner_{selected_action_id}": values.get("Owner", ""),
+            f"exec_due_{selected_action_id}": values.get("Due", ""),
+            f"exec_status_{selected_action_id}": values.get("Status", "Assigned"),
+            f"exec_progress_{selected_action_id}": int(values.get("Progress_%", 0)),
+            f"exec_follow_{selected_action_id}": values.get("Follow-up Cadence", "Bi-weekly"),
+            f"exec_sla_{selected_action_id}": values.get("SLA Status", "On Track"),
+            f"exec_next_{selected_action_id}": values.get("Next Step", ""),
+            f"exec_outcome_status_{selected_action_id}": values.get("Outcome Status", "Pending"),
+            f"exec_outcome_{selected_action_id}": values.get("Outcome", "Pending"),
+            f"exec_closure_{selected_action_id}": values.get("Closure Evidence", ""),
+        }
+        for widget_key, widget_value in widget_values.items():
+            st.session_state[widget_key] = widget_value
+        st.session_state.pending_execution_widget_sync = None
+
     st.markdown(
         f"""
         <div class="ec-note">
@@ -3718,18 +3761,14 @@ def render_stage_1c_execution():
                 outcome=outcome_value,
                 closure_evidence=closure_evidence_value,
             )
-            # Streamlit widgets retain keyed values across reruns. Synchronize them
-            # with the authoritative action after C.10 auto-closure rules are applied.
-            st.session_state[f"exec_owner_{selected_action_id}"] = updated_action.get("Owner", "")
-            st.session_state[f"exec_due_{selected_action_id}"] = updated_action.get("Due", "")
-            st.session_state[f"exec_status_{selected_action_id}"] = updated_action.get("Status", "Assigned")
-            st.session_state[f"exec_progress_{selected_action_id}"] = int(updated_action.get("Progress_%", 0))
-            st.session_state[f"exec_follow_{selected_action_id}"] = updated_action.get("Follow-up Cadence", "Bi-weekly")
-            st.session_state[f"exec_sla_{selected_action_id}"] = updated_action.get("SLA Status", "On Track")
-            st.session_state[f"exec_next_{selected_action_id}"] = updated_action.get("Next Step", "")
-            st.session_state[f"exec_outcome_status_{selected_action_id}"] = updated_action.get("Outcome Status", "Pending")
-            st.session_state[f"exec_outcome_{selected_action_id}"] = updated_action.get("Outcome", "Pending")
-            st.session_state[f"exec_closure_{selected_action_id}"] = updated_action.get("Closure Evidence", "")
+            # Do NOT mutate exec_* widget keys here: those widgets already exist in
+            # this run and Streamlit raises StreamlitAPIException. Queue the
+            # authoritative values and apply them before widgets instantiate on the
+            # next rerun instead.
+            st.session_state.pending_execution_widget_sync = {
+                "action_id": selected_action_id,
+                "values": updated_action.copy(),
+            }
             st.session_state.execution_flash = f"{selected_action_id} updated. Execution state and closure fields are synchronized."
             st.rerun()
         except Exception as exc:
@@ -4121,7 +4160,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-D.1 Persistent Data Model · Stage 1-C.10 UI locked
+            EC-AI Executive Review Workspace · Stage 1-D.1 Persistent Data Model · Hotfix v1.2 · Stage 1-C.10 UI locked
         </div>
         """,
         unsafe_allow_html=True,
