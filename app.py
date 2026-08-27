@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-D.2 Persistent Review & Portfolio State
+# EC-AI Executive Review Workspace — Stage 1-D.2A Production Database Foundation
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
@@ -17,6 +17,12 @@ import re
 import os
 import json
 import sqlite3
+try:
+    import psycopg2
+    from psycopg2.extras import DictCursor
+except Exception:
+    psycopg2 = None
+    DictCursor = None
 from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any, Dict
@@ -28,7 +34,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-D.2",
+    page_title="EC-AI Executive Review Workspace — Stage 1-D.2A",
     page_icon="🏦",
     layout="wide",
 )
@@ -1430,40 +1436,157 @@ def _migrate_v10_execution_actions():
 
 
 # =============================================================================
-# STAGE 1-D.2 — SQLITE PERSISTENCE LAYER
+# STAGE 1-D.2A — PRODUCTION DATABASE FOUNDATION
 # =============================================================================
-# Founder-facing operating model:
-#   One Python application file -> one automatically-created SQLite database file.
-# The Stage 1-C.10 UI remains unchanged. SQLite becomes the durable source of
-# truth for Decisions and Execution, then ReviewCycle, PortfolioSignal and ReviewItem.
-# Stage 1-C.10 remains the immutable product/UI reference.
+# Storage contract:
+#   - Production: managed PostgreSQL when DATABASE_URL is configured in Streamlit Secrets.
+#   - Development fallback: local SQLite when DATABASE_URL is absent.
+#
+# GitHub stores code only. Credentials stay in Streamlit Secrets. Stage 1-C.10
+# remains the immutable product/UI reference.
 
+
+def _configured_database_url() -> str:
+    value = os.environ.get("DATABASE_URL", "").strip()
+    if value:
+        return value
+    try:
+        if "DATABASE_URL" in st.secrets:
+            return str(st.secrets["DATABASE_URL"]).strip()
+    except Exception:
+        pass
+    return ""
+
+
+ECAI_DATABASE_URL = _configured_database_url()
+ECAI_DB_BACKEND = "postgresql" if ECAI_DATABASE_URL else "sqlite"
 ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_1.db"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 2
+ECAI_SCHEMA_VERSION = 3
 
 
 def _db_now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
-def _db_connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(ECAI_DB_PATH, timeout=10, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    conn.execute("PRAGMA busy_timeout = 5000")
-    return conn
+def _db_backend_label() -> str:
+    return "PostgreSQL / Supabase" if ECAI_DB_BACKEND == "postgresql" else "SQLite fallback"
+
+
+class _PostgresCursorProxy:
+    def __init__(self, cursor, lastrowid=None):
+        self._cursor = cursor
+        self.lastrowid = lastrowid
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class _DBConnection:
+    """Small compatibility wrapper so the Stage 1-C UI contract does not care
+    whether the system of record is SQLite or PostgreSQL."""
+
+    def __init__(self, raw, backend: str):
+        self.raw = raw
+        self.backend = backend
+
+    def _sql(self, sql: str) -> str:
+        if self.backend != "postgresql":
+            return sql
+        # Existing Stage 1-D code uses SQLite qmark placeholders.
+        sql = sql.replace("?", "%s")
+        # Small dialect translations retained in the D.2 persistence functions.
+        sql = sql.replace(
+            "INSERT OR IGNORE INTO portfolio_signal_relationship(portfolio_signal_id,relationship_id) VALUES (%s,%s)",
+            "INSERT INTO portfolio_signal_relationship(portfolio_signal_id,relationship_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+        )
+        sql = sql.replace(
+            "GROUP_CONCAT(r.name, ', ')",
+            "STRING_AGG(r.name, ', ' ORDER BY r.name)",
+        )
+        return sql
+
+    def execute(self, sql: str, params=()):
+        if self.backend == "sqlite":
+            return self.raw.execute(sql, params)
+
+        statement = self._sql(sql)
+        # Two current inserts need their generated surrogate ID immediately.
+        insert_match = re.match(r"\s*INSERT\s+INTO\s+(portfolio_signal|decision)\b", statement, flags=re.I)
+        wants_id = bool(insert_match) and " RETURNING " not in statement.upper()
+        if wants_id:
+            statement = statement.rstrip().rstrip(";") + " RETURNING id"
+
+        cur = self.raw.cursor(cursor_factory=DictCursor)
+        cur.execute(statement, params)
+        lastrowid = None
+        if wants_id:
+            returned = cur.fetchone()
+            if returned is not None:
+                lastrowid = int(returned[0])
+        return _PostgresCursorProxy(cur, lastrowid=lastrowid)
+
+    def executescript(self, script: str):
+        if self.backend == "sqlite":
+            return self.raw.executescript(script)
+        cur = self.raw.cursor()
+        cur.execute(script)
+        return _PostgresCursorProxy(cur)
+
+    def commit(self):
+        self.raw.commit()
+
+    def rollback(self):
+        self.raw.rollback()
+
+    def close(self):
+        self.raw.close()
+
+
+def _db_connect() -> _DBConnection:
+    if ECAI_DB_BACKEND == "postgresql":
+        if psycopg2 is None:
+            raise RuntimeError(
+                "DATABASE_URL is configured but the PostgreSQL driver is missing. "
+                "Add psycopg2-binary to requirements.txt and redeploy."
+            )
+        raw = psycopg2.connect(
+            ECAI_DATABASE_URL,
+            connect_timeout=10,
+            sslmode="require",
+        )
+        raw.autocommit = False
+        return _DBConnection(raw, "postgresql")
+
+    raw = sqlite3.connect(ECAI_DB_PATH, timeout=10, check_same_thread=False)
+    raw.row_factory = sqlite3.Row
+    raw.execute("PRAGMA foreign_keys = ON")
+    raw.execute("PRAGMA journal_mode = WAL")
+    raw.execute("PRAGMA synchronous = NORMAL")
+    raw.execute("PRAGMA busy_timeout = 5000")
+    return _DBConnection(raw, "sqlite")
 
 
 @contextmanager
 def _db_transaction():
     conn = _db_connect()
     try:
-        conn.execute("BEGIN IMMEDIATE")
+        if conn.backend == "sqlite":
+            conn.execute("BEGIN IMMEDIATE")
+        else:
+            conn.execute("BEGIN")
         yield conn
         conn.commit()
     except Exception:
@@ -1472,8 +1595,7 @@ def _db_transaction():
     finally:
         conn.close()
 
-
-ECAI_STAGE_1_D_1_SCHEMA = r"""
+ECAI_SQLITE_SCHEMA = r"""
 CREATE TABLE IF NOT EXISTS review_cycle (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     review_cycle_id TEXT NOT NULL UNIQUE,
@@ -1626,12 +1748,177 @@ BEGIN
 END;
 """
 
+ECAI_POSTGRES_SCHEMA = r"""
+CREATE TABLE IF NOT EXISTS review_cycle (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    review_cycle_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'Active' CHECK (status IN ('Active','Closed','Archived')),
+    started_at TEXT NOT NULL,
+    closed_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_review_cycle_one_active
+ON review_cycle(status) WHERE status = 'Active';
+
+CREATE TABLE IF NOT EXISTS relationship (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    relationship_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL UNIQUE,
+    country TEXT,
+    sector TEXT,
+    external_rating TEXT,
+    outlook TEXT,
+    score DOUBLE PRECISION,
+    attention_rating TEXT,
+    primary_driver TEXT,
+    recommended_action TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS portfolio_signal (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    signal_id TEXT NOT NULL UNIQUE,
+    review_cycle_id BIGINT NOT NULL REFERENCES review_cycle(id),
+    pattern TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    interpretation TEXT,
+    management_question TEXT,
+    status TEXT NOT NULL DEFAULT 'Open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS portfolio_signal_relationship (
+    portfolio_signal_id BIGINT NOT NULL REFERENCES portfolio_signal(id) ON DELETE CASCADE,
+    relationship_id BIGINT NOT NULL REFERENCES relationship(id),
+    PRIMARY KEY (portfolio_signal_id, relationship_id)
+);
+
+CREATE TABLE IF NOT EXISTS review_item (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    review_item_id TEXT NOT NULL UNIQUE,
+    review_cycle_id BIGINT NOT NULL REFERENCES review_cycle(id),
+    relationship_id BIGINT REFERENCES relationship(id),
+    portfolio_signal_id BIGINT REFERENCES portfolio_signal(id),
+    title TEXT NOT NULL,
+    management_question TEXT,
+    recommendation TEXT,
+    expected_outcome TEXT,
+    status TEXT NOT NULL DEFAULT 'Open',
+    source TEXT NOT NULL DEFAULT 'Relationship Review',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS decision (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    decision_id TEXT NOT NULL UNIQUE,
+    review_item_id BIGINT NOT NULL REFERENCES review_item(id),
+    relationship_id BIGINT NOT NULL REFERENCES relationship(id),
+    review_cycle_id BIGINT NOT NULL REFERENCES review_cycle(id),
+    decision_date TEXT NOT NULL,
+    original_recommendation TEXT NOT NULL,
+    management_decision TEXT NOT NULL CHECK (management_decision IN ('Approved','Modified','Deferred','Rejected')),
+    final_action TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    decision_owner TEXT NOT NULL,
+    execution_required SMALLINT NOT NULL DEFAULT 0 CHECK (execution_required IN (0,1)),
+    lifecycle_status TEXT NOT NULL DEFAULT 'Open',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_decision_relationship ON decision(relationship_id, id DESC);
+CREATE INDEX IF NOT EXISTS ix_decision_review_item ON decision(review_item_id, id DESC);
+
+CREATE TABLE IF NOT EXISTS execution_action (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    execution_action_id TEXT NOT NULL UNIQUE,
+    decision_id BIGINT REFERENCES decision(id),
+    review_item_id BIGINT REFERENCES review_item(id),
+    relationship_id BIGINT NOT NULL REFERENCES relationship(id),
+    source TEXT NOT NULL,
+    score DOUBLE PRECISION,
+    attention_rating TEXT,
+    action TEXT NOT NULL,
+    owner TEXT NOT NULL,
+    priority TEXT,
+    due TEXT,
+    status TEXT NOT NULL,
+    progress_pct INTEGER NOT NULL DEFAULT 0 CHECK (progress_pct BETWEEN 0 AND 100),
+    follow_up_cadence TEXT,
+    sla_status TEXT,
+    impact TEXT,
+    next_step TEXT,
+    closure_criteria TEXT,
+    outcome_status TEXT NOT NULL DEFAULT 'Pending',
+    outcome TEXT NOT NULL DEFAULT 'Pending',
+    closure_evidence TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    closed_at TEXT,
+    CHECK (
+        (source = 'Management Decision' AND decision_id IS NOT NULL)
+        OR (source = 'Migrated v10' AND decision_id IS NULL)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS ix_execution_relationship ON execution_action(relationship_id, id DESC);
+CREATE INDEX IF NOT EXISTS ix_execution_decision ON execution_action(decision_id);
+CREATE INDEX IF NOT EXISTS ix_execution_status ON execution_action(status);
+
+CREATE TABLE IF NOT EXISTS audit_event (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    audit_event_id TEXT NOT NULL UNIQUE,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    relationship_id BIGINT REFERENCES relationship(id),
+    event_type TEXT NOT NULL,
+    event_timestamp TEXT NOT NULL,
+    actor TEXT,
+    payload_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS ix_audit_entity ON audit_event(entity_type, entity_id, id DESC);
+CREATE INDEX IF NOT EXISTS ix_audit_relationship ON audit_event(relationship_id, id DESC);
+
+CREATE OR REPLACE FUNCTION ecai_audit_event_append_only()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION 'AuditEvent is append-only';
+END;
+$$ LANGUAGE plpgsql;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_event_no_update') THEN
+        CREATE TRIGGER trg_audit_event_no_update
+        BEFORE UPDATE ON audit_event
+        FOR EACH ROW EXECUTE FUNCTION ecai_audit_event_append_only();
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_audit_event_no_delete') THEN
+        CREATE TRIGGER trg_audit_event_no_delete
+        BEFORE DELETE ON audit_event
+        FOR EACH ROW EXECUTE FUNCTION ecai_audit_event_append_only();
+    END IF;
+END $$;
+"""
+
+
 
 def _db_init_schema():
     conn = _db_connect()
     try:
-        conn.executescript(ECAI_STAGE_1_D_1_SCHEMA)
-        conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
+        schema = ECAI_POSTGRES_SCHEMA if conn.backend == "postgresql" else ECAI_SQLITE_SCHEMA
+        conn.executescript(schema)
+        if conn.backend == "sqlite":
+            conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
         conn.commit()
     finally:
         conn.close()
@@ -1642,7 +1929,7 @@ def _db_slug(value: str) -> str:
     return slug or "UNKNOWN"
 
 
-def _db_next_id(conn: sqlite3.Connection, table: str, column: str, prefix: str, width: int = 4) -> str:
+def _db_next_id(conn: _DBConnection, table: str, column: str, prefix: str, width: int = 4) -> str:
     rows = conn.execute(f"SELECT {column} FROM {table} WHERE {column} LIKE ?", (f"{prefix}-%",)).fetchall()
     highest = 0
     for row in rows:
@@ -1653,7 +1940,7 @@ def _db_next_id(conn: sqlite3.Connection, table: str, column: str, prefix: str, 
     return f"{prefix}-{highest + 1:0{width}d}"
 
 
-def _db_active_review_cycle(conn: sqlite3.Connection) -> sqlite3.Row:
+def _db_active_review_cycle(conn: _DBConnection) -> Any:
     row = conn.execute("SELECT * FROM review_cycle WHERE status='Active' ORDER BY id DESC LIMIT 1").fetchone()
     if row is None:
         now = _db_now()
@@ -1665,15 +1952,15 @@ def _db_active_review_cycle(conn: sqlite3.Connection) -> sqlite3.Row:
     return row
 
 
-def _db_relationship_row(conn: sqlite3.Connection, company: str) -> sqlite3.Row:
+def _db_relationship_row(conn: _DBConnection, company: str) -> Any:
     rel = conn.execute("SELECT * FROM relationship WHERE name=?", (str(company),)).fetchone()
     if rel is None:
-        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.2.")
+        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.2A.")
     return rel
 
 
 def _db_append_audit(
-    conn: sqlite3.Connection,
+    conn: _DBConnection,
     *,
     entity_type: str,
     entity_id: str,
@@ -1794,7 +2081,7 @@ def _db_migrate_legacy_execution_once():
                 entity_id=rec["Execution Action ID"],
                 relationship_id=rel["id"],
                 event_type="LEGACY_ACTION_MIGRATED",
-                actor="Stage 1-D.2 Migration",
+                actor="Stage 1-D.2A Migration",
                 payload={
                     "status": rec["Status"],
                     "owner": rec["Owner"],
@@ -1804,7 +2091,7 @@ def _db_migrate_legacy_execution_once():
             )
 
 
-def _db_get_or_create_review_item(conn: sqlite3.Connection, row) -> sqlite3.Row:
+def _db_get_or_create_review_item(conn: _DBConnection, row) -> Any:
     cycle = _db_active_review_cycle(conn)
     rel = _db_relationship_row(conn, row["Company"])
     existing = conn.execute(
@@ -2181,7 +2468,7 @@ def _db_list_execution_history(action_id: str | None = None) -> list[dict]:
 
 
 def _refresh_persistent_state_cache():
-    """Compatibility cache: Stage 1-C renderers stay unchanged while SQLite is authoritative."""
+    """Compatibility cache: Stage 1-C renderers stay unchanged while the configured SQL backend is authoritative."""
     cycle = _db_active_review_cycle_contract()
     decisions = _db_list_decisions()
     actions = _db_list_execution_actions()
@@ -2423,7 +2710,7 @@ def _db_update_execution(
 
 
 def _execution_actions_df():
-    """Return the authoritative SQLite execution register as a dataframe."""
+    """Return the authoritative SQL execution register as a dataframe."""
     records = _db_list_execution_actions()
     if not records:
         return pd.DataFrame()
@@ -2470,7 +2757,7 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-D.2",
+        "shell_version": "Stage 1-D.2A",
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
@@ -2485,14 +2772,22 @@ def init_stage_1c_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-    # Stage 1-D.2: SQLite is authoritative for ReviewCycle, ReviewItems, PortfolioSignals,
+    # Stage 1-D.2A: the configured SQL backend is authoritative for ReviewCycle, ReviewItems, PortfolioSignals,
     # Decisions and Execution. Session state remains only a UI compatibility cache.
-    _db_init_schema()
-    _db_seed_reference_data(st.session_state.review_cycle)
-    _db_sync_relationship_review_items()
-    _db_sync_portfolio_signals(_portfolio_signal_definitions(_portfolio_analysis_df()))
-    _db_migrate_legacy_execution_once()
-    _refresh_persistent_state_cache()
+    try:
+        _db_init_schema()
+        _db_seed_reference_data(st.session_state.review_cycle)
+        _db_sync_relationship_review_items()
+        _db_sync_portfolio_signals(_portfolio_signal_definitions(_portfolio_analysis_df()))
+        _db_migrate_legacy_execution_once()
+        _refresh_persistent_state_cache()
+    except Exception as exc:
+        st.error(
+            f"Stage 1-D.2A database initialization failed ({_db_backend_label()}). "
+            "Check the DATABASE_URL secret and PostgreSQL driver configuration."
+        )
+        st.code(str(exc))
+        st.stop()
 
 def _queue_stage1c_navigation(
     page_key: str,
@@ -2556,7 +2851,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-D.2 · Persistence</div>
+            <div class="ec-brand-stage">Stage 1-D.2A · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2601,7 +2896,7 @@ def render_stage_1c_sidebar():
         </div>
         <div class="ec-sidebar-engine">
             Backend retained<br>
-            Score / MAS v1.2 · SQLite Persistence · Action Matrix · Wallet Sizing · Execution Workflow · PDF/Memo Engine
+            Score / MAS v1.2 · {_db_backend_label()} · Action Matrix · Wallet Sizing · Execution Workflow · PDF/Memo Engine
         </div>
         """,
         unsafe_allow_html=True,
@@ -2664,7 +2959,7 @@ def _stage1c_dataframe(data, *, height=320, column_config=None):
 
 
 def _decision_history_df():
-    """Return persistent Decision history from SQLite (latest first)."""
+    """Return persistent Decision history from the configured SQL backend (latest first)."""
     records = _db_list_decisions()
     if not records:
         return pd.DataFrame()
@@ -2706,7 +3001,7 @@ def _record_stage1c_decision(
     execution_due: str | None = None,
     execution_next_step: str | None = None,
 ):
-    """Persist a management Decision transactionally in SQLite.
+    """Persist a management Decision transactionally in the configured SQL backend.
 
     Approved / Modified creates an ExecutionAction only when implementation is
     required. The ReviewItem -> Decision -> ExecutionAction linkage is committed
@@ -2743,7 +3038,7 @@ def _update_stage1c_execution_action(
     outcome: str,
     closure_evidence: str,
 ):
-    """Persist execution, outcome and closure in SQLite and append AuditEvent."""
+    """Persist execution, outcome and closure in the configured SQL backend and append AuditEvent."""
     target = _db_update_execution(
         action_id,
         owner=owner,
@@ -3710,7 +4005,7 @@ def render_stage_1c_decisions():
             )
 
     st.caption(
-        "Stage 1-D.2 persistence: Review Cycle, Review Items, Portfolio Signals, Decisions and linked Execution Actions are stored in SQLite and restored across app sessions. Session state is used only as a UI compatibility cache."
+        f"Stage 1-D.2A persistence: Review Cycle, Review Items, Portfolio Signals, Decisions and linked Execution Actions are stored in {_db_backend_label()} and restored across app sessions. Session state is used only as a UI compatibility cache."
     )
 
 
@@ -4047,7 +4342,7 @@ def render_stage_1c_execution():
         )
 
     st.caption(
-        "Stage 1-D.2 persistence: Review Cycle, Portfolio Signals, Review Items, Decisions, Execution Actions and audit history are stored in SQLite. Relationship master data is seeded in SQLite and will become fully authoritative in the final D.2 step."
+        f"Stage 1-D.2A persistence: Review Cycle, Portfolio Signals, Review Items, Decisions, Execution Actions and audit history are stored in {_db_backend_label()}. Relationship master data is seeded in the same SQL system of record and will become fully authoritative in the final D.2 step."
     )
 
 
@@ -4367,7 +4662,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-D.2 Persistent Review & Portfolio State · Build Candidate v0.1 · Stage 1-C.10 UI locked
+            EC-AI Executive Review Workspace · Stage 1-D.2A Production Database Foundation · Build Candidate v0.1 · Stage 1-C.10 UI locked
         </div>
         """,
         unsafe_allow_html=True,
