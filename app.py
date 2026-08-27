@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-D.1 Persistent Data Model
+# EC-AI Executive Review Workspace — Stage 1-D.2 Persistent Review & Portfolio State
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
@@ -28,7 +28,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-D.1",
+    page_title="EC-AI Executive Review Workspace — Stage 1-D.2",
     page_icon="🏦",
     layout="wide",
 )
@@ -1430,19 +1430,19 @@ def _migrate_v10_execution_actions():
 
 
 # =============================================================================
-# STAGE 1-D.1 — SQLITE PERSISTENCE LAYER
+# STAGE 1-D.2 — SQLITE PERSISTENCE LAYER
 # =============================================================================
 # Founder-facing operating model:
 #   One Python application file -> one automatically-created SQLite database file.
 # The Stage 1-C.10 UI remains unchanged. SQLite becomes the durable source of
-# truth for Decisions and Execution first; the remaining Stage 1-D.1 entities
-# are created now so migration can continue without redesigning the product.
+# truth for Decisions and Execution, then ReviewCycle, PortfolioSignal and ReviewItem.
+# Stage 1-C.10 remains the immutable product/UI reference.
 
 ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_1.db"),
 )
-ECAI_SCHEMA_VERSION = 1
+ECAI_SCHEMA_VERSION = 2
 
 
 def _db_now() -> str:
@@ -1668,7 +1668,7 @@ def _db_active_review_cycle(conn: sqlite3.Connection) -> sqlite3.Row:
 def _db_relationship_row(conn: sqlite3.Connection, company: str) -> sqlite3.Row:
     rel = conn.execute("SELECT * FROM relationship WHERE name=?", (str(company),)).fetchone()
     if rel is None:
-        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.1.")
+        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.2.")
     return rel
 
 
@@ -1710,11 +1710,6 @@ def _db_seed_reference_data(review_cycle_name: str = "Current Review"):
             conn.execute(
                 "INSERT INTO review_cycle(review_cycle_id,name,status,started_at,created_at,updated_at) VALUES (?,?,?,?,?,?)",
                 ("RC-CURRENT", review_cycle_name, "Active", now, now, now),
-            )
-        else:
-            conn.execute(
-                "UPDATE review_cycle SET name=?, updated_at=? WHERE id=?",
-                (review_cycle_name, now, cycle["id"]),
             )
 
         for _, r in df.iterrows():
@@ -1799,7 +1794,7 @@ def _db_migrate_legacy_execution_once():
                 entity_id=rec["Execution Action ID"],
                 relationship_id=rel["id"],
                 event_type="LEGACY_ACTION_MIGRATED",
-                actor="Stage 1-D.1 Migration",
+                actor="Stage 1-D.2 Migration",
                 payload={
                     "status": rec["Status"],
                     "owner": rec["Owner"],
@@ -1815,7 +1810,6 @@ def _db_get_or_create_review_item(conn: sqlite3.Connection, row) -> sqlite3.Row:
     existing = conn.execute(
         """SELECT * FROM review_item
            WHERE review_cycle_id=? AND relationship_id=? AND source='Relationship Review'
-             AND status IN ('Open','Deferred')
            ORDER BY id DESC LIMIT 1""",
         (cycle["id"], rel["id"]),
     ).fetchone()
@@ -1847,6 +1841,229 @@ def _db_get_or_create_review_item(conn: sqlite3.Connection, row) -> sqlite3.Row:
     )
     return conn.execute("SELECT * FROM review_item WHERE review_item_id=?", (review_item_id,)).fetchone()
 
+
+
+def _db_sync_relationship_review_items():
+    """Persist the Stage 1-C.10 relationship Review queue for the active cycle.
+
+    The UI can remain dataframe-driven, but ReviewItem is now a durable object and
+    decisions attach to the same item rather than creating a parallel session object.
+    """
+    with _db_transaction() as conn:
+        cycle = _db_active_review_cycle(conn)
+        now = _db_now()
+        candidates = df[df["MAS"] >= 41].copy().sort_values("MAS", ascending=False)
+        for _, row in candidates.iterrows():
+            rel = _db_relationship_row(conn, row["Company"])
+            existing = conn.execute(
+                """SELECT * FROM review_item
+                   WHERE review_cycle_id=? AND relationship_id=? AND source='Relationship Review'
+                   ORDER BY id DESC LIMIT 1""",
+                (cycle["id"], rel["id"]),
+            ).fetchone()
+            title = f"Management Review Item · {row['Company']}"
+            question = f"Should management proceed with {row['Recommended_Action']}?"
+            if existing is None:
+                review_item_id = _db_next_id(conn, "review_item", "review_item_id", "REV")
+                conn.execute(
+                    """INSERT INTO review_item(
+                           review_item_id,review_cycle_id,relationship_id,portfolio_signal_id,title,
+                           management_question,recommendation,expected_outcome,status,source,created_at,updated_at
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        review_item_id, cycle["id"], rel["id"], None, title, question,
+                        row["Recommended_Action"], row["Expected_Outcome"], "Open",
+                        "Relationship Review", now, now,
+                    ),
+                )
+                _db_append_audit(
+                    conn,
+                    entity_type="ReviewItem",
+                    entity_id=review_item_id,
+                    relationship_id=rel["id"],
+                    event_type="REVIEW_ITEM_CREATED",
+                    actor="EC-AI Review",
+                    payload={"recommendation": row["Recommended_Action"], "source": "Relationship Review"},
+                )
+            else:
+                # Refresh evidence-derived fields without reopening an item that management already closed/deferred.
+                conn.execute(
+                    """UPDATE review_item
+                       SET title=?, management_question=?, recommendation=?, expected_outcome=?, updated_at=?
+                       WHERE id=?""",
+                    (title, question, row["Recommended_Action"], row["Expected_Outcome"], now, existing["id"]),
+                )
+
+
+def _db_sync_portfolio_signals(signals: list[dict]):
+    """Persist the material portfolio-signal set and relationship links.
+
+    Signal IDs remain the Stage 1-C public IDs for the current review-cycle model.
+    Rows are updated only when the calculated signal changes, avoiding audit noise on reruns.
+    """
+    with _db_transaction() as conn:
+        cycle = _db_active_review_cycle(conn)
+        now = _db_now()
+        for signal in signals:
+            signal_id = str(signal["Signal ID"])
+            existing = conn.execute("SELECT * FROM portfolio_signal WHERE signal_id=?", (signal_id,)).fetchone()
+            values = (
+                cycle["id"], signal["Pattern"], signal["Severity"], signal["Interpretation"],
+                signal["Management Question"], "Open", now,
+            )
+            if existing is None:
+                cur = conn.execute(
+                    """INSERT INTO portfolio_signal(
+                           signal_id,review_cycle_id,pattern,severity,interpretation,management_question,
+                           status,created_at,updated_at
+                       ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (signal_id, cycle["id"], signal["Pattern"], signal["Severity"], signal["Interpretation"],
+                     signal["Management Question"], "Open", now, now),
+                )
+                signal_db_id = cur.lastrowid
+                _db_append_audit(
+                    conn,
+                    entity_type="PortfolioSignal",
+                    entity_id=signal_id,
+                    relationship_id=None,
+                    event_type="PORTFOLIO_SIGNAL_CREATED",
+                    actor="EC-AI Portfolio",
+                    payload={"pattern": signal["Pattern"], "severity": signal["Severity"]},
+                )
+            else:
+                signal_db_id = existing["id"]
+                changed = any([
+                    existing["review_cycle_id"] != cycle["id"],
+                    existing["pattern"] != signal["Pattern"],
+                    existing["severity"] != signal["Severity"],
+                    (existing["interpretation"] or "") != (signal["Interpretation"] or ""),
+                    (existing["management_question"] or "") != (signal["Management Question"] or ""),
+                ])
+                conn.execute(
+                    """UPDATE portfolio_signal
+                       SET review_cycle_id=?,pattern=?,severity=?,interpretation=?,management_question=?,status=?,updated_at=?
+                       WHERE id=?""",
+                    values + (signal_db_id,),
+                )
+                if changed:
+                    _db_append_audit(
+                        conn,
+                        entity_type="PortfolioSignal",
+                        entity_id=signal_id,
+                        relationship_id=None,
+                        event_type="PORTFOLIO_SIGNAL_REFRESHED",
+                        actor="EC-AI Portfolio",
+                        payload={"pattern": signal["Pattern"], "severity": signal["Severity"]},
+                    )
+
+            # Relationship membership is a durable many-to-many link.
+            conn.execute("DELETE FROM portfolio_signal_relationship WHERE portfolio_signal_id=?", (signal_db_id,))
+            relationship_names = [
+                x.strip() for x in str(signal.get("Relationships", "")).split(",")
+                if x.strip() and x.strip().lower() != "none"
+            ]
+            for company in relationship_names:
+                rel = conn.execute("SELECT id FROM relationship WHERE name=?", (company,)).fetchone()
+                if rel is not None:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO portfolio_signal_relationship(portfolio_signal_id,relationship_id) VALUES (?,?)",
+                        (signal_db_id, rel["id"]),
+                    )
+
+
+def _db_list_portfolio_review_items() -> list[dict]:
+    """Return portfolio-promoted ReviewItems in the exact Stage 1-C renderer contract."""
+    conn = _db_connect()
+    try:
+        rows = conn.execute(
+            """SELECT ri.*, ps.signal_id, ps.pattern, ps.severity, ps.interpretation,
+                      ps.management_question AS signal_management_question,
+                      rc.name AS review_cycle_name,
+                      (SELECT GROUP_CONCAT(r.name, ', ')
+                         FROM portfolio_signal_relationship psr
+                         JOIN relationship r ON r.id=psr.relationship_id
+                        WHERE psr.portfolio_signal_id=ps.id) AS relationship_names
+               FROM review_item ri
+               JOIN portfolio_signal ps ON ps.id=ri.portfolio_signal_id
+               JOIN review_cycle rc ON rc.id=ri.review_cycle_id
+               WHERE ri.source='Portfolio Intelligence'
+               ORDER BY ri.id ASC"""
+        ).fetchall()
+        return [{
+            "Review Item ID": r["review_item_id"],
+            "Signal ID": r["signal_id"],
+            "Pattern": r["pattern"],
+            "Severity": r["severity"],
+            "Relationships": r["relationship_names"] or "None",
+            "Management Question": r["management_question"] or r["signal_management_question"] or "",
+            "Interpretation": r["interpretation"] or "",
+            "Source": "Portfolio Intelligence",
+            "Review Cycle": r["review_cycle_name"],
+            "Promoted": r["created_at"],
+            "Status": r["status"],
+        } for r in rows]
+    finally:
+        conn.close()
+
+
+def _db_promote_portfolio_signal(signal: dict):
+    """Promote one persisted PortfolioSignal into one durable ReviewItem."""
+    # Keep the signal row fresh before promotion in case the user arrived directly on Portfolio.
+    _db_sync_portfolio_signals([signal])
+    with _db_transaction() as conn:
+        cycle = _db_active_review_cycle(conn)
+        ps = conn.execute("SELECT * FROM portfolio_signal WHERE signal_id=?", (signal["Signal ID"],)).fetchone()
+        if ps is None:
+            raise ValueError(f"Portfolio signal {signal['Signal ID']} is not registered.")
+        existing = conn.execute(
+            """SELECT * FROM review_item
+               WHERE review_cycle_id=? AND portfolio_signal_id=? AND source='Portfolio Intelligence'
+               ORDER BY id DESC LIMIT 1""",
+            (cycle["id"], ps["id"]),
+        ).fetchone()
+        if existing is not None:
+            records = _db_list_portfolio_review_items()
+            match = next((x for x in records if x.get("Review Item ID") == existing["review_item_id"]), None)
+            return match or {"Review Item ID": existing["review_item_id"]}, False
+
+        review_id = _db_next_id(conn, "review_item", "review_item_id", "PRI")
+        now = _db_now()
+        conn.execute(
+            """INSERT INTO review_item(
+                   review_item_id,review_cycle_id,relationship_id,portfolio_signal_id,title,
+                   management_question,recommendation,expected_outcome,status,source,created_at,updated_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                review_id, cycle["id"], None, ps["id"], signal["Pattern"],
+                signal["Management Question"], None, None, "Open", "Portfolio Intelligence", now, now,
+            ),
+        )
+        _db_append_audit(
+            conn,
+            entity_type="ReviewItem",
+            entity_id=review_id,
+            relationship_id=None,
+            event_type="PORTFOLIO_SIGNAL_PROMOTED",
+            actor="EC-AI Portfolio",
+            payload={"signal_id": signal["Signal ID"], "pattern": signal["Pattern"], "severity": signal["Severity"]},
+        )
+    records = _db_list_portfolio_review_items()
+    record = next((x for x in records if x.get("Review Item ID") == review_id), {"Review Item ID": review_id})
+    return record, True
+
+
+def _db_active_review_cycle_contract() -> dict:
+    conn = _db_connect()
+    try:
+        cycle = _db_active_review_cycle(conn)
+        return {
+            "Review Cycle ID": cycle["review_cycle_id"],
+            "Review Cycle": cycle["name"],
+            "Status": cycle["status"],
+            "Started": cycle["started_at"],
+        }
+    finally:
+        conn.close()
 
 def _db_list_decisions() -> list[dict]:
     conn = _db_connect()
@@ -1964,13 +2181,16 @@ def _db_list_execution_history(action_id: str | None = None) -> list[dict]:
 
 
 def _refresh_persistent_state_cache():
-    """Compatibility cache: Stage 1-C renderers can stay unchanged while SQLite is authoritative."""
+    """Compatibility cache: Stage 1-C renderers stay unchanged while SQLite is authoritative."""
+    cycle = _db_active_review_cycle_contract()
     decisions = _db_list_decisions()
     actions = _db_list_execution_actions()
+    st.session_state.review_cycle = cycle["Review Cycle"]
     st.session_state.decision_history = decisions
     st.session_state.execution_actions = actions
     st.session_state.decision_execution_actions = [a for a in actions if a.get("Source") == "Management Decision"]
     st.session_state.execution_history = _db_list_execution_history()
+    st.session_state.portfolio_review_items = _db_list_portfolio_review_items()
 
 
 def _db_record_management_decision(
@@ -2250,7 +2470,7 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-D.1",
+        "shell_version": "Stage 1-D.2",
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
@@ -2265,11 +2485,12 @@ def init_stage_1c_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-    # Stage 1-D.1: initialize the database automatically and hydrate the existing
-    # Stage 1-C render contract from SQLite. Session state is now a UI cache only
-    # for Decisions / Execution, not their system of record.
+    # Stage 1-D.2: SQLite is authoritative for ReviewCycle, ReviewItems, PortfolioSignals,
+    # Decisions and Execution. Session state remains only a UI compatibility cache.
     _db_init_schema()
     _db_seed_reference_data(st.session_state.review_cycle)
+    _db_sync_relationship_review_items()
+    _db_sync_portfolio_signals(_portfolio_signal_definitions(_portfolio_analysis_df()))
     _db_migrate_legacy_execution_once()
     _refresh_persistent_state_cache()
 
@@ -2335,7 +2556,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-D.1 · Persistence</div>
+            <div class="ec-brand-stage">Stage 1-D.2 · Persistence</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3489,7 +3710,7 @@ def render_stage_1c_decisions():
             )
 
     st.caption(
-        "Stage 1-D.1 persistence: Decision records and linked Execution Actions are stored in SQLite and restored across app sessions. Session state is used only as a UI compatibility cache."
+        "Stage 1-D.2 persistence: Review Cycle, Review Items, Portfolio Signals, Decisions and linked Execution Actions are stored in SQLite and restored across app sessions. Session state is used only as a UI compatibility cache."
     )
 
 
@@ -3826,7 +4047,7 @@ def render_stage_1c_execution():
         )
 
     st.caption(
-        "Stage 1-D.1 persistence: Decisions, Execution Actions and their audit history are stored in SQLite. Portfolio-promotion state remains session-based for progressive migration."
+        "Stage 1-D.2 persistence: Review Cycle, Portfolio Signals, Review Items, Decisions, Execution Actions and audit history are stored in SQLite. Relationship master data is seeded in SQLite and will become fully authoritative in the final D.2 step."
     )
 
 
@@ -3907,28 +4128,14 @@ def _portfolio_signal_definitions(portfolio_df: pd.DataFrame):
 
 
 def _promote_portfolio_signal(signal: dict):
-    existing = st.session_state.get("portfolio_review_items", [])
-    for item in existing:
-        if item.get("Signal ID") == signal["Signal ID"] and item.get("Review Cycle") == st.session_state.get("review_cycle"):
-            return item, False
-    review_id = f"PRI-{len(existing)+1:04d}"
-    record = {
-        "Review Item ID": review_id,
-        "Signal ID": signal["Signal ID"],
-        "Pattern": signal["Pattern"],
-        "Severity": signal["Severity"],
-        "Relationships": signal["Relationships"],
-        "Management Question": signal["Management Question"],
-        "Interpretation": signal["Interpretation"],
-        "Source": "Portfolio Intelligence",
-        "Review Cycle": st.session_state.get("review_cycle", "Current Review"),
-        "Promoted": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "Status": "Open",
-    }
-    st.session_state.portfolio_review_items.append(record)
+    record, created = _db_promote_portfolio_signal(signal)
+    _refresh_persistent_state_cache()
     st.session_state.active_portfolio_signal_id = signal["Signal ID"]
-    st.session_state.portfolio_signal_flash = f"{review_id} created from {signal['Pattern']} and promoted into Review."
-    return record, True
+    if created:
+        st.session_state.portfolio_signal_flash = (
+            f"{record['Review Item ID']} created from {signal['Pattern']} and promoted into Review."
+        )
+    return record, created
 
 
 def render_stage_1c_portfolio():
@@ -4160,7 +4367,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-D.1 Persistent Data Model · Hotfix v1.2 · Stage 1-C.10 UI locked
+            EC-AI Executive Review Workspace · Stage 1-D.2 Persistent Review & Portfolio State · Build Candidate v0.1 · Stage 1-C.10 UI locked
         </div>
         """,
         unsafe_allow_html=True,
