@@ -11,3 +11,4 @@ openai
 python-pptx
 plotly==5.22.0
 kaleido==0.2.1
+psycopg2-binary>=2.9,<3
