@@ -1466,6 +1466,7 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 3
+ECAI_PERSISTENCE_RUNTIME_VERSION = 2  # v0.3: cached bootstrap + one-connection state hydration
 
 
 def _db_now() -> str:
@@ -1957,14 +1958,15 @@ def _db_init_schema_cached(backend: str, schema_version: int, database_identity:
     return _db_init_schema_uncached()
 
 
-def _db_init_schema():
-    # Do not expose the password in the cache key. The backend/host identity is
-    # enough to invalidate the bootstrap when the deployment target changes.
+def _db_database_identity() -> str:
+    # Never expose credentials in cache keys, logs or the UI.
     if ECAI_DB_BACKEND == "postgresql":
-        identity = re.sub(r"://[^@]+@", "://***@", ECAI_DATABASE_URL)
-    else:
-        identity = os.path.abspath(ECAI_DB_PATH)
-    return _db_init_schema_cached(ECAI_DB_BACKEND, ECAI_SCHEMA_VERSION, identity)
+        return re.sub(r"://[^@]+@", "://***@", ECAI_DATABASE_URL)
+    return os.path.abspath(ECAI_DB_PATH)
+
+
+def _db_init_schema():
+    return _db_init_schema_cached(ECAI_DB_BACKEND, ECAI_SCHEMA_VERSION, _db_database_identity())
 
 
 def _db_slug(value: str) -> str:
@@ -2134,6 +2136,32 @@ def _db_migrate_legacy_execution_once():
             )
 
 
+@st.cache_resource(show_spinner=False)
+def _db_bootstrap_reference_state_cached(backend: str, schema_version: int, runtime_version: int, database_identity: str, review_cycle_name: str):
+    """Seed/sync stable reference state once per Streamlit worker deployment.
+
+    The relationship universe, relationship ReviewItems, calculated portfolio
+    signal definitions and one-time legacy execution migration do not need to be
+    re-written on every widget interaction. The routines remain idempotent and
+    will run again automatically after a real app redeployment/new worker.
+    """
+    _db_seed_reference_data(review_cycle_name)
+    _db_sync_relationship_review_items()
+    _db_sync_portfolio_signals(_portfolio_signal_definitions(_portfolio_analysis_df()))
+    _db_migrate_legacy_execution_once()
+    return True
+
+
+def _db_bootstrap_reference_state(review_cycle_name: str):
+    return _db_bootstrap_reference_state_cached(
+        ECAI_DB_BACKEND,
+        ECAI_SCHEMA_VERSION,
+        ECAI_PERSISTENCE_RUNTIME_VERSION,
+        _db_database_identity(),
+        review_cycle_name,
+    )
+
+
 def _db_get_or_create_review_item(conn: _DBConnection, row) -> Any:
     cycle = _db_active_review_cycle(conn)
     rel = _db_relationship_row(conn, row["Company"])
@@ -2301,9 +2329,16 @@ def _db_sync_portfolio_signals(signals: list[dict]):
                     )
 
 
-def _db_list_portfolio_review_items() -> list[dict]:
-    """Return portfolio-promoted ReviewItems in the exact Stage 1-C renderer contract."""
-    conn = _db_connect()
+def _db_list_portfolio_review_items(conn=None) -> list[dict]:
+    """Return portfolio-promoted ReviewItems in the exact Stage 1-C renderer contract.
+
+    v0.3 accepts an existing connection so a Streamlit rerun can hydrate the
+    complete UI state with one PostgreSQL network connection instead of opening
+    a new TLS/pooler connection for every collection.
+    """
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
     try:
         rows = conn.execute(
             """SELECT ri.*, ps.signal_id, ps.pattern, ps.severity, ps.interpretation,
@@ -2333,7 +2368,8 @@ def _db_list_portfolio_review_items() -> list[dict]:
             "Status": r["status"],
         } for r in rows]
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 def _db_promote_portfolio_signal(signal: dict):
@@ -2382,8 +2418,10 @@ def _db_promote_portfolio_signal(signal: dict):
     return record, True
 
 
-def _db_active_review_cycle_contract() -> dict:
-    conn = _db_connect()
+def _db_active_review_cycle_contract(conn=None) -> dict:
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
     try:
         cycle = _db_active_review_cycle(conn)
         return {
@@ -2393,10 +2431,13 @@ def _db_active_review_cycle_contract() -> dict:
             "Started": cycle["started_at"],
         }
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
-def _db_list_decisions() -> list[dict]:
-    conn = _db_connect()
+def _db_list_decisions(conn=None) -> list[dict]:
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
     try:
         rows = conn.execute(
             """SELECT d.*,
@@ -2427,11 +2468,14 @@ def _db_list_decisions() -> list[dict]:
             })
         return out
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
-def _db_list_execution_actions() -> list[dict]:
-    conn = _db_connect()
+def _db_list_execution_actions(conn=None) -> list[dict]:
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
     try:
         rows = conn.execute(
             """SELECT ea.*, d.decision_id AS decision_public_id, r.name AS relationship_name
@@ -2468,11 +2512,14 @@ def _db_list_execution_actions() -> list[dict]:
             })
         return out
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
-def _db_list_execution_history(action_id: str | None = None) -> list[dict]:
-    conn = _db_connect()
+def _db_list_execution_history(action_id: str | None = None, conn=None) -> list[dict]:
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
     try:
         sql = """SELECT ae.*, r.name AS relationship_name
                  FROM audit_event ae
@@ -2507,20 +2554,34 @@ def _db_list_execution_history(action_id: str | None = None) -> list[dict]:
             })
         return out
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
 
 
 def _refresh_persistent_state_cache():
-    """Compatibility cache: Stage 1-C renderers stay unchanged while the configured SQL backend is authoritative."""
-    cycle = _db_active_review_cycle_contract()
-    decisions = _db_list_decisions()
-    actions = _db_list_execution_actions()
+    """Hydrate Stage 1-C compatibility state from one authoritative SQL snapshot.
+
+    v0.2 opened five separate PostgreSQL connections on every Streamlit rerun.
+    With a remote Supabase database, widget interactions (especially sliders and
+    selectboxes on Execution) therefore incurred repeated network/TLS/pooler
+    round trips. v0.3 deliberately uses one read connection for the full snapshot.
+    """
+    conn = _db_connect()
+    try:
+        cycle = _db_active_review_cycle_contract(conn)
+        decisions = _db_list_decisions(conn)
+        actions = _db_list_execution_actions(conn)
+        history = _db_list_execution_history(conn=conn)
+        portfolio_items = _db_list_portfolio_review_items(conn)
+    finally:
+        conn.close()
+
     st.session_state.review_cycle = cycle["Review Cycle"]
     st.session_state.decision_history = decisions
     st.session_state.execution_actions = actions
     st.session_state.decision_execution_actions = [a for a in actions if a.get("Source") == "Management Decision"]
-    st.session_state.execution_history = _db_list_execution_history()
-    st.session_state.portfolio_review_items = _db_list_portfolio_review_items()
+    st.session_state.execution_history = history
+    st.session_state.portfolio_review_items = portfolio_items
 
 
 def _db_record_management_decision(
@@ -2819,10 +2880,7 @@ def init_stage_1c_state():
     # Decisions and Execution. Session state remains only a UI compatibility cache.
     try:
         _db_init_schema()
-        _db_seed_reference_data(st.session_state.review_cycle)
-        _db_sync_relationship_review_items()
-        _db_sync_portfolio_signals(_portfolio_signal_definitions(_portfolio_analysis_df()))
-        _db_migrate_legacy_execution_once()
+        _db_bootstrap_reference_state(st.session_state.review_cycle)
         _refresh_persistent_state_cache()
     except Exception as exc:
         st.error(
@@ -4705,7 +4763,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-D.2A Production Database Foundation · PostgreSQL Hotfix v0.2 · Stage 1-C.10 UI locked
+            EC-AI Executive Review Workspace · Stage 1-D.2A Production Database Foundation · PostgreSQL Performance Hotfix v0.3 · Stage 1-C.10 UI locked
         </div>
         """,
         unsafe_allow_html=True,
