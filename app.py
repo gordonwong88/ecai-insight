@@ -14,6 +14,7 @@
 import io
 import math
 import re
+import time
 import os
 import json
 import sqlite3
@@ -1912,16 +1913,58 @@ END $$;
 
 
 
+def _db_init_schema_uncached():
+    """Create/upgrade the EC-AI schema safely.
+
+    PostgreSQL DDL touches shared system catalogs. Streamlit can briefly run two
+    app reruns at the same time (for example immediately after Record Decision),
+    so concurrent CREATE/CREATE OR REPLACE statements can raise
+    ``tuple concurrently updated``. A PostgreSQL advisory transaction lock
+    serializes schema bootstrap across all EC-AI sessions/workers. A small retry
+    handles a catalog conflict already in flight when the new build starts.
+    """
+    schema = ECAI_POSTGRES_SCHEMA if ECAI_DB_BACKEND == "postgresql" else ECAI_SQLITE_SCHEMA
+    max_attempts = 4 if ECAI_DB_BACKEND == "postgresql" else 1
+
+    for attempt in range(1, max_attempts + 1):
+        conn = _db_connect()
+        try:
+            if conn.backend == "postgresql":
+                # Stable application-scoped lock key; held until commit/rollback.
+                conn.execute("SELECT pg_advisory_xact_lock(?)", (831042026,))
+            conn.executescript(schema)
+            if conn.backend == "sqlite":
+                conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
+            conn.commit()
+            return True
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            transient = "tuple concurrently updated" in str(exc).lower()
+            if conn.backend == "postgresql" and transient and attempt < max_attempts:
+                time.sleep(0.35 * attempt)
+                continue
+            raise
+        finally:
+            conn.close()
+
+
+@st.cache_resource(show_spinner=False)
+def _db_init_schema_cached(backend: str, schema_version: int, database_identity: str):
+    """Run DDL once per Streamlit worker/deployment, not on every widget rerun."""
+    return _db_init_schema_uncached()
+
+
 def _db_init_schema():
-    conn = _db_connect()
-    try:
-        schema = ECAI_POSTGRES_SCHEMA if conn.backend == "postgresql" else ECAI_SQLITE_SCHEMA
-        conn.executescript(schema)
-        if conn.backend == "sqlite":
-            conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
-        conn.commit()
-    finally:
-        conn.close()
+    # Do not expose the password in the cache key. The backend/host identity is
+    # enough to invalidate the bootstrap when the deployment target changes.
+    if ECAI_DB_BACKEND == "postgresql":
+        identity = re.sub(r"://[^@]+@", "://***@", ECAI_DATABASE_URL)
+    else:
+        identity = os.path.abspath(ECAI_DB_PATH)
+    return _db_init_schema_cached(ECAI_DB_BACKEND, ECAI_SCHEMA_VERSION, identity)
 
 
 def _db_slug(value: str) -> str:
@@ -4662,7 +4705,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-D.2A Production Database Foundation · Build Candidate v0.1 · Stage 1-C.10 UI locked
+            EC-AI Executive Review Workspace · Stage 1-D.2A Production Database Foundation · PostgreSQL Hotfix v0.2 · Stage 1-C.10 UI locked
         </div>
         """,
         unsafe_allow_html=True,
