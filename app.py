@@ -2265,9 +2265,25 @@ def _db_sync_portfolio_signals(signals: list[dict]):
         for signal in signals:
             signal_id = str(signal["Signal ID"])
             existing = conn.execute("SELECT * FROM portfolio_signal WHERE signal_id=?", (signal_id,)).fetchone()
+            # Preserve workflow status on refresh. New signals start Open. If a
+            # durable Portfolio Intelligence ReviewItem already exists for this
+            # signal in the active cycle, the signal's authoritative workflow
+            # state is In Review. This also backfills older v0.3 rows that were
+            # incorrectly left as Open while the UI already showed In Review.
+            if existing is None:
+                persisted_status = "Open"
+            else:
+                has_promoted_review = conn.execute(
+                    """SELECT 1 FROM review_item
+                       WHERE review_cycle_id=? AND portfolio_signal_id=?
+                         AND source='Portfolio Intelligence'
+                       LIMIT 1""",
+                    (cycle["id"], existing["id"]),
+                ).fetchone() is not None
+                persisted_status = "In Review" if has_promoted_review else (existing["status"] or "Open")
             values = (
                 cycle["id"], signal["Pattern"], signal["Severity"], signal["Interpretation"],
-                signal["Management Question"], "Open", now,
+                signal["Management Question"], persisted_status, now,
             )
             if existing is None:
                 cur = conn.execute(
@@ -2303,6 +2319,20 @@ def _db_sync_portfolio_signals(signals: list[dict]):
                        WHERE id=?""",
                     values + (signal_db_id,),
                 )
+                if (existing["status"] or "Open") != persisted_status:
+                    _db_append_audit(
+                        conn,
+                        entity_type="PortfolioSignal",
+                        entity_id=signal_id,
+                        relationship_id=None,
+                        event_type="PORTFOLIO_SIGNAL_STATUS_CHANGED",
+                        actor="EC-AI Portfolio",
+                        payload={
+                            "from": existing["status"] or "Open",
+                            "to": persisted_status,
+                            "reason": "Reconciled with durable ReviewItem",
+                        },
+                    )
                 if changed:
                     _db_append_audit(
                         conn,
@@ -2388,7 +2418,24 @@ def _db_promote_portfolio_signal(signal: dict):
             (cycle["id"], ps["id"]),
         ).fetchone()
         if existing is not None:
-            records = _db_list_portfolio_review_items()
+            # Idempotent repair: if a ReviewItem already exists, ensure the source
+            # PortfolioSignal reflects the same workflow state.
+            if (ps["status"] or "Open") != "In Review":
+                now = _db_now()
+                conn.execute(
+                    "UPDATE portfolio_signal SET status='In Review', updated_at=? WHERE id=?",
+                    (now, ps["id"]),
+                )
+                _db_append_audit(
+                    conn,
+                    entity_type="PortfolioSignal",
+                    entity_id=signal["Signal ID"],
+                    relationship_id=None,
+                    event_type="PORTFOLIO_SIGNAL_STATUS_CHANGED",
+                    actor="EC-AI Portfolio",
+                    payload={"from": ps["status"] or "Open", "to": "In Review", "reason": "ReviewItem already exists"},
+                )
+            records = _db_list_portfolio_review_items(conn)
             match = next((x for x in records if x.get("Review Item ID") == existing["review_item_id"]), None)
             return match or {"Review Item ID": existing["review_item_id"]}, False
 
@@ -2403,6 +2450,20 @@ def _db_promote_portfolio_signal(signal: dict):
                 review_id, cycle["id"], None, ps["id"], signal["Pattern"],
                 signal["Management Question"], None, None, "Open", "Portfolio Intelligence", now, now,
             ),
+        )
+        # Promotion is a workflow state change on the PortfolioSignal itself.
+        conn.execute(
+            "UPDATE portfolio_signal SET status='In Review', updated_at=? WHERE id=?",
+            (now, ps["id"]),
+        )
+        _db_append_audit(
+            conn,
+            entity_type="PortfolioSignal",
+            entity_id=signal["Signal ID"],
+            relationship_id=None,
+            event_type="PORTFOLIO_SIGNAL_STATUS_CHANGED",
+            actor="EC-AI Portfolio",
+            payload={"from": ps["status"] or "Open", "to": "In Review", "review_item_id": review_id},
         )
         _db_append_audit(
             conn,
