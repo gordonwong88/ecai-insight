@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-D.2A Production Database Foundation
+# EC-AI Executive Review Workspace — Stage 1-D.2B Authoritative Relationship Model
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
@@ -35,7 +35,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-D.2A",
+    page_title="EC-AI Executive Review Workspace — Stage 1-D.2B",
     page_icon="🏦",
     layout="wide",
 )
@@ -1437,7 +1437,7 @@ def _migrate_v10_execution_actions():
 
 
 # =============================================================================
-# STAGE 1-D.2A — PRODUCTION DATABASE FOUNDATION
+# STAGE 1-D.2B — PRODUCTION DATABASE FOUNDATION
 # =============================================================================
 # Storage contract:
 #   - Production: managed PostgreSQL when DATABASE_URL is configured in Streamlit Secrets.
@@ -1466,7 +1466,7 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 3
-ECAI_PERSISTENCE_RUNTIME_VERSION = 2  # v0.3: cached bootstrap + one-connection state hydration
+ECAI_PERSISTENCE_RUNTIME_VERSION = 3  # D.2B v0.1: authoritative Relationship registry + idempotent closure
 
 
 def _db_now() -> str:
@@ -1998,10 +1998,65 @@ def _db_active_review_cycle(conn: _DBConnection) -> Any:
 
 
 def _db_relationship_row(conn: _DBConnection, company: str) -> Any:
-    rel = conn.execute("SELECT * FROM relationship WHERE name=?", (str(company),)).fetchone()
+    """Resolve a relationship through its permanent Relationship ID first.
+
+    Stage 1-D.2B makes Relationship the authoritative identity object. The UI may
+    continue to pass the familiar company display name, but database joins are
+    anchored to a stable REL-* key rather than treating the display name as the
+    real key. A name lookup is retained only as a compatibility fallback for any
+    pre-D.2B record.
+    """
+    relationship_key = f"REL-{_db_slug(company)}"
+    rel = conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (relationship_key,),
+    ).fetchone()
     if rel is None:
-        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.2A.")
+        rel = conn.execute("SELECT * FROM relationship WHERE name=?", (str(company),)).fetchone()
+    if rel is None:
+        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.2B.")
     return rel
+
+
+def _db_list_relationship_registry(conn: _DBConnection | None = None) -> list[dict]:
+    """Return the authoritative Relationship master used by the UI shell.
+
+    Identity attributes (relationship_id/name/country/sector) are owned by the
+    operational database. Rating/outlook and score/recommendation fields remain
+    analytical snapshots that can be refreshed from the current intelligence
+    dataset without changing identity.
+    """
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
+    try:
+        rows = conn.execute(
+            """SELECT id,relationship_id,name,country,sector,external_rating,outlook,
+                      score,attention_rating,primary_driver,recommended_action,
+                      created_at,updated_at
+               FROM relationship ORDER BY id"""
+        ).fetchall()
+        return [
+            {
+                "DB ID": int(r["id"]),
+                "Relationship ID": r["relationship_id"],
+                "Name": r["name"],
+                "Country": r["country"] or "",
+                "Sector": r["sector"] or "",
+                "External Rating": r["external_rating"] or "",
+                "Outlook": r["outlook"] or "",
+                "Score": float(r["score"]) if r["score"] is not None else None,
+                "Attention Rating": r["attention_rating"] or "",
+                "Primary Driver": r["primary_driver"] or "",
+                "Recommended Action": r["recommended_action"] or "",
+                "Created": r["created_at"],
+                "Last Updated": r["updated_at"],
+            }
+            for r in rows
+        ]
+    finally:
+        if owns_connection:
+            conn.close()
 
 
 def _db_append_audit(
@@ -2034,7 +2089,14 @@ def _db_append_audit(
 
 
 def _db_seed_reference_data(review_cycle_name: str = "Current Review"):
-    """Idempotently seed the current ReviewCycle and the Stage 1-C.10 relationship universe."""
+    """Seed only missing Relationship identities; refresh analytics separately.
+
+    D.2A used an UPSERT that rewrote name/country/sector from the analytical
+    dataframe on each new worker. D.2B changes that contract: PostgreSQL owns
+    relationship identity once registered. The current analytical snapshot may
+    refresh rating/outlook/score/attention/driver/recommendation, but it cannot
+    silently rename or re-home an existing relationship.
+    """
     with _db_transaction() as conn:
         now = _db_now()
         cycle = conn.execute("SELECT * FROM review_cycle WHERE status='Active' ORDER BY id DESC LIMIT 1").fetchone()
@@ -2046,29 +2108,66 @@ def _db_seed_reference_data(review_cycle_name: str = "Current Review"):
 
         for _, r in df.iterrows():
             relationship_id = f"REL-{_db_slug(r['Company'])}"
-            conn.execute(
-                """INSERT INTO relationship(
-                       relationship_id,name,country,sector,external_rating,outlook,score,
-                       attention_rating,primary_driver,recommended_action,created_at,updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(relationship_id) DO UPDATE SET
-                       name=excluded.name,
-                       country=excluded.country,
-                       sector=excluded.sector,
-                       external_rating=excluded.external_rating,
-                       outlook=excluded.outlook,
-                       score=excluded.score,
-                       attention_rating=excluded.attention_rating,
-                       primary_driver=excluded.primary_driver,
-                       recommended_action=excluded.recommended_action,
-                       updated_at=excluded.updated_at""",
-                (
-                    relationship_id,
-                    r["Company"], r["Country"], r["Sector"], r["Rating"], r["Outlook"],
-                    float(r["MAS"]), r["MAS_Band"], r["Primary_Driver"], r["Recommended_Action"],
-                    now, now,
-                ),
+            existing = conn.execute(
+                "SELECT * FROM relationship WHERE relationship_id=?",
+                (relationship_id,),
+            ).fetchone()
+
+            if existing is None:
+                conn.execute(
+                    """INSERT INTO relationship(
+                           relationship_id,name,country,sector,external_rating,outlook,score,
+                           attention_rating,primary_driver,recommended_action,created_at,updated_at
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        relationship_id,
+                        r["Company"], r["Country"], r["Sector"], r["Rating"], r["Outlook"],
+                        float(r["MAS"]), r["MAS_Band"], r["Primary_Driver"], r["Recommended_Action"],
+                        now, now,
+                    ),
+                )
+                created = conn.execute(
+                    "SELECT * FROM relationship WHERE relationship_id=?",
+                    (relationship_id,),
+                ).fetchone()
+                _db_append_audit(
+                    conn,
+                    entity_type="Relationship",
+                    entity_id=relationship_id,
+                    relationship_id=created["id"],
+                    event_type="RELATIONSHIP_REGISTERED",
+                    actor="Stage 1-D.2B Migration",
+                    payload={
+                        "name": r["Company"],
+                        "country": r["Country"],
+                        "sector": r["Sector"],
+                    },
+                )
+                continue
+
+            # Identity is database-owned. Only the current analytical snapshot is
+            # refreshed from the Stage 1-C.10 dataframe.
+            analytics_now = (
+                str(r["Rating"]), str(r["Outlook"]), float(r["MAS"]),
+                str(r["MAS_Band"]), str(r["Primary_Driver"]), str(r["Recommended_Action"]),
             )
+            analytics_db = (
+                str(existing["external_rating"] or ""), str(existing["outlook"] or ""),
+                float(existing["score"]) if existing["score"] is not None else None,
+                str(existing["attention_rating"] or ""), str(existing["primary_driver"] or ""),
+                str(existing["recommended_action"] or ""),
+            )
+            if analytics_db != analytics_now:
+                conn.execute(
+                    """UPDATE relationship SET
+                           external_rating=?,outlook=?,score=?,attention_rating=?,
+                           primary_driver=?,recommended_action=?,updated_at=?
+                       WHERE relationship_id=?""",
+                    (
+                        r["Rating"], r["Outlook"], float(r["MAS"]), r["MAS_Band"],
+                        r["Primary_Driver"], r["Recommended_Action"], now, relationship_id,
+                    ),
+                )
 
 
 def _db_migrate_legacy_execution_once():
@@ -2126,7 +2225,7 @@ def _db_migrate_legacy_execution_once():
                 entity_id=rec["Execution Action ID"],
                 relationship_id=rel["id"],
                 event_type="LEGACY_ACTION_MIGRATED",
-                actor="Stage 1-D.2A Migration",
+                actor="Stage 1-D.2B Migration",
                 payload={
                     "status": rec["Status"],
                     "owner": rec["Owner"],
@@ -2620,16 +2719,16 @@ def _db_list_execution_history(action_id: str | None = None, conn=None) -> list[
 
 
 def _refresh_persistent_state_cache():
-    """Hydrate Stage 1-C compatibility state from one authoritative SQL snapshot.
+    """Hydrate the UI cache from one authoritative SQL snapshot.
 
-    v0.2 opened five separate PostgreSQL connections on every Streamlit rerun.
-    With a remote Supabase database, widget interactions (especially sliders and
-    selectboxes on Execution) therefore incurred repeated network/TLS/pooler
-    round trips. v0.3 deliberately uses one read connection for the full snapshot.
+    D.2B adds the Relationship registry to the same single-connection snapshot so
+    the Streamlit shell gets relationship identity/context from PostgreSQL rather
+    than rebuilding that identity from the analytical dataframe.
     """
     conn = _db_connect()
     try:
         cycle = _db_active_review_cycle_contract(conn)
+        relationships = _db_list_relationship_registry(conn)
         decisions = _db_list_decisions(conn)
         actions = _db_list_execution_actions(conn)
         history = _db_list_execution_history(conn=conn)
@@ -2638,6 +2737,7 @@ def _refresh_persistent_state_cache():
         conn.close()
 
     st.session_state.review_cycle = cycle["Review Cycle"]
+    st.session_state.relationship_registry = relationships
     st.session_state.decision_history = decisions
     st.session_state.execution_actions = actions
     st.session_state.decision_execution_actions = [a for a in actions if a.get("Source") == "Management Decision"]
@@ -2815,7 +2915,7 @@ def _db_update_execution(
         before_status = target["status"]
         before_outcome = target["outcome_status"]
         now = _db_now()
-        closed_at = now if status == "Completed" else None
+        closed_at = (target["closed_at"] or now) if status == "Completed" else None
         conn.execute(
             """UPDATE execution_action SET
                    owner=?,due=?,status=?,progress_pct=?,follow_up_cadence=?,sla_status=?,next_step=?,
@@ -2848,27 +2948,34 @@ def _db_update_execution(
             },
         )
 
-        # Toyota workflow rule generalized to every relationship:
         # Review -> Decision -> Execution -> Outcome -> Closure.
+        # D.2B makes closure idempotent: an already-closed Decision may be touched
+        # by a later Execution edit, but it must not emit a second close event.
         if status == "Completed" and target["decision_id"] is not None:
-            conn.execute(
-                "UPDATE decision SET lifecycle_status='Closed', updated_at=?, closed_at=? WHERE id=?",
-                (now, now, target["decision_id"]),
-            )
-            if target["review_item_id"] is not None:
+            decision_state = conn.execute(
+                "SELECT lifecycle_status,closed_at FROM decision WHERE id=?",
+                (target["decision_id"],),
+            ).fetchone()
+            decision_was_closed = bool(decision_state and decision_state["lifecycle_status"] == "Closed")
+            if not decision_was_closed:
                 conn.execute(
-                    "UPDATE review_item SET status='Closed', updated_at=?, closed_at=? WHERE id=?",
-                    (now, now, target["review_item_id"]),
+                    "UPDATE decision SET lifecycle_status='Closed', updated_at=?, closed_at=? WHERE id=?",
+                    (now, now, target["decision_id"]),
                 )
-            _db_append_audit(
-                conn,
-                entity_type="Decision",
-                entity_id=target["decision_public_id"] or "",
-                relationship_id=target["relationship_id"],
-                event_type="DECISION_CLOSED_FROM_EXECUTION",
-                actor=owner.strip(),
-                payload={"execution_action_id": action_id, "outcome_status": outcome_status},
-            )
+                if target["review_item_id"] is not None:
+                    conn.execute(
+                        "UPDATE review_item SET status='Closed', updated_at=?, closed_at=? WHERE id=?",
+                        (now, now, target["review_item_id"]),
+                    )
+                _db_append_audit(
+                    conn,
+                    entity_type="Decision",
+                    entity_id=target["decision_public_id"] or "",
+                    relationship_id=target["relationship_id"],
+                    event_type="DECISION_CLOSED_FROM_EXECUTION",
+                    actor=owner.strip(),
+                    payload={"execution_action_id": action_id, "outcome_status": outcome_status},
+                )
 
     _refresh_persistent_state_cache()
     return next(a for a in st.session_state.execution_actions if a["Execution Action ID"] == action_id)
@@ -2922,7 +3029,8 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-D.2A",
+        "shell_version": "Stage 1-D.2B",
+        "relationship_registry": [],
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
@@ -2937,7 +3045,7 @@ def init_stage_1c_state():
         if key not in st.session_state:
             st.session_state[key] = value
 
-    # Stage 1-D.2A: the configured SQL backend is authoritative for ReviewCycle, ReviewItems, PortfolioSignals,
+    # Stage 1-D.2B: the configured SQL backend is authoritative for ReviewCycle, ReviewItems, PortfolioSignals,
     # Decisions and Execution. Session state remains only a UI compatibility cache.
     try:
         _db_init_schema()
@@ -2945,11 +3053,31 @@ def init_stage_1c_state():
         _refresh_persistent_state_cache()
     except Exception as exc:
         st.error(
-            f"Stage 1-D.2A database initialization failed ({_db_backend_label()}). "
+            f"Stage 1-D.2B database initialization failed ({_db_backend_label()}). "
             "Check the DATABASE_URL secret and PostgreSQL driver configuration."
         )
         st.code(str(exc))
         st.stop()
+
+
+def _relationship_names_from_state() -> list[str]:
+    """Authoritative relationship names that also have a current analytics row."""
+    analytical_names = set(df["Company"].astype(str).tolist())
+    names = [
+        str(r.get("Name"))
+        for r in st.session_state.get("relationship_registry", [])
+        if r.get("Name") and str(r.get("Name")) in analytical_names
+    ]
+    return names or df["Company"].astype(str).tolist()
+
+
+def _relationship_master_by_name(company: str | None) -> dict | None:
+    if not company:
+        return None
+    for record in st.session_state.get("relationship_registry", []):
+        if record.get("Name") == company:
+            return record
+    return None
 
 def _queue_stage1c_navigation(
     page_key: str,
@@ -2990,7 +3118,7 @@ def _apply_pending_stage1c_navigation():
     st.session_state.stage_1c_primary_navigation = KEY_TO_LABEL.get(page_key, KEY_TO_LABEL["briefing"])
 
     relationship = pending.get("relationship")
-    if relationship and relationship in df["Company"].tolist():
+    if relationship and relationship in _relationship_names_from_state():
         st.session_state.selected_relationship = relationship
         st.session_state.stage_1c_relationship_context = relationship
 
@@ -3013,7 +3141,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-D.2A · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-D.2B · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3034,7 +3162,7 @@ def render_stage_1c_sidebar():
     st.session_state.active_page = selected_key
 
     st.sidebar.markdown('<div class="ec-sidebar-section">Context</div>', unsafe_allow_html=True)
-    relationship_options = ["Portfolio context"] + df["Company"].tolist()
+    relationship_options = ["Portfolio context"] + _relationship_names_from_state()
     current_rel = st.session_state.get("selected_relationship") or "Portfolio context"
     if current_rel not in relationship_options:
         current_rel = "Portfolio context"
@@ -3219,9 +3347,12 @@ def _update_stage1c_execution_action(
 
 def _selected_relationship_row(default_to_top=True):
     selected = st.session_state.get("selected_relationship")
-    if selected and selected in df["Company"].tolist():
+    valid_names = _relationship_names_from_state()
+    if selected and selected in valid_names:
         return df[df["Company"] == selected].iloc[0]
-    return df.iloc[0] if default_to_top and len(df) else None
+    if default_to_top and valid_names:
+        return df[df["Company"] == valid_names[0]].iloc[0]
+    return None
 
 
 
@@ -3526,7 +3657,13 @@ def render_stage_1c_briefing():
         unsafe_allow_html=True,
     )
 
-    portfolio_options = portfolio_df.sort_values("Portfolio Priority", ascending=False)["Company"].tolist()
+    authoritative_names = set(_relationship_names_from_state())
+    portfolio_options = [c for c in portfolio_df.sort_values("Portfolio Priority", ascending=False)["Company"].tolist() if c in authoritative_names]
+    if not portfolio_options:
+        authoritative_names = set(_relationship_names_from_state())
+    portfolio_options = [c for c in portfolio_df.sort_values("Portfolio Priority", ascending=False)["Company"].tolist() if c in authoritative_names]
+    if not portfolio_options:
+        portfolio_options = portfolio_df.sort_values("Portfolio Priority", ascending=False)["Company"].tolist()
     current_rel = st.session_state.get("selected_relationship")
     focus_company = current_rel if current_rel in portfolio_options else portfolio_options[0]
     focus_company = st.selectbox(
@@ -3747,7 +3884,10 @@ def render_stage_1c_review():
     )
 
     default_row = _selected_relationship_row()
-    options = attention["Company"].tolist() if len(attention) else df["Company"].tolist()
+    authoritative_names = set(_relationship_names_from_state())
+    options = [c for c in attention["Company"].tolist() if c in authoritative_names] if len(attention) else _relationship_names_from_state()
+    if not options:
+        options = _relationship_names_from_state()
     default_company = default_row["Company"] if default_row is not None and default_row["Company"] in options else options[0]
     selected = st.selectbox("Review relationship", options, index=options.index(default_company), key="stage1c_review_relationship")
     st.session_state.selected_relationship = selected
@@ -3780,10 +3920,17 @@ def render_stage_1c_relationships():
     """Functional bridge for the locked consolidated Relationships workspace."""
     row = _selected_relationship_row()
     default_company = row["Company"] if row is not None else df.iloc[0]["Company"]
-    options = df["Company"].tolist()
+    options = _relationship_names_from_state()
+    if default_company not in options:
+        default_company = options[0]
     selected = st.selectbox("Select relationship", options, index=options.index(default_company), key="stage1c_relationship_profile")
     st.session_state.selected_relationship = selected
     r = df[df["Company"] == selected].iloc[0]
+    master = _relationship_master_by_name(selected) or {}
+    master_country = master.get("Country") or r["Country"]
+    master_sector = master.get("Sector") or r["Sector"]
+    master_rating = master.get("External Rating") or r["Rating"]
+    master_outlook = master.get("Outlook") or r["Outlook"]
 
     wallet_engine_df_local = build_wallet_engine(illustrative_wallet_data(df))
     wr = wallet_engine_df_local[wallet_engine_df_local["Company"] == selected].iloc[0]
@@ -3796,7 +3943,7 @@ def render_stage_1c_relationships():
         f"""
         <div class="rel360-header-card">
           <div class="rel360-name">{r['Company']}</div>
-          <div class="rel360-meta">{r['Country']} · {r['Sector']} · Rating {r['Rating']} / {r['Outlook']}</div>
+          <div class="rel360-meta">{master_country} · {master_sector} · Rating {master_rating} / {master_outlook}</div>
           <span class="ec-pill {band_pill_class(r['MAS'])}">{r['MAS_Band']} · Score {r['MAS']:.1f}</span>
           <span class="ec-pill ec-pill-blue">Driver: {r['Primary_Driver']}</span>
           <span class="ec-pill ec-pill-green">Action: {r['Recommended_Action']}</span>
@@ -3935,7 +4082,10 @@ def render_stage_1c_decisions():
 
     # Decision capture
     st.markdown('<div class="ec-table-title">Record Management Decision</div>', unsafe_allow_html=True)
-    candidates = decision_candidates["Company"].tolist()
+    authoritative_names = set(_relationship_names_from_state())
+    candidates = [c for c in decision_candidates["Company"].tolist() if c in authoritative_names]
+    if not candidates:
+        candidates = decision_candidates["Company"].tolist()
     current_rel = st.session_state.get("selected_relationship")
     default_index = candidates.index(current_rel) if current_rel in candidates else 0
     selected_company = st.selectbox(
@@ -4167,7 +4317,7 @@ def render_stage_1c_decisions():
             )
 
     st.caption(
-        f"Stage 1-D.2A persistence: Review Cycle, Review Items, Portfolio Signals, Decisions and linked Execution Actions are stored in {_db_backend_label()} and restored across app sessions. Session state is used only as a UI compatibility cache."
+        f"Stage 1-D.2B persistence: Review Cycle, Review Items, Portfolio Signals, Decisions and linked Execution Actions are stored in {_db_backend_label()} and restored across app sessions. Session state is used only as a UI compatibility cache."
     )
 
 
@@ -4504,7 +4654,7 @@ def render_stage_1c_execution():
         )
 
     st.caption(
-        f"Stage 1-D.2A persistence: Review Cycle, Portfolio Signals, Review Items, Decisions, Execution Actions and audit history are stored in {_db_backend_label()}. Relationship master data is seeded in the same SQL system of record and will become fully authoritative in the final D.2 step."
+        f"Stage 1-D.2B persistence: Review Cycle, Portfolio Signals, Review Items, Decisions, Execution Actions and audit history are stored in {_db_backend_label()}. Relationship identity is authoritative in PostgreSQL; analytical score/rating fields remain refreshed from the current intelligence dataset."
     )
 
 
@@ -4824,7 +4974,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-D.2A Production Database Foundation · PostgreSQL Performance Hotfix v0.3 · Stage 1-C.10 UI locked
+            EC-AI Executive Review Workspace · Stage 1-D.2B Authoritative Relationship Model · PostgreSQL Performance Hotfix v0.3 · Stage 1-C.10 UI locked
         </div>
         """,
         unsafe_allow_html=True,
