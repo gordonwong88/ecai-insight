@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-D.2B Authoritative Relationship Model
+# EC-AI Executive Review Workspace — Stage 1-D Final Release Candidate v1.0
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
@@ -35,7 +35,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="EC-AI Executive Review Workspace — Stage 1-D.2B",
+    page_title="EC-AI Executive Review Workspace — Stage 1-D Final RC v1.0",
     page_icon="🏦",
     layout="wide",
 )
@@ -1465,8 +1465,9 @@ ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 3
-ECAI_PERSISTENCE_RUNTIME_VERSION = 3  # D.2B v0.1: authoritative Relationship registry + idempotent closure
+ECAI_SCHEMA_VERSION = 4
+ECAI_PERSISTENCE_RUNTIME_VERSION = 4  # D.3.2 v0.1: concurrency, integrity and idempotency hardening
+ECAI_PERSISTENCE_RELEASE = "Stage 1-D Final RC v1.0"
 
 
 def _db_now() -> str:
@@ -1737,6 +1738,28 @@ CREATE TABLE IF NOT EXISTS audit_event (
 CREATE INDEX IF NOT EXISTS ix_audit_entity ON audit_event(entity_type, entity_id, id DESC);
 CREATE INDEX IF NOT EXISTS ix_audit_relationship ON audit_event(relationship_id, id DESC);
 
+
+CREATE INDEX IF NOT EXISTS ix_portfolio_signal_cycle_status
+ON portfolio_signal(review_cycle_id, status, id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_review_item_relationship_cycle
+ON review_item(review_cycle_id, relationship_id)
+WHERE source = 'Relationship Review' AND relationship_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_review_item_portfolio_cycle
+ON review_item(review_cycle_id, portfolio_signal_id)
+WHERE source = 'Portfolio Intelligence' AND portfolio_signal_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_execution_one_action_per_decision
+ON execution_action(decision_id)
+WHERE source = 'Management Decision' AND decision_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS ecai_system_metadata (
+    metadata_key TEXT PRIMARY KEY,
+    metadata_value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TRIGGER IF NOT EXISTS trg_audit_event_no_update
 BEFORE UPDATE ON audit_event
 BEGIN
@@ -1890,6 +1913,28 @@ CREATE TABLE IF NOT EXISTS audit_event (
 CREATE INDEX IF NOT EXISTS ix_audit_entity ON audit_event(entity_type, entity_id, id DESC);
 CREATE INDEX IF NOT EXISTS ix_audit_relationship ON audit_event(relationship_id, id DESC);
 
+
+CREATE INDEX IF NOT EXISTS ix_portfolio_signal_cycle_status
+ON portfolio_signal(review_cycle_id, status, id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_review_item_relationship_cycle
+ON review_item(review_cycle_id, relationship_id)
+WHERE source = 'Relationship Review' AND relationship_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_review_item_portfolio_cycle
+ON review_item(review_cycle_id, portfolio_signal_id)
+WHERE source = 'Portfolio Intelligence' AND portfolio_signal_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_execution_one_action_per_decision
+ON execution_action(decision_id)
+WHERE source = 'Management Decision' AND decision_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS ecai_system_metadata (
+    metadata_key TEXT PRIMARY KEY,
+    metadata_value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE OR REPLACE FUNCTION ecai_audit_event_append_only()
 RETURNS trigger AS $$
 BEGIN
@@ -1975,6 +2020,15 @@ def _db_slug(value: str) -> str:
 
 
 def _db_next_id(conn: _DBConnection, table: str, column: str, prefix: str, width: int = 4) -> str:
+    """Allocate the next human-readable public ID safely.
+
+    SQLite transactions are serialized with BEGIN IMMEDIATE. PostgreSQL needs an
+    explicit transaction-scoped advisory lock so two Streamlit sessions cannot
+    both calculate the same next DEC/ACT/AUD/REV/PRI identifier.
+    """
+    if conn.backend == "postgresql":
+        lock_name = f"ecai-public-id:{table}:{column}:{prefix}"
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (lock_name,))
     rows = conn.execute(f"SELECT {column} FROM {table} WHERE {column} LIKE ?", (f"{prefix}-%",)).fetchall()
     highest = 0
     for row in rows:
@@ -2000,7 +2054,7 @@ def _db_active_review_cycle(conn: _DBConnection) -> Any:
 def _db_relationship_row(conn: _DBConnection, company: str) -> Any:
     """Resolve a relationship through its permanent Relationship ID first.
 
-    Stage 1-D.2B makes Relationship the authoritative identity object. The UI may
+    Stage 1-D.3 makes Relationship the authoritative identity object. The UI may
     continue to pass the familiar company display name, but database joins are
     anchored to a stable REL-* key rather than treating the display name as the
     real key. A name lookup is retained only as a compatibility fallback for any
@@ -2014,7 +2068,7 @@ def _db_relationship_row(conn: _DBConnection, company: str) -> Any:
     if rel is None:
         rel = conn.execute("SELECT * FROM relationship WHERE name=?", (str(company),)).fetchone()
     if rel is None:
-        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.2B.")
+        raise ValueError(f"Relationship {company} is not registered in Stage 1-D.3.")
     return rel
 
 
@@ -2088,6 +2142,34 @@ def _db_append_audit(
     )
 
 
+
+def _db_write_system_metadata():
+    """Record the deployed persistence contract without touching domain history."""
+    items = {
+        "schema_version": str(ECAI_SCHEMA_VERSION),
+        "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
+        "persistence_release": ECAI_PERSISTENCE_RELEASE,
+        "database_backend": ECAI_DB_BACKEND,
+    }
+    with _db_transaction() as conn:
+        now = _db_now()
+        for key, value in items.items():
+            existing = conn.execute(
+                "SELECT metadata_key FROM ecai_system_metadata WHERE metadata_key=?",
+                (key,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    "INSERT INTO ecai_system_metadata(metadata_key,metadata_value,updated_at) VALUES (?,?,?)",
+                    (key, value, now),
+                )
+            else:
+                conn.execute(
+                    "UPDATE ecai_system_metadata SET metadata_value=?,updated_at=? WHERE metadata_key=?",
+                    (value, now, key),
+                )
+
+
 def _db_seed_reference_data(review_cycle_name: str = "Current Review"):
     """Seed only missing Relationship identities; refresh analytics separately.
 
@@ -2136,7 +2218,7 @@ def _db_seed_reference_data(review_cycle_name: str = "Current Review"):
                     entity_id=relationship_id,
                     relationship_id=created["id"],
                     event_type="RELATIONSHIP_REGISTERED",
-                    actor="Stage 1-D.2B Migration",
+                    actor="Stage 1-D.3 Migration",
                     payload={
                         "name": r["Company"],
                         "country": r["Country"],
@@ -2225,7 +2307,7 @@ def _db_migrate_legacy_execution_once():
                 entity_id=rec["Execution Action ID"],
                 relationship_id=rel["id"],
                 event_type="LEGACY_ACTION_MIGRATED",
-                actor="Stage 1-D.2B Migration",
+                actor="Stage 1-D.3 Migration",
                 payload={
                     "status": rec["Status"],
                     "owner": rec["Owner"],
@@ -2248,6 +2330,7 @@ def _db_bootstrap_reference_state_cached(backend: str, schema_version: int, runt
     _db_sync_relationship_review_items()
     _db_sync_portfolio_signals(_portfolio_signal_definitions(_portfolio_analysis_df()))
     _db_migrate_legacy_execution_once()
+    _db_write_system_metadata()
     return True
 
 
@@ -2456,6 +2539,80 @@ def _db_sync_portfolio_signals(signals: list[dict]):
                         "INSERT OR IGNORE INTO portfolio_signal_relationship(portfolio_signal_id,relationship_id) VALUES (?,?)",
                         (signal_db_id, rel["id"]),
                     )
+
+
+def _db_list_review_items(conn=None) -> list[dict]:
+    """Return all durable ReviewItems for the active ReviewCycle.
+
+    Stage 1-D.3 makes ReviewItem workflow state database-authoritative while the
+    Stage 1-C.10 renderer remains unchanged. Analytical score/evidence may still
+    be refreshed from the intelligence layer, but identity/status live here.
+    """
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
+    try:
+        cycle = _db_active_review_cycle(conn)
+        rows = conn.execute(
+            """SELECT ri.*, r.name AS relationship_name, ps.signal_id AS portfolio_signal_public_id
+               FROM review_item ri
+               LEFT JOIN relationship r ON r.id=ri.relationship_id
+               LEFT JOIN portfolio_signal ps ON ps.id=ri.portfolio_signal_id
+               WHERE ri.review_cycle_id=?
+               ORDER BY ri.id ASC""",
+            (cycle["id"],),
+        ).fetchall()
+        return [{
+            "Review Item ID": r["review_item_id"],
+            "Relationship": r["relationship_name"] or "",
+            "Portfolio Signal ID": r["portfolio_signal_public_id"] or "",
+            "Title": r["title"],
+            "Management Question": r["management_question"] or "",
+            "Recommendation": r["recommendation"] or "",
+            "Expected Outcome": r["expected_outcome"] or "",
+            "Status": r["status"],
+            "Source": r["source"],
+            "Created": r["created_at"],
+            "Updated": r["updated_at"],
+            "Closed": r["closed_at"] or "",
+        } for r in rows]
+    finally:
+        if owns_connection:
+            conn.close()
+
+
+def _db_list_portfolio_signals(conn=None) -> list[dict]:
+    """Return authoritative PortfolioSignal workflow state for the active cycle."""
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
+    try:
+        cycle = _db_active_review_cycle(conn)
+        rows = conn.execute(
+            """SELECT ps.*,
+                      (SELECT GROUP_CONCAT(r.name, ', ')
+                         FROM portfolio_signal_relationship psr
+                         JOIN relationship r ON r.id=psr.relationship_id
+                        WHERE psr.portfolio_signal_id=ps.id) AS relationship_names
+               FROM portfolio_signal ps
+               WHERE ps.review_cycle_id=?
+               ORDER BY ps.id ASC""",
+            (cycle["id"],),
+        ).fetchall()
+        return [{
+            "Signal ID": r["signal_id"],
+            "Pattern": r["pattern"],
+            "Severity": r["severity"],
+            "Interpretation": r["interpretation"] or "",
+            "Management Question": r["management_question"] or "",
+            "Status": r["status"],
+            "Relationships": r["relationship_names"] or "None",
+            "Created": r["created_at"],
+            "Updated": r["updated_at"],
+        } for r in rows]
+    finally:
+        if owns_connection:
+            conn.close()
 
 
 def _db_list_portfolio_review_items(conn=None) -> list[dict]:
@@ -2721,14 +2878,16 @@ def _db_list_execution_history(action_id: str | None = None, conn=None) -> list[
 def _refresh_persistent_state_cache():
     """Hydrate the UI cache from one authoritative SQL snapshot.
 
-    D.2B adds the Relationship registry to the same single-connection snapshot so
-    the Streamlit shell gets relationship identity/context from PostgreSQL rather
-    than rebuilding that identity from the analytical dataframe.
+    D.3 hydrates ReviewCycle, Relationship, ReviewItem, PortfolioSignal, Decision,
+    ExecutionAction and AuditEvent-backed history from one authoritative SQL snapshot.
+    Session state is only a compatibility/read cache for the locked Stage 1-C.10 UI.
     """
     conn = _db_connect()
     try:
         cycle = _db_active_review_cycle_contract(conn)
         relationships = _db_list_relationship_registry(conn)
+        review_items = _db_list_review_items(conn)
+        portfolio_signals = _db_list_portfolio_signals(conn)
         decisions = _db_list_decisions(conn)
         actions = _db_list_execution_actions(conn)
         history = _db_list_execution_history(conn=conn)
@@ -2737,7 +2896,10 @@ def _refresh_persistent_state_cache():
         conn.close()
 
     st.session_state.review_cycle = cycle["Review Cycle"]
+    st.session_state.review_cycle_contract = cycle
     st.session_state.relationship_registry = relationships
+    st.session_state.review_item_registry = review_items
+    st.session_state.portfolio_signal_registry = portfolio_signals
     st.session_state.decision_history = decisions
     st.session_state.execution_actions = actions
     st.session_state.decision_execution_actions = [a for a in actions if a.get("Source") == "Management Decision"]
@@ -2885,14 +3047,14 @@ def _db_update_execution(
     closure_evidence: str,
 ) -> dict:
     with _db_transaction() as conn:
-        target = conn.execute(
-            """SELECT ea.*, r.name AS relationship_name, d.decision_id AS decision_public_id
+        target_sql = """SELECT ea.*, r.name AS relationship_name, d.decision_id AS decision_public_id
                FROM execution_action ea
                JOIN relationship r ON r.id=ea.relationship_id
                LEFT JOIN decision d ON d.id=ea.decision_id
-               WHERE ea.execution_action_id=?""",
-            (action_id,),
-        ).fetchone()
+               WHERE ea.execution_action_id=?"""
+        if conn.backend == "postgresql":
+            target_sql += " FOR UPDATE"
+        target = conn.execute(target_sql, (action_id,)).fetchone()
         if target is None:
             raise ValueError(f"Execution action {action_id} not found.")
 
@@ -2916,37 +3078,70 @@ def _db_update_execution(
         before_outcome = target["outcome_status"]
         now = _db_now()
         closed_at = (target["closed_at"] or now) if status == "Completed" else None
-        conn.execute(
-            """UPDATE execution_action SET
-                   owner=?,due=?,status=?,progress_pct=?,follow_up_cadence=?,sla_status=?,next_step=?,
-                   outcome_status=?,outcome=?,closure_evidence=?,updated_at=?,closed_at=?
-               WHERE execution_action_id=?""",
-            (
-                owner.strip(), due.strip(), status, int(progress), follow_up, sla_status, next_step.strip(),
-                outcome_status, outcome.strip() or "Pending", closure_evidence.strip(), now, closed_at, action_id,
-            ),
-        )
 
-        note_bits = []
-        if before_status != status:
-            note_bits.append(f"status {before_status or 'N/A'} → {status}")
-        if before_outcome != outcome_status:
-            note_bits.append(f"outcome {before_outcome or 'N/A'} → {outcome_status}")
-        note = "; ".join(note_bits) if note_bits else "Execution details updated"
-        _db_append_audit(
-            conn,
-            entity_type="ExecutionAction",
-            entity_id=action_id,
-            relationship_id=target["relationship_id"],
-            event_type="EXECUTION_UPDATED",
-            actor=owner.strip(),
-            payload={
-                "status": status,
-                "owner": owner.strip(),
-                "outcome_status": outcome_status,
-                "note": note,
-            },
-        )
+        requested = {
+            "owner": owner.strip(),
+            "due": due.strip(),
+            "status": status,
+            "progress_pct": int(progress),
+            "follow_up_cadence": follow_up,
+            "sla_status": sla_status,
+            "next_step": next_step.strip(),
+            "outcome_status": outcome_status,
+            "outcome": outcome.strip() or "Pending",
+            "closure_evidence": closure_evidence.strip(),
+            "closed_at": closed_at,
+        }
+        current = {
+            "owner": target["owner"] or "",
+            "due": target["due"] or "",
+            "status": target["status"] or "",
+            "progress_pct": int(target["progress_pct"] or 0),
+            "follow_up_cadence": target["follow_up_cadence"] or "",
+            "sla_status": target["sla_status"] or "",
+            "next_step": target["next_step"] or "",
+            "outcome_status": target["outcome_status"] or "Pending",
+            "outcome": target["outcome"] or "Pending",
+            "closure_evidence": target["closure_evidence"] or "",
+            "closed_at": target["closed_at"],
+        }
+        changed_fields = [key for key, value in requested.items() if current.get(key) != value]
+
+        if changed_fields:
+            conn.execute(
+                """UPDATE execution_action SET
+                       owner=?,due=?,status=?,progress_pct=?,follow_up_cadence=?,sla_status=?,next_step=?,
+                       outcome_status=?,outcome=?,closure_evidence=?,updated_at=?,closed_at=?
+                   WHERE execution_action_id=?""",
+                (
+                    requested["owner"], requested["due"], requested["status"], requested["progress_pct"],
+                    requested["follow_up_cadence"], requested["sla_status"], requested["next_step"],
+                    requested["outcome_status"], requested["outcome"], requested["closure_evidence"],
+                    now, requested["closed_at"], action_id,
+                ),
+            )
+
+            note_bits = []
+            if before_status != status:
+                note_bits.append(f"status {before_status or 'N/A'} → {status}")
+            if before_outcome != outcome_status:
+                note_bits.append(f"outcome {before_outcome or 'N/A'} → {outcome_status}")
+            note = "; ".join(note_bits) if note_bits else "Execution details updated"
+            _db_append_audit(
+                conn,
+                entity_type="ExecutionAction",
+                entity_id=action_id,
+                relationship_id=target["relationship_id"],
+                event_type="EXECUTION_UPDATED",
+                actor=owner.strip(),
+                payload={
+                    "status": status,
+                    "owner": owner.strip(),
+                    "outcome_status": outcome_status,
+                    "note": note,
+                    "changed_fields": changed_fields,
+                },
+            )
 
         # Review -> Decision -> Execution -> Outcome -> Closure.
         # D.2B makes closure idempotent: an already-closed Decision may be touched
@@ -3015,6 +3210,131 @@ def _execution_history_df(action_id=None):
         return pd.DataFrame()
     return pd.DataFrame(history).iloc[::-1].reset_index(drop=True)
 
+def _db_validate_persistence_contract() -> dict:
+    """Validate the Stage 1-D.3.2 production persistence contract.
+
+    These checks are intentionally backend-only and fail closed. They verify
+    identity, ReviewCycle, ReviewItem, Decision, ExecutionAction and
+    PortfolioSignal consistency before the locked Stage 1-C.10 UI is allowed to
+    operate on the system of record.
+    """
+    conn = _db_connect()
+    try:
+        cycle = _db_active_review_cycle(conn)
+        checks = {}
+        checks["active_review_cycle"] = bool(cycle)
+        checks["active_review_cycle_count"] = int(conn.execute(
+            "SELECT COUNT(*) AS n FROM review_cycle WHERE status='Active'"
+        ).fetchone()["n"])
+        checks["orphan_decisions"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM decision d
+               LEFT JOIN review_item ri ON ri.id=d.review_item_id
+               LEFT JOIN relationship r ON r.id=d.relationship_id
+               WHERE ri.id IS NULL OR r.id IS NULL"""
+        ).fetchone()["n"])
+        checks["decision_cycle_mismatch"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM decision d
+               JOIN review_item ri ON ri.id=d.review_item_id
+               WHERE d.review_cycle_id <> ri.review_cycle_id"""
+        ).fetchone()["n"])
+        checks["decision_relationship_mismatch"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM decision d
+               JOIN review_item ri ON ri.id=d.review_item_id
+               WHERE ri.relationship_id IS NOT NULL
+                 AND d.relationship_id <> ri.relationship_id"""
+        ).fetchone()["n"])
+        checks["orphan_decision_actions"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM execution_action ea
+               LEFT JOIN decision d ON d.id=ea.decision_id
+               WHERE ea.source='Management Decision' AND d.id IS NULL"""
+        ).fetchone()["n"])
+        checks["execution_relationship_mismatch"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM execution_action ea
+               JOIN decision d ON d.id=ea.decision_id
+               WHERE ea.source='Management Decision'
+                 AND ea.relationship_id <> d.relationship_id"""
+        ).fetchone()["n"])
+        checks["execution_review_item_mismatch"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM execution_action ea
+               JOIN decision d ON d.id=ea.decision_id
+               WHERE ea.source='Management Decision'
+                 AND COALESCE(ea.review_item_id, -1) <> d.review_item_id"""
+        ).fetchone()["n"])
+        checks["execution_required_missing_action"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM decision d
+               WHERE d.execution_required=1
+                 AND NOT EXISTS (SELECT 1 FROM execution_action ea WHERE ea.decision_id=d.id)"""
+        ).fetchone()["n"])
+        checks["unexpected_action_for_no_execution"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM decision d
+               WHERE d.execution_required=0
+                 AND EXISTS (SELECT 1 FROM execution_action ea WHERE ea.decision_id=d.id)"""
+        ).fetchone()["n"])
+        checks["duplicate_relationship_review_items"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM (
+                   SELECT review_cycle_id,relationship_id
+                   FROM review_item
+                   WHERE source='Relationship Review' AND relationship_id IS NOT NULL
+                   GROUP BY review_cycle_id,relationship_id
+                   HAVING COUNT(*) > 1
+               ) x"""
+        ).fetchone()["n"])
+        checks["duplicate_portfolio_review_items"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM (
+                   SELECT review_cycle_id,portfolio_signal_id
+                   FROM review_item
+                   WHERE source='Portfolio Intelligence' AND portfolio_signal_id IS NOT NULL
+                   GROUP BY review_cycle_id,portfolio_signal_id
+                   HAVING COUNT(*) > 1
+               ) x"""
+        ).fetchone()["n"])
+        checks["in_review_without_review_item"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM portfolio_signal ps
+               WHERE ps.review_cycle_id=? AND ps.status='In Review'
+                 AND NOT EXISTS (
+                     SELECT 1 FROM review_item ri
+                     WHERE ri.review_cycle_id=ps.review_cycle_id
+                       AND ri.portfolio_signal_id=ps.id
+                       AND ri.source='Portfolio Intelligence'
+                 )""",
+            (cycle["id"],),
+        ).fetchone()["n"])
+        checks["open_signal_with_review_item"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM portfolio_signal ps
+               WHERE ps.review_cycle_id=? AND ps.status='Open'
+                 AND EXISTS (
+                     SELECT 1 FROM review_item ri
+                     WHERE ri.review_cycle_id=ps.review_cycle_id
+                       AND ri.portfolio_signal_id=ps.id
+                       AND ri.source='Portfolio Intelligence'
+                 )""",
+            (cycle["id"],),
+        ).fetchone()["n"])
+
+        zero_checks = [
+            "orphan_decisions",
+            "decision_cycle_mismatch",
+            "decision_relationship_mismatch",
+            "orphan_decision_actions",
+            "execution_relationship_mismatch",
+            "execution_review_item_mismatch",
+            "execution_required_missing_action",
+            "unexpected_action_for_no_execution",
+            "duplicate_relationship_review_items",
+            "duplicate_portfolio_review_items",
+            "in_review_without_review_item",
+            "open_signal_with_review_item",
+        ]
+        checks["healthy"] = bool(
+            checks["active_review_cycle"]
+            and checks["active_review_cycle_count"] == 1
+            and all(checks[key] == 0 for key in zero_checks)
+        )
+        return checks
+    finally:
+        conn.close()
+
+
 # =============================================================================
 # SHARED APPLICATION STATE CONTRACT
 # =============================================================================
@@ -3029,8 +3349,11 @@ def init_stage_1c_state():
         "review_cycle": "Current Review",
         "portfolio_universe": "Top 10 Public Relationships",
         "data_mode": "S&P Public Company Baseline",
-        "shell_version": "Stage 1-D.2B",
+        "shell_version": "Stage 1-D Final RC v1.0",
+        "review_cycle_contract": {},
         "relationship_registry": [],
+        "review_item_registry": [],
+        "portfolio_signal_registry": [],
         "decision_history": [],
         "decision_execution_actions": [],
         "decision_flash": None,
@@ -3040,20 +3363,24 @@ def init_stage_1c_state():
         "portfolio_review_items": [],
         "portfolio_signal_flash": None,
         "pending_stage1c_navigation": None,
+        "persistence_health": {},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
-    # Stage 1-D.2B: the configured SQL backend is authoritative for ReviewCycle, ReviewItems, PortfolioSignals,
+    # Stage 1-D.3.2: the configured SQL backend is authoritative for ReviewCycle, ReviewItems, PortfolioSignals,
     # Decisions and Execution. Session state remains only a UI compatibility cache.
     try:
         _db_init_schema()
         _db_bootstrap_reference_state(st.session_state.review_cycle)
         _refresh_persistent_state_cache()
+        st.session_state.persistence_health = _db_validate_persistence_contract()
+        if not st.session_state.persistence_health.get("healthy", False):
+            raise RuntimeError(f"Persistence integrity check failed: {st.session_state.persistence_health}")
     except Exception as exc:
         st.error(
-            f"Stage 1-D.2B database initialization failed ({_db_backend_label()}). "
+            f"Stage 1-D Final RC database initialization failed ({_db_backend_label()}). "
             "Check the DATABASE_URL secret and PostgreSQL driver configuration."
         )
         st.code(str(exc))
@@ -3078,6 +3405,26 @@ def _relationship_master_by_name(company: str | None) -> dict | None:
         if record.get("Name") == company:
             return record
     return None
+
+def _review_item_for_relationship(company: str | None) -> dict | None:
+    """Resolve the active-cycle Relationship ReviewItem from PostgreSQL cache."""
+    if not company:
+        return None
+    for record in st.session_state.get("review_item_registry", []):
+        if record.get("Source") == "Relationship Review" and record.get("Relationship") == company:
+            return record
+    return None
+
+
+def _portfolio_signal_state(signal_id: str | None) -> dict | None:
+    """Resolve authoritative PortfolioSignal workflow state from PostgreSQL cache."""
+    if not signal_id:
+        return None
+    for record in st.session_state.get("portfolio_signal_registry", []):
+        if record.get("Signal ID") == signal_id:
+            return record
+    return None
+
 
 def _queue_stage1c_navigation(
     page_key: str,
@@ -3141,7 +3488,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-D.2B · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-D · Final RC v1.0 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -3698,7 +4045,8 @@ def render_stage_1c_briefing():
                 st.caption(f"{signal['Severity']} severity · {signal['Signal ID']}")
                 st.write(signal["Interpretation"])
                 st.markdown(f"**Management question:** {signal['Management Question']}")
-                already = signal["Signal ID"] in existing_signal_ids
+                signal_state = _portfolio_signal_state(signal["Signal ID"])
+                already = bool(signal_state and signal_state.get("Status") == "In Review")
                 if st.button(
                     "In Review" if already else "Promote to Review",
                     key=f"briefing_promote_{signal['Signal ID']}",
@@ -3891,6 +4239,9 @@ def render_stage_1c_review():
     default_company = default_row["Company"] if default_row is not None and default_row["Company"] in options else options[0]
     selected = st.selectbox("Review relationship", options, index=options.index(default_company), key="stage1c_review_relationship")
     st.session_state.selected_relationship = selected
+    active_review_item = _review_item_for_relationship(selected)
+    if active_review_item:
+        st.session_state.active_review_item_id = active_review_item.get("Review Item ID")
     row = df[df["Company"] == selected].iloc[0]
 
     st.markdown(
@@ -3910,10 +4261,16 @@ def render_stage_1c_review():
     review_nav1, review_nav2 = st.columns(2, gap="small")
     with review_nav1:
         if st.button("Open Relationship Intelligence", use_container_width=True, key="review_open_relationship"):
-            _queue_stage1c_navigation("relationships", relationship=row["Company"])
+            _queue_stage1c_navigation(
+                "relationships", relationship=row["Company"],
+                review_item_id=(active_review_item or {}).get("Review Item ID"),
+            )
     with review_nav2:
         if st.button("Prepare Management Decision", use_container_width=True, key="review_prepare_decision"):
-            _queue_stage1c_navigation("decisions", relationship=row["Company"])
+            _queue_stage1c_navigation(
+                "decisions", relationship=row["Company"],
+                review_item_id=(active_review_item or {}).get("Review Item ID"),
+            )
 
 
 def render_stage_1c_relationships():
@@ -4317,7 +4674,7 @@ def render_stage_1c_decisions():
             )
 
     st.caption(
-        f"Stage 1-D.2B persistence: Review Cycle, Review Items, Portfolio Signals, Decisions and linked Execution Actions are stored in {_db_backend_label()} and restored across app sessions. Session state is used only as a UI compatibility cache."
+        f"Stage 1-D Final RC persistence: Review Cycle, Review Items, Portfolio Signals, Decisions and linked Execution Actions are stored in {_db_backend_label()} and restored across app sessions. Session state is used only as a UI compatibility cache."
     )
 
 
@@ -4654,7 +5011,7 @@ def render_stage_1c_execution():
         )
 
     st.caption(
-        f"Stage 1-D.2B persistence: Review Cycle, Portfolio Signals, Review Items, Decisions, Execution Actions and audit history are stored in {_db_backend_label()}. Relationship identity is authoritative in PostgreSQL; analytical score/rating fields remain refreshed from the current intelligence dataset."
+        f"Stage 1-D Final RC persistence: Review Cycle, Portfolio Signals, Review Items, Decisions, Execution Actions and audit history are stored in {_db_backend_label()}. Relationship identity is authoritative in PostgreSQL; analytical score/rating fields remain refreshed from the current intelligence dataset."
     )
 
 
@@ -4841,7 +5198,8 @@ def render_stage_1c_portfolio():
                 st.write(signal["Interpretation"])
                 st.caption(f"Relationships: {signal['Relationships']}")
                 st.markdown(f"**Management question:** {signal['Management Question']}")
-                already = signal["Signal ID"] in existing_signal_ids
+                signal_state = _portfolio_signal_state(signal["Signal ID"])
+                already = bool(signal_state and signal_state.get("Status") == "In Review")
                 if st.button(
                     "In Review" if already else "Promote to Review",
                     key=f"promote_{signal['Signal ID']}",
@@ -4974,7 +5332,7 @@ def render_stage_1c_footer():
     st.markdown(
         """
         <div class="ec-shell-footer">
-            EC-AI Executive Review Workspace · Stage 1-D.2B Authoritative Relationship Model · PostgreSQL Performance Hotfix v0.3 · Stage 1-C.10 UI locked
+            EC-AI Executive Review Workspace · Stage 1-D Final Release Candidate v1.0 · PostgreSQL / Supabase · Stage 1-C.10 UI locked
         </div>
         """,
         unsafe_allow_html=True,
