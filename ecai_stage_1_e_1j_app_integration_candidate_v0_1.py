@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.1J App Integration Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.1J App Integration Candidate v0.2
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1469,7 +1469,7 @@ ECAI_DB_PATH = os.environ.get(
 )
 ECAI_SCHEMA_VERSION = 5
 ECAI_PERSISTENCE_RUNTIME_VERSION = 5  # E.1J v0.1: additive intelligence foundation integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.1J App Integration Candidate v0.1"
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.1J App Integration Candidate v0.2"
 
 
 def _db_now() -> str:
@@ -4554,7 +4554,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-D · Final RC v1.0 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.1J · Test Candidate v0.2 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -4604,6 +4604,96 @@ def render_stage_1c_sidebar():
         """,
         unsafe_allow_html=True,
     )
+
+    # Stage 1-E.1J TEST BRANCH ONLY.
+    # This control surface is intentionally isolated from Stage 1-C.10 product UI.
+    with st.sidebar.expander("🧪 Stage 1-E Test Controls", expanded=False):
+        st.caption("Test branch only · Toyota fixture · no automatic publication")
+
+        if st.button(
+            "Create Toyota Lending Test Assessment",
+            key="stage1e_create_toyota_test_assessment",
+            use_container_width=True,
+        ):
+            try:
+                result = _db_stage1e_run_toyota_test(actor="Founder Test")
+                st.session_state["stage1e_last_test_assessment_id"] = result["assessment_id"]
+                st.success(
+                    f"Created {result['assessment_id']} · "
+                    f"{result['status']} · {result['publication_result']}"
+                )
+                st.write({
+                    "Addressable Notional": result["addressable_notional"],
+                    "Currency": result["currency"],
+                    "Confidence": result["confidence"],
+                    "Notional Completeness": result["notional_completeness"],
+                    "Revenue Wallet": result["revenue_wallet"],
+                })
+            except Exception as exc:
+                st.error(f"Toyota test creation failed: {exc}")
+
+        last_assessment_id = st.session_state.get("stage1e_last_test_assessment_id")
+        if last_assessment_id:
+            try:
+                snapshot = _db_stage1e_get_assessment(last_assessment_id)
+            except Exception as exc:
+                snapshot = None
+                st.error(f"Assessment reload failed: {exc}")
+
+            if snapshot:
+                st.caption(f"Last test assessment: {last_assessment_id}")
+                st.write({
+                    "Status": snapshot.get("Status"),
+                    "Publication Result": snapshot.get("Publication Result"),
+                    "Confidence": snapshot.get("Confidence"),
+                    "Addressable Notional": snapshot.get("Addressable Notional"),
+                    "Currency": snapshot.get("Currency"),
+                })
+
+                can_publish = (
+                    snapshot.get("Status") == "VALIDATED"
+                    and snapshot.get("Publication Result") == "PUBLISH"
+                )
+                if can_publish:
+                    if st.button(
+                        "Publish Last Test Assessment",
+                        key="stage1e_publish_toyota_test_assessment",
+                        use_container_width=True,
+                    ):
+                        try:
+                            published = _db_stage1e_publish_assessment(
+                                last_assessment_id,
+                                actor="Founder Test",
+                            )
+                            st.success(
+                                f"Published {published['Assessment ID']} · "
+                                f"{published['Status']}"
+                            )
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Publication failed: {exc}")
+                else:
+                    st.info("Publication is unavailable unless status=VALIDATED and result=PUBLISH.")
+
+        try:
+            current = _db_stage1e_current_assessment("Toyota")
+        except Exception as exc:
+            current = None
+            st.error(f"Current assessment lookup failed: {exc}")
+
+        if current:
+            st.markdown("**Current published Toyota Lending assessment**")
+            st.write({
+                "Assessment ID": current.get("Assessment ID"),
+                "Status": current.get("Status"),
+                "Addressable Notional": current.get("Addressable Notional"),
+                "Currency": current.get("Currency"),
+                "Confidence": current.get("Confidence"),
+                "Published": current.get("Published"),
+            })
+        else:
+            st.caption("No current published Toyota Lending assessment.")
+
     return selected_key
 
 
