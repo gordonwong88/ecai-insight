@@ -1,5 +1,6 @@
 
-# EC-AI Executive Review Workspace — Stage 1-D Final Release Candidate v1.0
+# EC-AI Executive Review Workspace — Stage 1-E.2A.6 Structural Lending Integration Candidate v0.1
+# Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
 # Hotfix v4: Executive Briefing bar chart rebuilt as a single-trace horizontal bar with thicker bars.
@@ -27,7 +28,8 @@ except Exception:
 from contextlib import contextmanager
 from datetime import date, datetime
 from typing import Any, Dict
-from dataclasses import dataclass
+from dataclasses import dataclass, field, asdict
+from enum import Enum
 
 import pandas as pd
 import plotly.express as px
@@ -1465,9 +1467,9 @@ ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 4
-ECAI_PERSISTENCE_RUNTIME_VERSION = 4  # D.3.2 v0.1: concurrency, integrity and idempotency hardening
-ECAI_PERSISTENCE_RELEASE = "Stage 1-D Final RC v1.0"
+ECAI_SCHEMA_VERSION = 5
+ECAI_PERSISTENCE_RUNTIME_VERSION = 5  # E.1J v0.1: additive intelligence foundation integration
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.1J App Integration Candidate v0.1"
 
 
 def _db_now() -> str:
@@ -1754,6 +1756,132 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_execution_one_action_per_decision
 ON execution_action(decision_id)
 WHERE source = 'Management Decision' AND decision_id IS NOT NULL;
 
+
+-- Stage 1-E.1J additive intelligence foundation.
+CREATE TABLE IF NOT EXISTS intelligence_methodology (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    methodology_id TEXT NOT NULL UNIQUE,
+    methodology_code TEXT NOT NULL,
+    methodology_name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    product TEXT NOT NULL,
+    description TEXT,
+    required_inputs_json TEXT NOT NULL DEFAULT '[]',
+    optional_inputs_json TEXT NOT NULL DEFAULT '[]',
+    outputs_json TEXT NOT NULL DEFAULT '[]',
+    critical_inputs_json TEXT NOT NULL DEFAULT '[]',
+    effective_from TEXT,
+    effective_to TEXT,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(methodology_code, version)
+);
+
+CREATE TABLE IF NOT EXISTS intelligence_evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    evidence_id TEXT NOT NULL UNIQUE,
+    relationship_id INTEGER NOT NULL REFERENCES relationship(id),
+    review_cycle_id INTEGER NOT NULL REFERENCES review_cycle(id),
+    methodology_id INTEGER REFERENCES intelligence_methodology(id),
+    metric_code TEXT NOT NULL,
+    metric_name TEXT,
+    value_numeric REAL,
+    value_text TEXT,
+    unit TEXT,
+    currency TEXT,
+    evidence_type TEXT NOT NULL CHECK (evidence_type IN ('FACT','DERIVED_FACT','ASSUMPTION')),
+    source_type TEXT,
+    source_name TEXT,
+    source_reference TEXT,
+    effective_date TEXT,
+    as_of_date TEXT,
+    confidence TEXT NOT NULL CHECK (confidence IN ('HIGH','MEDIUM','LOW')),
+    owner TEXT,
+    review_date TEXT,
+    created_at TEXT NOT NULL,
+    CHECK (value_numeric IS NOT NULL OR value_text IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS ix_intel_evidence_relationship
+ON intelligence_evidence(relationship_id, review_cycle_id, metric_code, id DESC);
+
+CREATE TABLE IF NOT EXISTS intelligence_calculation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    calculation_id TEXT NOT NULL UNIQUE,
+    relationship_id INTEGER NOT NULL REFERENCES relationship(id),
+    review_cycle_id INTEGER NOT NULL REFERENCES review_cycle(id),
+    methodology_id INTEGER NOT NULL REFERENCES intelligence_methodology(id),
+    metric_code TEXT NOT NULL,
+    metric_name TEXT,
+    formula_code TEXT NOT NULL,
+    formula_version TEXT NOT NULL,
+    formula_expression TEXT NOT NULL,
+    input_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    output_value_numeric REAL NOT NULL,
+    unit TEXT,
+    currency TEXT,
+    calculated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_intel_calc_relationship
+ON intelligence_calculation(relationship_id, review_cycle_id, metric_code, id DESC);
+
+CREATE TABLE IF NOT EXISTS wallet_assessment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_id TEXT NOT NULL UNIQUE,
+    relationship_id INTEGER NOT NULL REFERENCES relationship(id),
+    review_cycle_id INTEGER NOT NULL REFERENCES review_cycle(id),
+    methodology_id INTEGER NOT NULL REFERENCES intelligence_methodology(id),
+
+    product TEXT NOT NULL,
+    effective_date TEXT,
+    currency TEXT,
+    geographic_scope TEXT NOT NULL DEFAULT 'Global',
+    time_horizon TEXT NOT NULL DEFAULT 'N/A',
+
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    calculation_ids_json TEXT NOT NULL DEFAULT '[]',
+
+    addressable_notional REAL,
+    captured_notional REAL,
+    notional_penetration REAL,
+
+    estimated_wallet_revenue REAL,
+    actual_bank_revenue REAL,
+    revenue_share_of_wallet REAL,
+    revenue_wallet_gap REAL,
+
+    notional_completeness TEXT NOT NULL DEFAULT 'PARTIAL'
+        CHECK (notional_completeness IN ('COMPLETE','PARTIAL')),
+    revenue_wallet_completeness TEXT NOT NULL DEFAULT 'PARTIAL'
+        CHECK (revenue_wallet_completeness IN ('COMPLETE','PARTIAL')),
+
+    confidence TEXT CHECK (confidence IN ('HIGH','MEDIUM','LOW')),
+    confidence_explanation TEXT,
+
+    status TEXT NOT NULL DEFAULT 'DRAFT'
+        CHECK (status IN ('DRAFT','VALIDATED','PUBLISHED','SUPERSEDED')),
+    publication_result TEXT
+        CHECK (publication_result IN ('PUBLISH','HOLD','REJECT')),
+    quality_gate_json TEXT NOT NULL DEFAULT '{}',
+
+    created_at TEXT NOT NULL,
+    validated_at TEXT,
+    published_at TEXT,
+    superseded_at TEXT,
+    published_by TEXT,
+    publication_mode TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_wallet_assessment_relationship
+ON wallet_assessment(relationship_id, product, id DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_wallet_one_current_published
+ON wallet_assessment(relationship_id, product, geographic_scope, time_horizon)
+WHERE status = 'PUBLISHED';
+
 CREATE TABLE IF NOT EXISTS ecai_system_metadata (
     metadata_key TEXT PRIMARY KEY,
     metadata_value TEXT NOT NULL,
@@ -1928,6 +2056,132 @@ WHERE source = 'Portfolio Intelligence' AND portfolio_signal_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_execution_one_action_per_decision
 ON execution_action(decision_id)
 WHERE source = 'Management Decision' AND decision_id IS NOT NULL;
+
+
+-- Stage 1-E.1J additive intelligence foundation.
+CREATE TABLE IF NOT EXISTS intelligence_methodology (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    methodology_id TEXT NOT NULL UNIQUE,
+    methodology_code TEXT NOT NULL,
+    methodology_name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    product TEXT NOT NULL,
+    description TEXT,
+    required_inputs_json TEXT NOT NULL DEFAULT '[]',
+    optional_inputs_json TEXT NOT NULL DEFAULT '[]',
+    outputs_json TEXT NOT NULL DEFAULT '[]',
+    critical_inputs_json TEXT NOT NULL DEFAULT '[]',
+    effective_from TEXT,
+    effective_to TEXT,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(methodology_code, version)
+);
+
+CREATE TABLE IF NOT EXISTS intelligence_evidence (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    evidence_id TEXT NOT NULL UNIQUE,
+    relationship_id BIGINT NOT NULL REFERENCES relationship(id),
+    review_cycle_id BIGINT NOT NULL REFERENCES review_cycle(id),
+    methodology_id BIGINT REFERENCES intelligence_methodology(id),
+    metric_code TEXT NOT NULL,
+    metric_name TEXT,
+    value_numeric DOUBLE PRECISION,
+    value_text TEXT,
+    unit TEXT,
+    currency TEXT,
+    evidence_type TEXT NOT NULL CHECK (evidence_type IN ('FACT','DERIVED_FACT','ASSUMPTION')),
+    source_type TEXT,
+    source_name TEXT,
+    source_reference TEXT,
+    effective_date TEXT,
+    as_of_date TEXT,
+    confidence TEXT NOT NULL CHECK (confidence IN ('HIGH','MEDIUM','LOW')),
+    owner TEXT,
+    review_date TEXT,
+    created_at TEXT NOT NULL,
+    CHECK (value_numeric IS NOT NULL OR value_text IS NOT NULL)
+);
+
+CREATE INDEX IF NOT EXISTS ix_intel_evidence_relationship
+ON intelligence_evidence(relationship_id, review_cycle_id, metric_code, id DESC);
+
+CREATE TABLE IF NOT EXISTS intelligence_calculation (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    calculation_id TEXT NOT NULL UNIQUE,
+    relationship_id BIGINT NOT NULL REFERENCES relationship(id),
+    review_cycle_id BIGINT NOT NULL REFERENCES review_cycle(id),
+    methodology_id BIGINT NOT NULL REFERENCES intelligence_methodology(id),
+    metric_code TEXT NOT NULL,
+    metric_name TEXT,
+    formula_code TEXT NOT NULL,
+    formula_version TEXT NOT NULL,
+    formula_expression TEXT NOT NULL,
+    input_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    output_value_numeric DOUBLE PRECISION NOT NULL,
+    unit TEXT,
+    currency TEXT,
+    calculated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_intel_calc_relationship
+ON intelligence_calculation(relationship_id, review_cycle_id, metric_code, id DESC);
+
+CREATE TABLE IF NOT EXISTS wallet_assessment (
+    id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    assessment_id TEXT NOT NULL UNIQUE,
+    relationship_id BIGINT NOT NULL REFERENCES relationship(id),
+    review_cycle_id BIGINT NOT NULL REFERENCES review_cycle(id),
+    methodology_id BIGINT NOT NULL REFERENCES intelligence_methodology(id),
+
+    product TEXT NOT NULL,
+    effective_date TEXT,
+    currency TEXT,
+    geographic_scope TEXT NOT NULL DEFAULT 'Global',
+    time_horizon TEXT NOT NULL DEFAULT 'N/A',
+
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    calculation_ids_json TEXT NOT NULL DEFAULT '[]',
+
+    addressable_notional DOUBLE PRECISION,
+    captured_notional DOUBLE PRECISION,
+    notional_penetration DOUBLE PRECISION,
+
+    estimated_wallet_revenue DOUBLE PRECISION,
+    actual_bank_revenue DOUBLE PRECISION,
+    revenue_share_of_wallet DOUBLE PRECISION,
+    revenue_wallet_gap DOUBLE PRECISION,
+
+    notional_completeness TEXT NOT NULL DEFAULT 'PARTIAL'
+        CHECK (notional_completeness IN ('COMPLETE','PARTIAL')),
+    revenue_wallet_completeness TEXT NOT NULL DEFAULT 'PARTIAL'
+        CHECK (revenue_wallet_completeness IN ('COMPLETE','PARTIAL')),
+
+    confidence TEXT CHECK (confidence IN ('HIGH','MEDIUM','LOW')),
+    confidence_explanation TEXT,
+
+    status TEXT NOT NULL DEFAULT 'DRAFT'
+        CHECK (status IN ('DRAFT','VALIDATED','PUBLISHED','SUPERSEDED')),
+    publication_result TEXT
+        CHECK (publication_result IN ('PUBLISH','HOLD','REJECT')),
+    quality_gate_json TEXT NOT NULL DEFAULT '{}',
+
+    created_at TEXT NOT NULL,
+    validated_at TEXT,
+    published_at TEXT,
+    superseded_at TEXT,
+    published_by TEXT,
+    publication_mode TEXT
+);
+
+CREATE INDEX IF NOT EXISTS ix_wallet_assessment_relationship
+ON wallet_assessment(relationship_id, product, id DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_wallet_one_current_published
+ON wallet_assessment(relationship_id, product, geographic_scope, time_horizon)
+WHERE status = 'PUBLISHED';
 
 CREATE TABLE IF NOT EXISTS ecai_system_metadata (
     metadata_key TEXT PRIMARY KEY,
@@ -2142,6 +2396,1205 @@ def _db_append_audit(
     )
 
 
+# =============================================================================
+# STAGE 1-E.1J — INTELLIGENCE FOUNDATION / LENDING WALLET v0.1
+# =============================================================================
+# Stage 1-C.10 UI remains unchanged. Stage 1-D Relationship and ReviewCycle
+# remain authoritative. Only PUBLISHED assessments are eligible to feed future
+# OpportunitySignal logic. No OpportunitySignal / AI reasoning is wired yet.
+
+class EvidenceType(str, Enum):
+    FACT = "FACT"
+    DERIVED_FACT = "DERIVED_FACT"
+    ASSUMPTION = "ASSUMPTION"
+
+
+class ConfidenceLevel(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class CompletenessStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+
+
+class AssessmentStatus(str, Enum):
+    DRAFT = "DRAFT"
+    VALIDATED = "VALIDATED"
+    PUBLISHED = "PUBLISHED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class PublicationResult(str, Enum):
+    PUBLISH = "PUBLISH"
+    HOLD = "HOLD"
+    REJECT = "REJECT"
+
+
+@dataclass(frozen=True)
+class EvidenceItem:
+    metric_code: str
+    evidence_type: EvidenceType
+    confidence: ConfidenceLevel
+    value_numeric: float | None = None
+    value_text: str | None = None
+    metric_name: str | None = None
+    unit: str | None = None
+    currency: str | None = None
+    source_type: str | None = None
+    source_name: str | None = None
+    source_reference: str | None = None
+    effective_date: str | None = None
+    as_of_date: str | None = None
+    owner: str | None = None
+    review_date: str | None = None
+
+    def __post_init__(self):
+        if self.value_numeric is None and self.value_text is None:
+            raise ValueError(f"{self.metric_code}: evidence requires numeric or text value.")
+
+
+@dataclass(frozen=True)
+class CalculationRecord:
+    metric_code: str
+    formula_code: str
+    formula_version: str
+    formula_expression: str
+    input_metric_codes: tuple[str, ...]
+    output_value_numeric: float
+    unit: str | None = None
+    currency: str | None = None
+
+
+@dataclass
+class AssessmentQualityGate:
+    methodology_integrity: str = "PASS"
+    evidence_quality: str = "PASS"
+    scope_consistency: str = "PASS"
+    output_quality: str = "PASS"
+    management_suitability: str = "PASS"
+    warnings: list[str] = field(default_factory=list)
+    blocking_issues: list[str] = field(default_factory=list)
+    publication_result: PublicationResult = PublicationResult.PUBLISH
+
+    def to_dict(self) -> dict:
+        out = asdict(self)
+        out["publication_result"] = self.publication_result.value
+        return out
+
+
+@dataclass
+class WalletAssessment:
+    product: str
+    methodology_code: str
+    methodology_version: str
+    effective_date: str | None = None
+    currency: str | None = None
+    geographic_scope: str = "Global"
+    time_horizon: str = "N/A"
+    addressable_notional: float | None = None
+    captured_notional: float | None = None
+    notional_penetration: float | None = None
+    estimated_wallet_revenue: float | None = None
+    actual_bank_revenue: float | None = None
+    revenue_share_of_wallet: float | None = None
+    revenue_wallet_gap: float | None = None
+    notional_completeness: CompletenessStatus = CompletenessStatus.PARTIAL
+    revenue_wallet_completeness: CompletenessStatus = CompletenessStatus.PARTIAL
+    confidence: ConfidenceLevel | None = None
+    confidence_explanation: str | None = None
+    status: AssessmentStatus = AssessmentStatus.DRAFT
+    quality_gate: AssessmentQualityGate | None = None
+
+
+FORECAST_CAPEX = "FORECAST_CAPEX"
+CAPEX_DEBT_FUNDING_PCT = "CAPEX_DEBT_FUNDING_PCT"
+BANK_DEBT_SHARE = "BANK_DEBT_SHARE"
+RELEVANT_DEBT = "RELEVANT_DEBT"
+DEBT_DUE_PCT = "DEBT_DUE_PCT"
+BANK_DEBT_SHARE_REFINANCING = "BANK_DEBT_SHARE_REFINANCING"
+
+BANK_CAPEX_NOTIONAL = "BANK_CAPEX_NOTIONAL"
+BANK_REFINANCING_NOTIONAL = "BANK_REFINANCING_NOTIONAL"
+ADDRESSABLE_LENDING_NOTIONAL = "ADDRESSABLE_LENDING_NOTIONAL"
+
+LENDING_V01_CRITICAL_METRICS = (
+    FORECAST_CAPEX,
+    CAPEX_DEBT_FUNDING_PCT,
+    BANK_DEBT_SHARE,
+)
+
+
+def _stage1e_json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _stage1e_evidence_map(evidence: list[EvidenceItem]) -> dict[str, EvidenceItem]:
+    return {item.metric_code: item for item in evidence}
+
+
+def _stage1e_numeric(ev: dict[str, EvidenceItem], metric: str) -> float | None:
+    item = ev.get(metric)
+    if item is None or item.value_numeric is None:
+        return None
+    return float(item.value_numeric)
+
+
+def _stage1e_derive_confidence(
+    evidence: list[EvidenceItem],
+    critical_metrics=LENDING_V01_CRITICAL_METRICS,
+) -> tuple[ConfidenceLevel | None, str]:
+    ev = _stage1e_evidence_map(evidence)
+    missing = [m for m in critical_metrics if m not in ev]
+    if missing:
+        return None, f"Confidence unavailable — missing critical evidence: {', '.join(missing)}."
+
+    levels = [ev[m].confidence for m in critical_metrics]
+    if ConfidenceLevel.LOW in levels:
+        level = ConfidenceLevel.LOW
+    elif ConfidenceLevel.MEDIUM in levels:
+        level = ConfidenceLevel.MEDIUM
+    else:
+        level = ConfidenceLevel.HIGH
+
+    counts = {x: levels.count(x) for x in ConfidenceLevel}
+    explanation = (
+        f"{level.value.title()} confidence — critical inputs: "
+        f"{counts[ConfidenceLevel.HIGH]} high, "
+        f"{counts[ConfidenceLevel.MEDIUM]} medium, "
+        f"{counts[ConfidenceLevel.LOW]} low."
+    )
+    return level, explanation
+
+
+def _stage1e_calculate_lending_wallet_v01(
+    evidence: list[EvidenceItem],
+    *,
+    effective_date: str | None = None,
+    currency: str | None = None,
+    geographic_scope: str = "Global",
+    time_horizon: str = "3Y",
+) -> tuple[WalletAssessment, list[CalculationRecord]]:
+    """Deterministic Lending Wallet v0.1. Revenue wallet remains NULL."""
+    ev = _stage1e_evidence_map(evidence)
+    calculations: list[CalculationRecord] = []
+
+    capex = _stage1e_numeric(ev, FORECAST_CAPEX)
+    debt_funding = _stage1e_numeric(ev, CAPEX_DEBT_FUNDING_PCT)
+    bank_share = _stage1e_numeric(ev, BANK_DEBT_SHARE)
+
+    capex_notional = None
+    if capex is not None and debt_funding is not None and bank_share is not None:
+        capex_notional = capex * debt_funding * bank_share
+        calculations.append(CalculationRecord(
+            metric_code=BANK_CAPEX_NOTIONAL,
+            formula_code="LENDING_CAPEX_001",
+            formula_version="1.0",
+            formula_expression="FORECAST_CAPEX * CAPEX_DEBT_FUNDING_PCT * BANK_DEBT_SHARE",
+            input_metric_codes=(FORECAST_CAPEX, CAPEX_DEBT_FUNDING_PCT, BANK_DEBT_SHARE),
+            output_value_numeric=capex_notional,
+            unit="MONEY",
+            currency=currency,
+        ))
+
+    relevant_debt = _stage1e_numeric(ev, RELEVANT_DEBT)
+    debt_due_pct = _stage1e_numeric(ev, DEBT_DUE_PCT)
+    refi_bank_share = _stage1e_numeric(ev, BANK_DEBT_SHARE_REFINANCING)
+    if refi_bank_share is None:
+        refi_bank_share = bank_share
+
+    refi_notional = None
+    if relevant_debt is not None and debt_due_pct is not None and refi_bank_share is not None:
+        refi_notional = relevant_debt * debt_due_pct * refi_bank_share
+        calculations.append(CalculationRecord(
+            metric_code=BANK_REFINANCING_NOTIONAL,
+            formula_code="LENDING_REFI_001",
+            formula_version="1.0",
+            formula_expression="RELEVANT_DEBT * DEBT_DUE_PCT * BANK_DEBT_SHARE_REFINANCING",
+            input_metric_codes=(
+                RELEVANT_DEBT,
+                DEBT_DUE_PCT,
+                BANK_DEBT_SHARE_REFINANCING
+                if BANK_DEBT_SHARE_REFINANCING in ev else BANK_DEBT_SHARE,
+            ),
+            output_value_numeric=refi_notional,
+            unit="MONEY",
+            currency=currency,
+        ))
+
+    available = [x for x in (capex_notional, refi_notional) if x is not None]
+    addressable = sum(available) if available else None
+    if addressable is not None:
+        calculations.append(CalculationRecord(
+            metric_code=ADDRESSABLE_LENDING_NOTIONAL,
+            formula_code="LENDING_TOTAL_001",
+            formula_version="1.0",
+            formula_expression="BANK_CAPEX_NOTIONAL + BANK_REFINANCING_NOTIONAL (available components)",
+            input_metric_codes=tuple(
+                code for code, value in (
+                    (BANK_CAPEX_NOTIONAL, capex_notional),
+                    (BANK_REFINANCING_NOTIONAL, refi_notional),
+                ) if value is not None
+            ),
+            output_value_numeric=addressable,
+            unit="MONEY",
+            currency=currency,
+        ))
+
+    confidence, explanation = _stage1e_derive_confidence(evidence)
+
+    # Core Lending v0.1 requires the capex branch. Refinancing remains optional
+    # until same-perimeter maturity evidence is available.
+    notional_completeness = (
+        CompletenessStatus.COMPLETE
+        if capex_notional is not None
+        else CompletenessStatus.PARTIAL
+    )
+
+    return WalletAssessment(
+        product="LENDING",
+        methodology_code="LENDING_WALLET",
+        methodology_version="0.1",
+        effective_date=effective_date,
+        currency=currency,
+        geographic_scope=geographic_scope,
+        time_horizon=time_horizon,
+        addressable_notional=addressable,
+        notional_completeness=notional_completeness,
+        revenue_wallet_completeness=CompletenessStatus.PARTIAL,
+        confidence=confidence,
+        confidence_explanation=explanation,
+    ), calculations
+
+
+def _stage1e_quality_gate(
+    assessment: WalletAssessment,
+    evidence: list[EvidenceItem],
+    *,
+    scope_consistent: bool = True,
+) -> AssessmentQualityGate:
+    ev = _stage1e_evidence_map(evidence)
+    gate = AssessmentQualityGate()
+
+    missing = [m for m in LENDING_V01_CRITICAL_METRICS if m not in ev]
+    if missing:
+        gate.methodology_integrity = "FAIL"
+        gate.blocking_issues.append(
+            f"Missing critical methodology inputs: {', '.join(missing)}."
+        )
+    if assessment.addressable_notional is None:
+        gate.methodology_integrity = "FAIL"
+        gate.blocking_issues.append("Addressable notional could not be calculated.")
+
+    for metric in LENDING_V01_CRITICAL_METRICS:
+        item = ev.get(metric)
+        if item is None:
+            continue
+        if not item.source_type or not item.source_name:
+            gate.evidence_quality = "FAIL"
+            gate.blocking_issues.append(
+                f"{metric}: critical evidence has unresolved provenance."
+            )
+        elif item.confidence == ConfidenceLevel.LOW:
+            gate.evidence_quality = "HOLD"
+            gate.warnings.append(f"{metric}: critical input is LOW confidence.")
+
+    if not scope_consistent:
+        gate.scope_consistency = "FAIL"
+        gate.blocking_issues.append(
+            "Economic perimeter / geography / period / currency scope is inconsistent."
+        )
+
+    if assessment.addressable_notional is not None and assessment.addressable_notional < 0:
+        gate.output_quality = "FAIL"
+        gate.blocking_issues.append("Addressable notional cannot be negative.")
+
+    if assessment.notional_penetration is not None:
+        if assessment.notional_penetration < 0:
+            gate.output_quality = "FAIL"
+            gate.blocking_issues.append("Notional penetration cannot be negative.")
+        elif assessment.notional_penetration > 1:
+            gate.output_quality = "HOLD"
+            gate.warnings.append(
+                "Notional penetration exceeds 100%; verify denominator, period and perimeter."
+            )
+
+    if assessment.confidence is None:
+        gate.management_suitability = "FAIL"
+        gate.blocking_issues.append("Assessment confidence is unavailable.")
+    elif assessment.confidence == ConfidenceLevel.LOW:
+        gate.management_suitability = "HOLD"
+        gate.warnings.append(
+            "Overall assessment confidence is LOW; management use requires clarification."
+        )
+
+    if gate.blocking_issues:
+        gate.publication_result = PublicationResult.REJECT
+    elif "HOLD" in {
+        gate.evidence_quality,
+        gate.output_quality,
+        gate.management_suitability,
+    }:
+        gate.publication_result = PublicationResult.HOLD
+    else:
+        gate.publication_result = PublicationResult.PUBLISH
+
+    assessment.quality_gate = gate
+    return gate
+
+
+def _db_seed_stage1e_methodologies(conn: _DBConnection):
+    """Idempotently register Lending Wallet v0.1 methodology."""
+    existing = conn.execute(
+        """SELECT * FROM intelligence_methodology
+           WHERE methodology_code=? AND version=?""",
+        ("LENDING_WALLET", "0.1"),
+    ).fetchone()
+    if existing is not None:
+        return existing
+
+    methodology_id = _db_next_id(
+        conn, "intelligence_methodology", "methodology_id", "MTH"
+    )
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO intelligence_methodology(
+               methodology_id,methodology_code,methodology_name,version,domain,product,
+               description,required_inputs_json,optional_inputs_json,outputs_json,
+               critical_inputs_json,effective_from,status,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            methodology_id,
+            "LENDING_WALLET",
+            "Lending Wallet v0.1",
+            "0.1",
+            "WALLET",
+            "LENDING",
+            "Addressable bank lending notional from capex financing plus optional refinancing.",
+            _stage1e_json([FORECAST_CAPEX, CAPEX_DEBT_FUNDING_PCT, BANK_DEBT_SHARE]),
+            _stage1e_json([RELEVANT_DEBT, DEBT_DUE_PCT, BANK_DEBT_SHARE_REFINANCING]),
+            _stage1e_json([
+                BANK_CAPEX_NOTIONAL,
+                BANK_REFINANCING_NOTIONAL,
+                ADDRESSABLE_LENDING_NOTIONAL,
+            ]),
+            _stage1e_json(list(LENDING_V01_CRITICAL_METRICS)),
+            now,
+            "ACTIVE",
+            now,
+            now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM intelligence_methodology WHERE methodology_id=?",
+        (methodology_id,),
+    ).fetchone()
+
+
+def _db_stage1e_persist_evidence(
+    conn: _DBConnection,
+    *,
+    relationship_db_id: int,
+    review_cycle_db_id: int,
+    methodology_db_id: int,
+    item: EvidenceItem,
+) -> str:
+    evidence_id = _db_next_id(
+        conn, "intelligence_evidence", "evidence_id", "EVD"
+    )
+    conn.execute(
+        """INSERT INTO intelligence_evidence(
+               evidence_id,relationship_id,review_cycle_id,methodology_id,
+               metric_code,metric_name,value_numeric,value_text,unit,currency,
+               evidence_type,source_type,source_name,source_reference,
+               effective_date,as_of_date,confidence,owner,review_date,created_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            evidence_id, relationship_db_id, review_cycle_db_id, methodology_db_id,
+            item.metric_code, item.metric_name, item.value_numeric, item.value_text,
+            item.unit, item.currency, item.evidence_type.value, item.source_type,
+            item.source_name, item.source_reference, item.effective_date,
+            item.as_of_date, item.confidence.value, item.owner, item.review_date,
+            _db_now(),
+        ),
+    )
+    return evidence_id
+
+
+def _db_stage1e_persist_calculation(
+    conn: _DBConnection,
+    *,
+    relationship_db_id: int,
+    review_cycle_db_id: int,
+    methodology_db_id: int,
+    record: CalculationRecord,
+    input_evidence_ids: list[str],
+) -> str:
+    calculation_id = _db_next_id(
+        conn, "intelligence_calculation", "calculation_id", "CAL"
+    )
+    conn.execute(
+        """INSERT INTO intelligence_calculation(
+               calculation_id,relationship_id,review_cycle_id,methodology_id,
+               metric_code,metric_name,formula_code,formula_version,formula_expression,
+               input_evidence_ids_json,output_value_numeric,unit,currency,calculated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            calculation_id, relationship_db_id, review_cycle_db_id, methodology_db_id,
+            record.metric_code, None, record.formula_code, record.formula_version,
+            record.formula_expression, _stage1e_json(input_evidence_ids),
+            record.output_value_numeric, record.unit, record.currency, _db_now(),
+        ),
+    )
+    return calculation_id
+
+
+def _db_stage1e_create_lending_assessment(
+    company: str,
+    evidence: list[EvidenceItem],
+    *,
+    effective_date: str | None = None,
+    currency: str | None = None,
+    geographic_scope: str = "Global",
+    time_horizon: str = "3Y",
+    scope_consistent: bool = True,
+    actor: str = "EC-AI",
+) -> dict:
+    """Create + validate, but never auto-publish, a Lending Wallet v0.1 assessment."""
+    assessment, calculations = _stage1e_calculate_lending_wallet_v01(
+        evidence,
+        effective_date=effective_date,
+        currency=currency,
+        geographic_scope=geographic_scope,
+        time_horizon=time_horizon,
+    )
+    gate = _stage1e_quality_gate(
+        assessment, evidence, scope_consistent=scope_consistent
+    )
+
+    with _db_transaction() as conn:
+        methodology = _db_seed_stage1e_methodologies(conn)
+        cycle = _db_active_review_cycle(conn)
+        rel = _db_relationship_row(conn, company)
+
+        evidence_ids = []
+        evidence_by_metric = {}
+        for item in evidence:
+            evidence_id = _db_stage1e_persist_evidence(
+                conn,
+                relationship_db_id=rel["id"],
+                review_cycle_db_id=cycle["id"],
+                methodology_db_id=methodology["id"],
+                item=item,
+            )
+            evidence_ids.append(evidence_id)
+            evidence_by_metric[item.metric_code] = evidence_id
+
+        calculation_ids = []
+        for calc in calculations:
+            input_ids = [
+                evidence_by_metric[m]
+                for m in calc.input_metric_codes
+                if m in evidence_by_metric
+            ]
+            calc_id = _db_stage1e_persist_calculation(
+                conn,
+                relationship_db_id=rel["id"],
+                review_cycle_db_id=cycle["id"],
+                methodology_db_id=methodology["id"],
+                record=calc,
+                input_evidence_ids=input_ids,
+            )
+            calculation_ids.append(calc_id)
+
+        assessment_id = _db_next_id(
+            conn, "wallet_assessment", "assessment_id", "WAL"
+        )
+        now = _db_now()
+        status = (
+            AssessmentStatus.VALIDATED.value
+            if gate.publication_result != PublicationResult.REJECT
+            else AssessmentStatus.DRAFT.value
+        )
+        validated_at = now if status == AssessmentStatus.VALIDATED.value else None
+
+        conn.execute(
+            """INSERT INTO wallet_assessment(
+                   assessment_id,relationship_id,review_cycle_id,methodology_id,
+                   product,effective_date,currency,geographic_scope,time_horizon,
+                   evidence_ids_json,calculation_ids_json,
+                   addressable_notional,captured_notional,notional_penetration,
+                   estimated_wallet_revenue,actual_bank_revenue,revenue_share_of_wallet,
+                   revenue_wallet_gap,notional_completeness,revenue_wallet_completeness,
+                   confidence,confidence_explanation,status,publication_result,
+                   quality_gate_json,created_at,validated_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                assessment_id, rel["id"], cycle["id"], methodology["id"],
+                assessment.product, assessment.effective_date, assessment.currency,
+                assessment.geographic_scope, assessment.time_horizon,
+                _stage1e_json(evidence_ids), _stage1e_json(calculation_ids),
+                assessment.addressable_notional, assessment.captured_notional,
+                assessment.notional_penetration, assessment.estimated_wallet_revenue,
+                assessment.actual_bank_revenue, assessment.revenue_share_of_wallet,
+                assessment.revenue_wallet_gap, assessment.notional_completeness.value,
+                assessment.revenue_wallet_completeness.value,
+                assessment.confidence.value if assessment.confidence else None,
+                assessment.confidence_explanation, status,
+                gate.publication_result.value, _stage1e_json(gate.to_dict()),
+                now, validated_at,
+            ),
+        )
+
+        _db_append_audit(
+            conn,
+            entity_type="WalletAssessment",
+            entity_id=assessment_id,
+            relationship_id=rel["id"],
+            event_type="WALLET_ASSESSMENT_CREATED",
+            actor=actor,
+            payload={
+                "product": assessment.product,
+                "methodology": "LENDING_WALLET 0.1",
+                "status": status,
+                "publication_result": gate.publication_result.value,
+                "confidence": assessment.confidence.value if assessment.confidence else None,
+                "addressable_notional": assessment.addressable_notional,
+                "currency": assessment.currency,
+            },
+        )
+
+        if status == AssessmentStatus.VALIDATED.value:
+            _db_append_audit(
+                conn,
+                entity_type="WalletAssessment",
+                entity_id=assessment_id,
+                relationship_id=rel["id"],
+                event_type="WALLET_ASSESSMENT_VALIDATED",
+                actor=actor,
+                payload={
+                    "publication_result": gate.publication_result.value,
+                    "warnings": gate.warnings,
+                },
+            )
+
+    return {
+        "assessment_id": assessment_id,
+        "relationship": company,
+        "review_cycle_id": cycle["review_cycle_id"],
+        "methodology": "LENDING_WALLET 0.1",
+        "addressable_notional": assessment.addressable_notional,
+        "currency": assessment.currency,
+        "notional_completeness": assessment.notional_completeness.value,
+        "revenue_wallet": assessment.estimated_wallet_revenue,
+        "confidence": assessment.confidence.value if assessment.confidence else None,
+        "publication_result": gate.publication_result.value,
+        "status": status,
+        "warnings": gate.warnings,
+        "blocking_issues": gate.blocking_issues,
+    }
+
+
+def _db_stage1e_publish_assessment(
+    assessment_id: str,
+    *,
+    actor: str,
+) -> dict:
+    """Manual publication gate; supersession occurs atomically."""
+    with _db_transaction() as conn:
+        target_sql = "SELECT * FROM wallet_assessment WHERE assessment_id=?"
+        if conn.backend == "postgresql":
+            target_sql += " FOR UPDATE"
+        row = conn.execute(target_sql, (assessment_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Wallet assessment {assessment_id} not found.")
+        if row["status"] != AssessmentStatus.VALIDATED.value:
+            raise ValueError(
+                f"Only VALIDATED assessments can be published; found {row['status']}."
+            )
+        if row["publication_result"] != PublicationResult.PUBLISH.value:
+            raise ValueError(
+                f"Assessment publication_result must be PUBLISH; found {row['publication_result']}."
+            )
+
+        now = _db_now()
+        conn.execute(
+            """UPDATE wallet_assessment
+               SET status='SUPERSEDED',superseded_at=?
+               WHERE relationship_id=? AND product=? AND geographic_scope=? AND time_horizon=?
+                 AND status='PUBLISHED' AND assessment_id<>?""",
+            (
+                now, row["relationship_id"], row["product"],
+                row["geographic_scope"], row["time_horizon"], assessment_id,
+            ),
+        )
+        conn.execute(
+            """UPDATE wallet_assessment
+               SET status='PUBLISHED',published_at=?,published_by=?,publication_mode='MANUAL'
+               WHERE assessment_id=?""",
+            (now, actor, assessment_id),
+        )
+        _db_append_audit(
+            conn,
+            entity_type="WalletAssessment",
+            entity_id=assessment_id,
+            relationship_id=row["relationship_id"],
+            event_type="WALLET_ASSESSMENT_PUBLISHED",
+            actor=actor,
+            payload={"publication_mode": "MANUAL"},
+        )
+
+    return _db_stage1e_get_assessment(assessment_id)
+
+
+def _db_stage1e_get_assessment(assessment_id: str) -> dict | None:
+    conn = _db_connect()
+    try:
+        row = conn.execute(
+            """SELECT wa.*, r.name AS relationship_name,
+                      im.methodology_code, im.version AS methodology_version
+               FROM wallet_assessment wa
+               JOIN relationship r ON r.id=wa.relationship_id
+               JOIN intelligence_methodology im ON im.id=wa.methodology_id
+               WHERE wa.assessment_id=?""",
+            (assessment_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "Assessment ID": row["assessment_id"],
+            "Relationship": row["relationship_name"],
+            "Product": row["product"],
+            "Methodology": f"{row['methodology_code']} {row['methodology_version']}",
+            "Addressable Notional": row["addressable_notional"],
+            "Currency": row["currency"] or "",
+            "Notional Completeness": row["notional_completeness"],
+            "Revenue Wallet": row["estimated_wallet_revenue"],
+            "Revenue Completeness": row["revenue_wallet_completeness"],
+            "Confidence": row["confidence"] or "",
+            "Confidence Explanation": row["confidence_explanation"] or "",
+            "Status": row["status"],
+            "Publication Result": row["publication_result"] or "",
+            "Created": row["created_at"],
+            "Validated": row["validated_at"] or "",
+            "Published": row["published_at"] or "",
+            "Published By": row["published_by"] or "",
+        }
+    finally:
+        conn.close()
+
+
+def _db_stage1e_current_assessment(
+    company: str,
+    *,
+    product: str = "LENDING",
+    geographic_scope: str = "Global",
+    time_horizon: str = "3Y",
+) -> dict | None:
+    conn = _db_connect()
+    try:
+        rel = _db_relationship_row(conn, company)
+        row = conn.execute(
+            """SELECT assessment_id FROM wallet_assessment
+               WHERE relationship_id=? AND product=? AND geographic_scope=? AND time_horizon=?
+                 AND status='PUBLISHED'
+               ORDER BY id DESC LIMIT 1""",
+            (rel["id"], product, geographic_scope, time_horizon),
+        ).fetchone()
+        if row is None:
+            return None
+        assessment_id = row["assessment_id"]
+    finally:
+        conn.close()
+    return _db_stage1e_get_assessment(assessment_id)
+
+
+def _stage1e_toyota_test_evidence() -> list[EvidenceItem]:
+    """Controlled TEST fixture only. The 25% capex-debt assumption is not production truth."""
+    return [
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX,
+            metric_name="Forecast Capex",
+            value_numeric=2_300_000_000_000,
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="COMPANY_DISCLOSURE",
+            source_name="Toyota FY2027 guidance — test fixture",
+            confidence=ConfidenceLevel.HIGH,
+        ),
+        EvidenceItem(
+            metric_code=CAPEX_DEBT_FUNDING_PCT,
+            metric_name="Capex Debt Funding %",
+            value_numeric=0.25,
+            unit="PERCENT",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="INDUSTRY_BENCHMARK",
+            source_name="Governed TEST benchmark — not production assumption",
+            confidence=ConfidenceLevel.MEDIUM,
+        ),
+        EvidenceItem(
+            metric_code=BANK_DEBT_SHARE,
+            metric_name="Bank Debt Share",
+            value_numeric=0.657,
+            unit="PERCENT",
+            evidence_type=EvidenceType.DERIVED_FACT,
+            source_type="MODEL_DERIVATION",
+            source_name="Toyota parent funding-mix proxy — test fixture",
+            confidence=ConfidenceLevel.MEDIUM,
+        ),
+    ]
+
+
+def _db_stage1e_run_toyota_test(*, actor: str = "Founder Test") -> dict:
+    """Explicit test helper. Never called automatically on app startup."""
+    return _db_stage1e_create_lending_assessment(
+        "Toyota",
+        _stage1e_toyota_test_evidence(),
+        effective_date="FY2027",
+        currency="JPY",
+        geographic_scope="Global",
+        time_horizon="3Y",
+        scope_consistent=True,
+        actor=actor,
+    )
+
+
+
+
+
+# =============================================================================
+# STAGE 1-E.2A.6 — STRUCTURAL LENDING WALLET v1.0 / RED-TEAMED ENGINE
+# =============================================================================
+# Additive candidate logic only. Stage 1-E.1J persistence and any existing
+# PUBLISHED assessments remain untouched. This engine has no database writes.
+#
+# Governing contract:
+#   Facts -> Evidence + Assumptions -> deterministic wallet calculation
+#   -> quality gate -> eligible intelligence.
+# Wallet gap is evidence, not a lending recommendation.
+# NULL means unknown / not assessed; zero means known zero.
+
+class StructuralComponentStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+    NOT_ASSESSED = "NOT_ASSESSED"
+    INVALID = "INVALID"
+
+
+class StructuralWalletCoverage(str, Enum):
+    CAPEX_ONLY = "CAPEX_ONLY"
+    REFINANCING_ONLY = "REFINANCING_ONLY"
+    CAPEX_AND_REFINANCING = "CAPEX_AND_REFINANCING"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class CaptureComparabilityStatus(str, Enum):
+    COMPARABLE = "COMPARABLE"
+    NOT_COMPARABLE = "NOT_COMPARABLE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+@dataclass(frozen=True)
+class StructuralLendingComponent:
+    """One structural lending need.
+
+    CAPEX semantics:
+        base_amount = forecast capex
+        funding_rate = forecast capex debt-funding %
+        bank_share = forecast bank share of capex debt funding
+
+    REFINANCING semantics:
+        base_amount = relevant principal maturing in the assessment horizon
+        funding_rate = forecast external refinance rate
+        bank_share = forecast bank share of refinancing
+    """
+    base_amount: float | None = None
+    funding_rate: float | None = None
+    bank_share: float | None = None
+    economic_perimeter: str | None = None
+    time_horizon: str | None = None
+    currency: str | None = None
+    evidence_ids: tuple[str, ...] = ()
+    estimation_method: str | None = None
+    rationale: str | None = None
+    confidence: str = "MEDIUM"
+    financing_need_ids: tuple[str, ...] = ()
+    assessed: bool = True
+
+
+@dataclass(frozen=True)
+class StructuralLendingCapture:
+    """Our bank's economically comparable position.
+
+    comparable_commitment should represent final committed / retained notional
+    matched to the wallet denominator. Funded and pipeline amounts are supporting
+    facts and do not replace comparable commitment for primary penetration.
+    """
+    comparable_commitment: float | None = None
+    funded_notional: float | None = None
+    pipeline_notional: float | None = None
+    comparability_status: CaptureComparabilityStatus = CaptureComparabilityStatus.NOT_ASSESSED
+    comparability_reason: str | None = None
+    evidence_ids: tuple[str, ...] = ()
+    verified_zero: bool = False
+
+
+@dataclass(frozen=True)
+class StructuralLendingAssessmentInput:
+    capex: StructuralLendingComponent | None = None
+    refinancing: StructuralLendingComponent | None = None
+    capture: StructuralLendingCapture | None = None
+    methodology_code: str = "STRUCTURAL_LENDING"
+    methodology_version: str = "1.0"
+    wallet_scope: str = "STRUCTURAL_LENDING"
+    test_only: bool = False
+
+
+def _stage1e2_finite_number(value) -> bool:
+    try:
+        return value is not None and math.isfinite(float(value))
+    except Exception:
+        return False
+
+
+def _stage1e2_component_result(
+    name: str,
+    component: StructuralLendingComponent | None,
+) -> dict:
+    """Validate and calculate one component without inferring missing facts."""
+    result = {
+        "component": name,
+        "status": StructuralComponentStatus.NOT_ASSESSED.value,
+        "notional": None,
+        "warnings": [],
+        "blocking_issues": [],
+        "scope": None,
+        "financing_need_ids": [],
+    }
+
+    if component is None or not component.assessed:
+        return result
+
+    values = (component.base_amount, component.funding_rate, component.bank_share)
+    if any(v is None for v in values):
+        result["status"] = StructuralComponentStatus.PARTIAL.value
+        result["warnings"].append(f"{name}_MISSING_INPUT")
+        return result
+
+    if not all(_stage1e2_finite_number(v) for v in values):
+        result["status"] = StructuralComponentStatus.INVALID.value
+        result["blocking_issues"].append(f"{name}_NON_FINITE_VALUE")
+        return result
+
+    base_amount = float(component.base_amount)
+    funding_rate = float(component.funding_rate)
+    bank_share = float(component.bank_share)
+
+    if base_amount < 0:
+        result["status"] = StructuralComponentStatus.INVALID.value
+        result["blocking_issues"].append(f"{name}_NEGATIVE_BASE_AMOUNT")
+        return result
+    if not 0 <= funding_rate <= 1:
+        result["status"] = StructuralComponentStatus.INVALID.value
+        result["blocking_issues"].append(f"{name}_FUNDING_RATE_OUT_OF_RANGE")
+        return result
+    if not 0 <= bank_share <= 1:
+        result["status"] = StructuralComponentStatus.INVALID.value
+        result["blocking_issues"].append(f"{name}_BANK_SHARE_OUT_OF_RANGE")
+        return result
+
+    scope = (
+        (component.economic_perimeter or "").strip(),
+        (component.time_horizon or "").strip(),
+        (component.currency or "").strip().upper(),
+    )
+    result["scope"] = scope
+
+    if not all(scope):
+        result["status"] = StructuralComponentStatus.PARTIAL.value
+        result["warnings"].append(f"{name}_MISSING_SCOPE")
+        return result
+
+    # Material inputs require lineage and an explicit method/rationale.
+    if not component.evidence_ids:
+        result["status"] = StructuralComponentStatus.PARTIAL.value
+        result["warnings"].append(f"{name}_MISSING_PROVENANCE")
+        return result
+    if not (component.estimation_method or "").strip():
+        result["status"] = StructuralComponentStatus.PARTIAL.value
+        result["warnings"].append(f"{name}_MISSING_ESTIMATION_METHOD")
+        return result
+    if not (component.rationale or "").strip():
+        result["status"] = StructuralComponentStatus.PARTIAL.value
+        result["warnings"].append(f"{name}_MISSING_RATIONALE")
+        return result
+
+    confidence = str(component.confidence or "").upper()
+    if confidence not in {"HIGH", "MEDIUM", "LOW"}:
+        result["status"] = StructuralComponentStatus.INVALID.value
+        result["blocking_issues"].append(f"{name}_INVALID_CONFIDENCE")
+        return result
+
+    if confidence == "LOW":
+        result["warnings"].append(f"{name}_LOW_CONFIDENCE")
+
+    result["status"] = StructuralComponentStatus.COMPLETE.value
+    result["notional"] = base_amount * funding_rate * bank_share
+    result["financing_need_ids"] = list(component.financing_need_ids)
+    return result
+
+
+def _stage1e2_capture_result(
+    capture: StructuralLendingCapture | None,
+    addressable_notional: float | None,
+) -> dict:
+    result = {
+        "status": StructuralComponentStatus.NOT_ASSESSED.value,
+        "comparability_status": CaptureComparabilityStatus.NOT_ASSESSED.value,
+        "comparable_commitment": None,
+        "funded_notional": None,
+        "pipeline_notional": None,
+        "penetration": None,
+        "raw_wallet_gap": None,
+        "positive_wallet_gap": None,
+        "warnings": [],
+        "blocking_issues": [],
+    }
+    if capture is None:
+        return result
+
+    result["comparability_status"] = capture.comparability_status.value
+    result["funded_notional"] = (
+        float(capture.funded_notional)
+        if _stage1e2_finite_number(capture.funded_notional) else None
+    )
+    result["pipeline_notional"] = (
+        float(capture.pipeline_notional)
+        if _stage1e2_finite_number(capture.pipeline_notional) else None
+    )
+
+    for field_name, raw in (
+        ("FUNDED_NOTIONAL", capture.funded_notional),
+        ("PIPELINE_NOTIONAL", capture.pipeline_notional),
+        ("COMPARABLE_COMMITMENT", capture.comparable_commitment),
+    ):
+        if raw is not None:
+            if not _stage1e2_finite_number(raw) or float(raw) < 0:
+                result["status"] = StructuralComponentStatus.INVALID.value
+                result["blocking_issues"].append(f"CAPTURE_{field_name}_INVALID")
+                return result
+
+    if capture.comparability_status == CaptureComparabilityStatus.NOT_ASSESSED:
+        return result
+
+    if capture.comparability_status == CaptureComparabilityStatus.NOT_COMPARABLE:
+        result["status"] = StructuralComponentStatus.COMPLETE.value
+        if not (capture.comparability_reason or "").strip():
+            result["warnings"].append("CAPTURE_NOT_COMPARABLE_REASON_MISSING")
+        else:
+            result["warnings"].append("CAPTURE_NOT_COMPARABLE")
+        return result
+
+    # COMPARABLE
+    if not capture.evidence_ids:
+        result["status"] = StructuralComponentStatus.PARTIAL.value
+        result["warnings"].append("CAPTURE_MISSING_PROVENANCE")
+        return result
+
+    if not (capture.comparability_reason or "").strip():
+        result["status"] = StructuralComponentStatus.PARTIAL.value
+        result["warnings"].append("CAPTURE_COMPARABILITY_REASON_MISSING")
+        return result
+
+    commitment = capture.comparable_commitment
+    if commitment is None and capture.verified_zero:
+        commitment = 0.0
+
+    if commitment is None:
+        result["status"] = StructuralComponentStatus.PARTIAL.value
+        result["warnings"].append("CAPTURE_COMPARABLE_COMMITMENT_UNKNOWN")
+        return result
+
+    result["status"] = StructuralComponentStatus.COMPLETE.value
+    result["comparable_commitment"] = float(commitment)
+
+    if addressable_notional is not None:
+        raw_gap = float(addressable_notional) - float(commitment)
+        result["raw_wallet_gap"] = raw_gap
+        result["positive_wallet_gap"] = max(0.0, raw_gap)
+        if addressable_notional > 0:
+            result["penetration"] = float(commitment) / float(addressable_notional)
+            if result["penetration"] > 1:
+                result["warnings"].append("CAPTURE_EXCEEDS_ESTIMATED_WALLET")
+        elif addressable_notional == 0 and float(commitment) > 0:
+            result["warnings"].append("CAPTURE_WITH_ZERO_ESTIMATED_WALLET")
+
+    return result
+
+
+def _stage1e2_evaluate_structural_lending(
+    assessment: StructuralLendingAssessmentInput,
+) -> dict:
+    """Deterministic Stage 1-E.2A structural lending assessment.
+
+    No persistence and no management recommendation are produced here.
+    """
+    capex = _stage1e2_component_result("CAPEX", assessment.capex)
+    refi = _stage1e2_component_result("REFINANCING", assessment.refinancing)
+
+    component_results = {"CAPEX": capex, "REFINANCING": refi}
+    warnings = list(capex["warnings"]) + list(refi["warnings"])
+    blockers = list(capex["blocking_issues"]) + list(refi["blocking_issues"])
+
+    complete = [
+        name for name, result in component_results.items()
+        if result["status"] == StructuralComponentStatus.COMPLETE.value
+    ]
+    partial = [
+        name for name, result in component_results.items()
+        if result["status"] == StructuralComponentStatus.PARTIAL.value
+    ]
+    invalid = [
+        name for name, result in component_results.items()
+        if result["status"] == StructuralComponentStatus.INVALID.value
+    ]
+
+    if complete == ["CAPEX"]:
+        coverage = StructuralWalletCoverage.CAPEX_ONLY.value
+    elif complete == ["REFINANCING"]:
+        coverage = StructuralWalletCoverage.REFINANCING_ONLY.value
+    elif set(complete) == {"CAPEX", "REFINANCING"}:
+        coverage = StructuralWalletCoverage.CAPEX_AND_REFINANCING.value
+    else:
+        coverage = StructuralWalletCoverage.NOT_ASSESSED.value
+
+    addressable = (
+        sum(float(component_results[name]["notional"]) for name in complete)
+        if complete else None
+    )
+
+    # Both complete components must share the same economic perimeter, horizon
+    # and currency before they can be summed without qualification.
+    if len(complete) == 2 and capex["scope"] != refi["scope"]:
+        warnings.append("SCOPE_MISMATCH")
+
+    # Financing need IDs are explicit anti-double-counting keys. We do not
+    # silently net overlapping needs; the assessment is held for analyst review.
+    if len(complete) == 2:
+        capex_needs = set(capex["financing_need_ids"])
+        refi_needs = set(refi["financing_need_ids"])
+        if capex_needs.intersection(refi_needs):
+            warnings.append("POTENTIAL_DOUBLE_COUNT")
+
+    if partial:
+        warnings.append("INCOMPLETE_ASSESSED_COMPONENT")
+
+    if invalid:
+        blockers.append("INVALID_STRUCTURAL_LENDING_COMPONENT")
+
+    capture = _stage1e2_capture_result(assessment.capture, addressable)
+    warnings.extend(capture["warnings"])
+    blockers.extend(capture["blocking_issues"])
+
+    if assessment.methodology_code != "STRUCTURAL_LENDING":
+        blockers.append("UNSUPPORTED_METHODOLOGY_CODE")
+    if assessment.methodology_version != "1.0":
+        blockers.append("UNSUPPORTED_METHODOLOGY_VERSION")
+    if assessment.wallet_scope != "STRUCTURAL_LENDING":
+        blockers.append("UNSUPPORTED_WALLET_SCOPE")
+    if not complete:
+        blockers.append("NO_COMPLETE_STRUCTURAL_LENDING_COMPONENT")
+    if assessment.test_only:
+        warnings.append("TEST_ONLY_NOT_FOR_PRODUCTION")
+
+    warnings = sorted(set(warnings))
+    blockers = sorted(set(blockers))
+
+    hold_codes = {
+        "SCOPE_MISMATCH",
+        "POTENTIAL_DOUBLE_COUNT",
+        "INCOMPLETE_ASSESSED_COMPONENT",
+        "CAPEX_LOW_CONFIDENCE",
+        "REFINANCING_LOW_CONFIDENCE",
+        "TEST_ONLY_NOT_FOR_PRODUCTION",
+    }
+
+    if blockers:
+        publication_result = PublicationResult.REJECT.value
+    elif any(code in hold_codes for code in warnings):
+        publication_result = PublicationResult.HOLD.value
+    else:
+        publication_result = PublicationResult.PUBLISH.value
+
+    production_publication_allowed = (
+        publication_result == PublicationResult.PUBLISH.value
+        and not assessment.test_only
+    )
+
+    # Freeze the economic interpretation as part of the returned contract. A
+    # later persistence step should store this snapshot rather than regenerate
+    # history from mutable current assumptions.
+    snapshot = {
+        "methodology_code": assessment.methodology_code,
+        "methodology_version": assessment.methodology_version,
+        "wallet_scope": assessment.wallet_scope,
+        "wallet_coverage": coverage,
+        "component_status": {
+            "CAPEX": capex["status"],
+            "REFINANCING": refi["status"],
+            "CAPTURE": capture["status"],
+        },
+        "component_notional": {
+            "CAPEX": capex["notional"],
+            "REFINANCING": refi["notional"],
+        },
+        "addressable_structural_lending_notional": addressable,
+        "comparable_capture_notional": capture["comparable_commitment"],
+        "notional_penetration": capture["penetration"],
+        "raw_wallet_gap": capture["raw_wallet_gap"],
+        "positive_wallet_gap": capture["positive_wallet_gap"],
+        "capture_comparability_status": capture["comparability_status"],
+        "warnings": warnings,
+        "blocking_issues": blockers,
+        "publication_result": publication_result,
+        "production_publication_allowed": production_publication_allowed,
+    }
+    return snapshot
+
+
+def _stage1e2_toyota_dry_run() -> dict:
+    """Controlled dry run only; never writes or publishes.
+
+    The 25% capex debt-funding assumption remains TEST-only and the 65.7% bank
+    share remains a historical parent funding-mix proxy, not a Toyota forecast.
+    """
+    capex = StructuralLendingComponent(
+        base_amount=2_300_000_000_000,
+        funding_rate=0.25,
+        bank_share=0.657,
+        economic_perimeter="TOYOTA_PARENT",
+        time_horizon="3Y",
+        currency="JPY",
+        evidence_ids=("TEST-FORECAST-CAPEX", "TEST-DEBT-FUNDING", "TEST-BANK-SHARE"),
+        estimation_method="Governed test assumption + historical parent funding-mix proxy",
+        rationale="Validate deterministic Stage 1-E.2A mechanics only; not production truth.",
+        confidence="MEDIUM",
+        financing_need_ids=("TOYOTA-FY2027-CAPEX",),
+        assessed=True,
+    )
+    return _stage1e2_evaluate_structural_lending(
+        StructuralLendingAssessmentInput(
+            capex=capex,
+            refinancing=None,
+            capture=None,
+            test_only=True,
+        )
+    )
+
+# END STAGE 1-E.2A.6 — STRUCTURAL LENDING WALLET v1.0
+
 
 def _db_write_system_metadata():
     """Record the deployed persistence contract without touching domain history."""
@@ -2150,6 +3603,8 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
+        "intelligence_release": "Stage 1-E.1J v0.1",
+        "lending_wallet_methodology": "LENDING_WALLET 0.1",
     }
     with _db_transaction() as conn:
         now = _db_now()
@@ -2327,6 +3782,8 @@ def _db_bootstrap_reference_state_cached(backend: str, schema_version: int, runt
     will run again automatically after a real app redeployment/new worker.
     """
     _db_seed_reference_data(review_cycle_name)
+    with _db_transaction() as conn:
+        _db_seed_stage1e_methodologies(conn)
     _db_sync_relationship_review_items()
     _db_sync_portfolio_signals(_portfolio_signal_definitions(_portfolio_analysis_df()))
     _db_migrate_legacy_execution_once()
@@ -3311,6 +4768,43 @@ def _db_validate_persistence_contract() -> dict:
             (cycle["id"],),
         ).fetchone()["n"])
 
+        checks["orphan_intelligence_evidence"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM intelligence_evidence ie
+               LEFT JOIN relationship r ON r.id=ie.relationship_id
+               LEFT JOIN review_cycle rc ON rc.id=ie.review_cycle_id
+               LEFT JOIN intelligence_methodology im ON im.id=ie.methodology_id
+               WHERE r.id IS NULL OR rc.id IS NULL OR
+                     (ie.methodology_id IS NOT NULL AND im.id IS NULL)"""
+        ).fetchone()["n"])
+        checks["orphan_intelligence_calculation"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM intelligence_calculation ic
+               LEFT JOIN relationship r ON r.id=ic.relationship_id
+               LEFT JOIN review_cycle rc ON rc.id=ic.review_cycle_id
+               LEFT JOIN intelligence_methodology im ON im.id=ic.methodology_id
+               WHERE r.id IS NULL OR rc.id IS NULL OR im.id IS NULL"""
+        ).fetchone()["n"])
+        checks["orphan_wallet_assessments"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM wallet_assessment wa
+               LEFT JOIN relationship r ON r.id=wa.relationship_id
+               LEFT JOIN review_cycle rc ON rc.id=wa.review_cycle_id
+               LEFT JOIN intelligence_methodology im ON im.id=wa.methodology_id
+               WHERE r.id IS NULL OR rc.id IS NULL OR im.id IS NULL"""
+        ).fetchone()["n"])
+        checks["duplicate_current_wallet_assessments"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM (
+                   SELECT relationship_id,product,geographic_scope,time_horizon
+                   FROM wallet_assessment
+                   WHERE status='PUBLISHED'
+                   GROUP BY relationship_id,product,geographic_scope,time_horizon
+                   HAVING COUNT(*) > 1
+               ) x"""
+        ).fetchone()["n"])
+        checks["published_wallet_quality_mismatch"] = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM wallet_assessment
+               WHERE status='PUBLISHED'
+                 AND COALESCE(publication_result,'') <> 'PUBLISH'"""
+        ).fetchone()["n"])
+
         zero_checks = [
             "orphan_decisions",
             "decision_cycle_mismatch",
@@ -3324,6 +4818,11 @@ def _db_validate_persistence_contract() -> dict:
             "duplicate_portfolio_review_items",
             "in_review_without_review_item",
             "open_signal_with_review_item",
+            "orphan_intelligence_evidence",
+            "orphan_intelligence_calculation",
+            "orphan_wallet_assessments",
+            "duplicate_current_wallet_assessments",
+            "published_wallet_quality_mismatch",
         ]
         checks["healthy"] = bool(
             checks["active_review_cycle"]
@@ -3380,7 +4879,7 @@ def init_stage_1c_state():
             raise RuntimeError(f"Persistence integrity check failed: {st.session_state.persistence_health}")
     except Exception as exc:
         st.error(
-            f"Stage 1-D Final RC database initialization failed ({_db_backend_label()}). "
+            f"Stage 1-E.1J candidate database initialization failed ({_db_backend_label()}). "
             "Check the DATABASE_URL secret and PostgreSQL driver configuration."
         )
         st.code(str(exc))
