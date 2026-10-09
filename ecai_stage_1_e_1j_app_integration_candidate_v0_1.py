@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.2A.7 Persistence Integration Candidate v0.2 — Lineage Inspector
+# EC-AI Executive Review Workspace — Stage 1-E.2A.7 Persistence Integration Candidate v0.3 — Compact Lineage Summary
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -4277,7 +4277,7 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.2A.7 v0.2",
+        "intelligence_release": "Stage 1-E.2A.7 v0.3",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
     }
@@ -5663,7 +5663,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.2A.7 · Test Candidate v0.2 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.2A.7 · Test Candidate v0.3 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -5840,7 +5840,36 @@ def render_stage_1c_sidebar():
                 try:
                     lineage = _db_stage1e2_get_lineage(structural_latest.get("Assessment ID"))
                     st.caption("Read-only diagnostic view. No database values are changed.")
-                    st.json(lineage)
+
+                    evidence_count = len(lineage.get("Evidence", []))
+                    calculation_count = len(lineage.get("Calculations", []))
+                    audit_count = len(lineage.get("Audit Events", []))
+                    evidence_ids = lineage.get("Assessment", {}).get("Evidence IDs", [])
+                    calculation_ids = lineage.get("Assessment", {}).get("Calculation IDs", [])
+                    audit_events = [x.get("Event", "") for x in lineage.get("Audit Events", [])]
+
+                    expected_audits = {
+                        "WALLET_ASSESSMENT_CREATED",
+                        "WALLET_ASSESSMENT_VALIDATED",
+                    }
+                    lineage_pass = (
+                        evidence_count >= 3
+                        and calculation_count >= 2
+                        and expected_audits.issubset(set(audit_events))
+                    )
+
+                    st.success(
+                        f"Lineage {'PASS' if lineage_pass else 'CHECK'} · "
+                        f"Evidence {evidence_count} · Calculations {calculation_count} · Audit Events {audit_count}"
+                    )
+                    st.write({
+                        "Evidence IDs": evidence_ids,
+                        "Calculation IDs": calculation_ids,
+                        "Audit Events": audit_events,
+                    })
+
+                    with st.expander("Full lineage JSON", expanded=False):
+                        st.json(lineage)
                 except Exception as exc:
                     st.error(f"Lineage inspection failed: {exc}")
 
