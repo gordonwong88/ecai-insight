@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.2A.7 Persistence Integration Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.2A.7 Persistence Integration Candidate v0.2 — Lineage Inspector
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -4063,6 +4063,137 @@ def _db_stage1e2_latest_assessment(company: str) -> dict | None:
     return _db_stage1e_get_assessment(assessment_id) if assessment_id else None
 
 
+
+def _stage1e2_parse_json_list(value) -> list[str]:
+    """Safely parse the persisted evidence/calculation ID arrays."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(x) for x in value]
+    try:
+        parsed = json.loads(str(value))
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(x) for x in parsed]
+
+
+def _db_stage1e2_get_lineage(assessment_id: str) -> dict:
+    """Read-only lineage inspector for a persisted WalletAssessment.
+
+    This function performs no INSERT/UPDATE/DELETE. It is intentionally limited
+    to the assessment's frozen evidence IDs, calculation IDs and append-only
+    WalletAssessment audit events.
+    """
+    conn = _db_connect()
+    try:
+        wa = conn.execute(
+            """SELECT wa.*, r.name AS relationship_name,
+                      im.methodology_code, im.version AS methodology_version
+               FROM wallet_assessment wa
+               JOIN relationship r ON r.id=wa.relationship_id
+               JOIN intelligence_methodology im ON im.id=wa.methodology_id
+               WHERE wa.assessment_id=?""",
+            (assessment_id,),
+        ).fetchone()
+        if wa is None:
+            raise ValueError(f"Wallet assessment {assessment_id} not found.")
+
+        evidence_ids = _stage1e2_parse_json_list(wa["evidence_ids_json"])
+        calculation_ids = _stage1e2_parse_json_list(wa["calculation_ids_json"])
+
+        evidence_rows = []
+        for evidence_id in evidence_ids:
+            r = conn.execute(
+                """SELECT evidence_id,metric_code,metric_name,value_numeric,value_text,
+                          unit,currency,evidence_type,source_type,source_name,
+                          source_reference,effective_date,as_of_date,confidence,created_at
+                   FROM intelligence_evidence WHERE evidence_id=?""",
+                (evidence_id,),
+            ).fetchone()
+            if r is not None:
+                evidence_rows.append({
+                    "Evidence ID": r["evidence_id"],
+                    "Metric": r["metric_code"],
+                    "Metric Name": r["metric_name"] or "",
+                    "Numeric Value": r["value_numeric"],
+                    "Text Value": r["value_text"],
+                    "Unit": r["unit"] or "",
+                    "Currency": r["currency"] or "",
+                    "Type": r["evidence_type"],
+                    "Source Type": r["source_type"] or "",
+                    "Source": r["source_name"] or "",
+                    "Source Reference": r["source_reference"] or "",
+                    "Confidence": r["confidence"],
+                    "Created": r["created_at"],
+                })
+
+        calculation_rows = []
+        for calculation_id in calculation_ids:
+            r = conn.execute(
+                """SELECT calculation_id,metric_code,formula_code,formula_version,
+                          formula_expression,input_evidence_ids_json,output_value_numeric,
+                          unit,currency,calculated_at
+                   FROM intelligence_calculation WHERE calculation_id=?""",
+                (calculation_id,),
+            ).fetchone()
+            if r is not None:
+                calculation_rows.append({
+                    "Calculation ID": r["calculation_id"],
+                    "Metric": r["metric_code"],
+                    "Formula": r["formula_code"],
+                    "Formula Version": r["formula_version"],
+                    "Expression": r["formula_expression"],
+                    "Input Evidence IDs": _stage1e2_parse_json_list(r["input_evidence_ids_json"]),
+                    "Output": r["output_value_numeric"],
+                    "Unit": r["unit"] or "",
+                    "Currency": r["currency"] or "",
+                    "Calculated": r["calculated_at"],
+                })
+
+        audit_rows_raw = conn.execute(
+            """SELECT audit_event_id,event_type,event_timestamp,actor,payload_json
+               FROM audit_event
+               WHERE entity_type='WalletAssessment' AND entity_id=?
+               ORDER BY id""",
+            (assessment_id,),
+        ).fetchall()
+        audit_rows = []
+        for r in audit_rows_raw:
+            try:
+                payload = json.loads(r["payload_json"] or "{}")
+            except Exception:
+                payload = {"raw": r["payload_json"]}
+            audit_rows.append({
+                "Audit Event ID": r["audit_event_id"],
+                "Event": r["event_type"],
+                "Timestamp": r["event_timestamp"],
+                "Actor": r["actor"] or "",
+                "Payload": payload,
+            })
+
+        return {
+            "Assessment": {
+                "Assessment ID": wa["assessment_id"],
+                "Relationship": wa["relationship_name"],
+                "Methodology": f"{wa['methodology_code']} {wa['methodology_version']}",
+                "Status": wa["status"],
+                "Publication Result": wa["publication_result"] or "",
+                "Wallet Coverage": wa["wallet_coverage"] or "",
+                "Evidence IDs": evidence_ids,
+                "Calculation IDs": calculation_ids,
+                "Test Only": bool(wa["test_only"]),
+            },
+            "Evidence": evidence_rows,
+            "Calculations": calculation_rows,
+            "Audit Events": audit_rows,
+        }
+    finally:
+        conn.close()
+
+
+
 def _stage1e2_toyota_persistence_fixture() -> tuple[StructuralLendingAssessmentInput, list[EvidenceItem]]:
     """Controlled TEST fixture. Never represents Toyota production truth."""
     evidence = [
@@ -4146,7 +4277,7 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.2A.7 v0.1",
+        "intelligence_release": "Stage 1-E.2A.7 v0.2",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
     }
@@ -5532,7 +5663,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.2A.7 · Test Candidate v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.2A.7 · Test Candidate v0.2 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -5701,6 +5832,17 @@ def render_stage_1c_sidebar():
                 "Test Only": structural_latest.get("Test Only"),
             })
             st.info("TEST-only Structural Lending assessments cannot be published. WAL-0001 remains untouched.")
+
+            with st.expander(
+                f"Inspect {structural_latest.get('Assessment ID')} Evidence / Calculation / Audit Lineage",
+                expanded=False,
+            ):
+                try:
+                    lineage = _db_stage1e2_get_lineage(structural_latest.get("Assessment ID"))
+                    st.caption("Read-only diagnostic view. No database values are changed.")
+                    st.json(lineage)
+                except Exception as exc:
+                    st.error(f"Lineage inspection failed: {exc}")
 
         try:
             current = _db_stage1e_current_assessment("Toyota")
