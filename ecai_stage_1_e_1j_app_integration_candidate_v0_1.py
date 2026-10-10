@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.2A.7 Persistence Integration Candidate v0.3 — Compact Lineage Summary
+# EC-AI Executive Review Workspace — Stage 1-E.2B.6 Cash & Liquidity Persistence Integration Candidate v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1467,9 +1467,9 @@ ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 6
-ECAI_PERSISTENCE_RUNTIME_VERSION = 6  # E.2A.7: Structural Lending v1.0 persistence integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.1J App Integration Candidate v0.2"
+ECAI_SCHEMA_VERSION = 7
+ECAI_PERSISTENCE_RUNTIME_VERSION = 7  # E.2B.6: Cash & Liquidity Wallet v1.0 persistence integration
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.2B.6 Cash & Liquidity Persistence Integration Candidate v0.1"
 
 
 def _db_now() -> str:
@@ -2246,10 +2246,10 @@ END $$;
 # STAGE 1-E.2A.7 — ADDITIVE WALLET_ASSESSMENT SCHEMA MIGRATION
 # =============================================================================
 def _db_stage1e2_migrate_wallet_assessment_columns(conn: _DBConnection):
-    """Add Structural Lending v1.0 fields without rewriting historical rows.
+    """Add Stage 1-E.2 wallet/evidence fields without rewriting historical rows.
 
-    Stage 1-E.1J WAL-* history remains intact. New columns are nullable/defaulted,
-    so existing assessments preserve their original economic interpretation.
+    Stage 1-E.1J and Structural Lending WAL-* history remains intact. New columns
+    are nullable/defaulted, so historical economic interpretations remain frozen.
     """
     columns = [
         ("wallet_scope", "TEXT"),
@@ -2264,6 +2264,18 @@ def _db_stage1e2_migrate_wallet_assessment_columns(conn: _DBConnection):
         ("capture_comparability_status", "TEXT"),
         ("test_only", "INTEGER NOT NULL DEFAULT 0" if conn.backend == "sqlite" else "SMALLINT NOT NULL DEFAULT 0"),
         ("economic_interpretation_json", "TEXT NOT NULL DEFAULT '{}'"),
+        # Stage 1-E.2B.6 additive Cash & Liquidity interpretation fields.
+        ("liquidity_component_status", "TEXT"),
+        ("relevant_cash_pool", "REAL" if conn.backend == "sqlite" else "DOUBLE PRECISION"),
+        ("forecast_bankable_liquidity_share", "REAL" if conn.backend == "sqlite" else "DOUBLE PRECISION"),
+        ("liquidity_time_basis", "TEXT"),
+    ]
+
+    evidence_columns = [
+        ("economic_perimeter", "TEXT"),
+        ("geographic_scope", "TEXT"),
+        ("time_basis", "TEXT"),
+        ("rationale", "TEXT"),
     ]
 
     if conn.backend == "sqlite":
@@ -2271,9 +2283,15 @@ def _db_stage1e2_migrate_wallet_assessment_columns(conn: _DBConnection):
         for name, ddl in columns:
             if name not in existing:
                 conn.execute(f"ALTER TABLE wallet_assessment ADD COLUMN {name} {ddl}")
+        evidence_existing = {row[1] for row in conn.execute("PRAGMA table_info(intelligence_evidence)").fetchall()}
+        for name, ddl in evidence_columns:
+            if name not in evidence_existing:
+                conn.execute(f"ALTER TABLE intelligence_evidence ADD COLUMN {name} {ddl}")
     else:
         for name, ddl in columns:
             conn.execute(f"ALTER TABLE wallet_assessment ADD COLUMN IF NOT EXISTS {name} {ddl}")
+        for name, ddl in evidence_columns:
+            conn.execute(f"ALTER TABLE intelligence_evidence ADD COLUMN IF NOT EXISTS {name} {ddl}")
 
 
 def _db_init_schema_uncached():
@@ -2514,6 +2532,12 @@ class EvidenceItem:
     as_of_date: str | None = None
     owner: str | None = None
     review_date: str | None = None
+    # Stage 1-E.2B additive evidence metadata. Optional so all historical
+    # Stage 1-E.1J / E.2A evidence construction remains source-compatible.
+    economic_perimeter: str | None = None
+    geographic_scope: str | None = None
+    time_basis: str | None = None
+    rationale: str | None = None
 
     def __post_init__(self):
         if self.value_numeric is None and self.value_text is None:
@@ -2873,15 +2897,17 @@ def _db_stage1e_persist_evidence(
                evidence_id,relationship_id,review_cycle_id,methodology_id,
                metric_code,metric_name,value_numeric,value_text,unit,currency,
                evidence_type,source_type,source_name,source_reference,
-               effective_date,as_of_date,confidence,owner,review_date,created_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               effective_date,as_of_date,confidence,owner,review_date,
+               economic_perimeter,geographic_scope,time_basis,rationale,created_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             evidence_id, relationship_db_id, review_cycle_db_id, methodology_db_id,
             item.metric_code, item.metric_name, item.value_numeric, item.value_text,
             item.unit, item.currency, item.evidence_type.value, item.source_type,
             item.source_name, item.source_reference, item.effective_date,
             item.as_of_date, item.confidence.value, item.owner, item.review_date,
-            _db_now(),
+            item.economic_perimeter, item.geographic_scope, item.time_basis,
+            item.rationale, _db_now(),
         ),
     )
     return evidence_id
@@ -3153,6 +3179,10 @@ def _db_stage1e_get_assessment(assessment_id: str) -> dict | None:
             "Raw Wallet Gap": row["raw_wallet_gap"],
             "Positive Wallet Gap": row["positive_wallet_gap"],
             "Capture Comparability": row["capture_comparability_status"] or "",
+            "Liquidity Component Status": row["liquidity_component_status"] or "",
+            "Relevant Cash Pool": row["relevant_cash_pool"],
+            "Forecast Bankable Liquidity Share": row["forecast_bankable_liquidity_share"],
+            "Liquidity Time Basis": row["liquidity_time_basis"] or "",
             "Test Only": bool(row["test_only"]),
             "Economic Interpretation": row["economic_interpretation_json"] or "{}",
             "Created": row["created_at"],
@@ -4108,7 +4138,8 @@ def _db_stage1e2_get_lineage(assessment_id: str) -> dict:
             r = conn.execute(
                 """SELECT evidence_id,metric_code,metric_name,value_numeric,value_text,
                           unit,currency,evidence_type,source_type,source_name,
-                          source_reference,effective_date,as_of_date,confidence,created_at
+                          source_reference,effective_date,as_of_date,confidence,
+                          economic_perimeter,geographic_scope,time_basis,rationale,created_at
                    FROM intelligence_evidence WHERE evidence_id=?""",
                 (evidence_id,),
             ).fetchone()
@@ -4126,6 +4157,10 @@ def _db_stage1e2_get_lineage(assessment_id: str) -> dict:
                     "Source": r["source_name"] or "",
                     "Source Reference": r["source_reference"] or "",
                     "Confidence": r["confidence"],
+                    "Economic Perimeter": r["economic_perimeter"] or "",
+                    "Geographic Scope": r["geographic_scope"] or "",
+                    "Time Basis": r["time_basis"] or "",
+                    "Rationale": r["rationale"] or "",
                     "Created": r["created_at"],
                 })
 
@@ -4270,6 +4305,564 @@ def _db_stage1e2_run_toyota_persistence_test(*, actor: str = "Founder Test") -> 
 
 
 
+# =============================================================================
+# STAGE 1-E.2B.6 — CASH & LIQUIDITY WALLET v1.0 / PERSISTENCE INTEGRATION
+# =============================================================================
+# The deterministic engine remains narrow by design: LIQUIDITY_BALANCE_ONLY.
+# It does not estimate the full transaction-banking wallet. Payments, collections,
+# trade, fee wallet and FX-linked operating flows remain outside v1.0.
+#
+# Governing rules:
+#   - NULL is unknown; zero is verified zero.
+#   - Addressable liquidity and internal capture are separate concepts.
+#   - Deposit penetration is calculated only when scope/currency/time are comparable.
+#   - Wallet gap is evidence, not a management recommendation.
+#   - TEST-only assessments can be VALIDATED but never production-published.
+
+RELEVANT_CASH_POOL = "RELEVANT_CASH_POOL"
+FORECAST_BANKABLE_LIQUIDITY_SHARE = "FORECAST_BANKABLE_LIQUIDITY_SHARE"
+OBSERVED_BANKABLE_LIQUIDITY_SHARE = "OBSERVED_BANKABLE_LIQUIDITY_SHARE"
+OUR_AVERAGE_DEPOSITS = "OUR_AVERAGE_DEPOSITS"
+
+ADDRESSABLE_LIQUIDITY_NOTIONAL = "ADDRESSABLE_LIQUIDITY_NOTIONAL"
+DEPOSIT_PENETRATION = "DEPOSIT_PENETRATION"
+RAW_DEPOSIT_GAP = "RAW_DEPOSIT_GAP"
+POSITIVE_DEPOSIT_GAP = "POSITIVE_DEPOSIT_GAP"
+
+
+class CashLiquidityComponentStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+    NOT_ASSESSED = "NOT_ASSESSED"
+    INVALID = "INVALID"
+
+
+CASH_LIQUIDITY_CRITICAL_METRICS = (
+    RELEVANT_CASH_POOL,
+    FORECAST_BANKABLE_LIQUIDITY_SHARE,
+)
+
+
+def _stage1e2b_norm(value: str | None) -> str:
+    return (value or "").strip().casefold()
+
+
+def _stage1e2b_time_basis_comparable(
+    liquidity_basis: str | None,
+    capture_basis: str | None,
+) -> bool:
+    if not liquidity_basis or not capture_basis:
+        return False
+    compatible = {
+        ("average", "average"),
+        ("normalized_average", "average"),
+        ("forecast_average", "forecast_average"),
+        ("period_end", "period_end"),
+    }
+    return (
+        _stage1e2b_norm(liquidity_basis),
+        _stage1e2b_norm(capture_basis),
+    ) in compatible
+
+
+def _stage1e2b_evaluate_cash_liquidity(
+    evidence: list[EvidenceItem],
+    *,
+    test_only: bool = False,
+) -> tuple[dict, list[CalculationRecord]]:
+    """Deterministic Cash & Liquidity Wallet v1.0; no persistence side effects."""
+    ev = _stage1e_evidence_map(evidence)
+    calculations: list[CalculationRecord] = []
+    warnings: list[str] = []
+    blockers: list[str] = []
+
+    cash_item = ev.get(RELEVANT_CASH_POOL)
+    share_item = ev.get(FORECAST_BANKABLE_LIQUIDITY_SHARE)
+    capture_item = ev.get(OUR_AVERAGE_DEPOSITS)
+
+    missing = [m for m in CASH_LIQUIDITY_CRITICAL_METRICS if m not in ev]
+    if missing:
+        blockers.append("MISSING_CRITICAL_EVIDENCE: " + ", ".join(missing))
+
+    for item in (cash_item, share_item):
+        if item is not None and (not item.source_type or not item.source_name):
+            blockers.append(f"MISSING_CRITICAL_PROVENANCE: {item.metric_code}")
+
+    cash = _stage1e_numeric(ev, RELEVANT_CASH_POOL)
+    bankable_share = _stage1e_numeric(ev, FORECAST_BANKABLE_LIQUIDITY_SHARE)
+
+    if cash_item is not None and cash is None:
+        blockers.append("RELEVANT_CASH_POOL_NON_NUMERIC")
+    if share_item is not None and bankable_share is None:
+        blockers.append("FORECAST_BANKABLE_LIQUIDITY_SHARE_NON_NUMERIC")
+    if cash is not None and cash < 0:
+        blockers.append("RELEVANT_CASH_POOL_NEGATIVE")
+    if bankable_share is not None and not 0 <= bankable_share <= 1:
+        blockers.append("FORECAST_BANKABLE_LIQUIDITY_SHARE_OUT_OF_RANGE")
+
+    if cash_item is not None and share_item is not None:
+        for code, left, right in (
+            ("SCOPE_MISMATCH", cash_item.economic_perimeter, share_item.economic_perimeter),
+            ("GEOGRAPHIC_SCOPE_MISMATCH", cash_item.geographic_scope, share_item.geographic_scope),
+            ("TIME_BASIS_MISMATCH", cash_item.time_basis, share_item.time_basis),
+        ):
+            if left and right and _stage1e2b_norm(left) != _stage1e2b_norm(right):
+                blockers.append(code)
+
+    confidence, confidence_explanation = _stage1e_derive_confidence(
+        evidence,
+        critical_metrics=CASH_LIQUIDITY_CRITICAL_METRICS,
+    )
+
+    liquidity_status = (
+        CashLiquidityComponentStatus.INVALID.value
+        if blockers
+        else CashLiquidityComponentStatus.COMPLETE.value
+    )
+    addressable = None
+    if not blockers and cash is not None and bankable_share is not None:
+        addressable = float(cash) * float(bankable_share)
+        calculations.append(CalculationRecord(
+            metric_code=ADDRESSABLE_LIQUIDITY_NOTIONAL,
+            formula_code="CASH_LIQUIDITY_001",
+            formula_version="1.0",
+            formula_expression="RELEVANT_CASH_POOL * FORECAST_BANKABLE_LIQUIDITY_SHARE",
+            input_metric_codes=(RELEVANT_CASH_POOL, FORECAST_BANKABLE_LIQUIDITY_SHARE),
+            output_value_numeric=addressable,
+            unit="MONEY",
+            currency=cash_item.currency if cash_item else None,
+        ))
+
+    capture_status = CashLiquidityComponentStatus.NOT_ASSESSED.value
+    capture_comparability = CaptureComparabilityStatus.NOT_ASSESSED.value
+    capture_reason = "Internal deposit capture evidence is not available."
+    capture = _stage1e_numeric(ev, OUR_AVERAGE_DEPOSITS)
+    penetration = None
+    raw_gap = None
+    positive_gap = None
+
+    if capture_item is not None:
+        if capture is None or capture < 0:
+            capture_status = CashLiquidityComponentStatus.INVALID.value
+            warnings.append("CAPTURE_EVIDENCE_INVALID")
+        else:
+            capture_status = CashLiquidityComponentStatus.COMPLETE.value
+            missing_meta = []
+            if not capture_item.source_type or not capture_item.source_name:
+                missing_meta.append("provenance")
+            if not capture_item.currency:
+                missing_meta.append("currency")
+            if not capture_item.economic_perimeter:
+                missing_meta.append("economic perimeter")
+            if not capture_item.geographic_scope:
+                missing_meta.append("geographic scope")
+            if not capture_item.time_basis:
+                missing_meta.append("time basis")
+
+            if missing_meta:
+                capture_comparability = CaptureComparabilityStatus.NOT_COMPARABLE.value
+                capture_reason = "Capture evidence missing " + ", ".join(missing_meta) + "."
+            elif cash_item and cash_item.currency and _stage1e2b_norm(cash_item.currency) != _stage1e2b_norm(capture_item.currency):
+                capture_comparability = CaptureComparabilityStatus.NOT_COMPARABLE.value
+                capture_reason = f"Currency mismatch: wallet {cash_item.currency} vs capture {capture_item.currency}."
+            elif cash_item and cash_item.economic_perimeter and _stage1e2b_norm(cash_item.economic_perimeter) != _stage1e2b_norm(capture_item.economic_perimeter):
+                capture_comparability = CaptureComparabilityStatus.NOT_COMPARABLE.value
+                capture_reason = "Economic perimeter mismatch between wallet and internal deposits."
+            elif cash_item and cash_item.geographic_scope and _stage1e2b_norm(cash_item.geographic_scope) != _stage1e2b_norm(capture_item.geographic_scope):
+                capture_comparability = CaptureComparabilityStatus.NOT_COMPARABLE.value
+                capture_reason = "Geographic scope mismatch between wallet and internal deposits."
+            elif cash_item and not _stage1e2b_time_basis_comparable(cash_item.time_basis, capture_item.time_basis):
+                capture_comparability = CaptureComparabilityStatus.NOT_COMPARABLE.value
+                capture_reason = f"Time basis mismatch: wallet {cash_item.time_basis or 'N/A'} vs capture {capture_item.time_basis or 'N/A'}."
+            else:
+                capture_comparability = CaptureComparabilityStatus.COMPARABLE.value
+                capture_reason = "Internal deposits are economically comparable to the wallet denominator."
+
+            if capture_comparability != CaptureComparabilityStatus.COMPARABLE.value:
+                warnings.append("CAPTURE_NOT_COMPARABLE")
+
+    if (
+        addressable is not None
+        and capture is not None
+        and capture >= 0
+        and capture_comparability == CaptureComparabilityStatus.COMPARABLE.value
+    ):
+        if addressable > 0:
+            penetration = float(capture) / float(addressable)
+            calculations.append(CalculationRecord(
+                metric_code=DEPOSIT_PENETRATION,
+                formula_code="CASH_CAPTURE_001",
+                formula_version="1.0",
+                formula_expression="OUR_AVERAGE_DEPOSITS / ADDRESSABLE_LIQUIDITY_NOTIONAL",
+                input_metric_codes=(OUR_AVERAGE_DEPOSITS, ADDRESSABLE_LIQUIDITY_NOTIONAL),
+                output_value_numeric=penetration,
+                unit="RATIO",
+                currency=None,
+            ))
+        raw_gap = float(addressable) - float(capture)
+        positive_gap = max(0.0, raw_gap)
+        calculations.append(CalculationRecord(
+            metric_code=RAW_DEPOSIT_GAP,
+            formula_code="CASH_GAP_001",
+            formula_version="1.0",
+            formula_expression="ADDRESSABLE_LIQUIDITY_NOTIONAL - OUR_AVERAGE_DEPOSITS",
+            input_metric_codes=(OUR_AVERAGE_DEPOSITS,),
+            output_value_numeric=raw_gap,
+            unit="MONEY",
+            currency=cash_item.currency if cash_item else None,
+        ))
+        calculations.append(CalculationRecord(
+            metric_code=POSITIVE_DEPOSIT_GAP,
+            formula_code="CASH_GAP_002",
+            formula_version="1.0",
+            formula_expression="MAX(0, RAW_DEPOSIT_GAP)",
+            input_metric_codes=(OUR_AVERAGE_DEPOSITS,),
+            output_value_numeric=positive_gap,
+            unit="MONEY",
+            currency=cash_item.currency if cash_item else None,
+        ))
+        if capture > addressable:
+            warnings.append("CAPTURE_EXCEEDS_ESTIMATED_WALLET")
+
+    if confidence == ConfidenceLevel.LOW:
+        warnings.append("LOW_CONFIDENCE_CRITICAL_ASSUMPTION")
+    if cash_item and _stage1e2b_norm(cash_item.time_basis) == "period_end":
+        warnings.append("POINT_IN_TIME_ONLY")
+    if test_only:
+        warnings.append("TEST_ONLY_NOT_FOR_PRODUCTION")
+
+    warnings = sorted(set(warnings))
+    blockers = sorted(set(blockers))
+    hold_codes = {
+        "LOW_CONFIDENCE_CRITICAL_ASSUMPTION",
+        "POINT_IN_TIME_ONLY",
+        "CAPTURE_EXCEEDS_ESTIMATED_WALLET",
+        "TEST_ONLY_NOT_FOR_PRODUCTION",
+    }
+
+    if blockers:
+        publication_result = PublicationResult.REJECT.value
+    elif any(code in hold_codes for code in warnings):
+        publication_result = PublicationResult.HOLD.value
+    else:
+        publication_result = PublicationResult.PUBLISH.value
+
+    snapshot = {
+        "methodology_code": "CASH_LIQUIDITY_WALLET",
+        "methodology_version": "1.0",
+        "methodology_scope": "LIQUIDITY_BALANCE_ONLY",
+        "wallet_coverage": "LIQUIDITY_BALANCE_ONLY" if addressable is not None else "NOT_ASSESSED",
+        "liquidity_component_status": liquidity_status,
+        "capture_component_status": capture_status,
+        "relevant_cash_pool": cash,
+        "forecast_bankable_liquidity_share": bankable_share,
+        "addressable_liquidity_notional": addressable,
+        "comparable_capture_notional": capture if capture_comparability == CaptureComparabilityStatus.COMPARABLE.value else None,
+        "deposit_penetration": penetration,
+        "raw_deposit_gap": raw_gap,
+        "positive_deposit_gap": positive_gap,
+        "capture_comparability_status": capture_comparability,
+        "capture_comparability_reason": capture_reason,
+        "currency": cash_item.currency if cash_item else None,
+        "economic_perimeter": cash_item.economic_perimeter if cash_item else None,
+        "geographic_scope": cash_item.geographic_scope if cash_item else None,
+        "liquidity_time_basis": cash_item.time_basis if cash_item else None,
+        "effective_date": cash_item.effective_date if cash_item else None,
+        "confidence": confidence.value if confidence else None,
+        "confidence_explanation": confidence_explanation,
+        "warnings": warnings,
+        "blocking_issues": blockers,
+        "publication_result": publication_result,
+        "production_publication_allowed": publication_result == PublicationResult.PUBLISH.value and not test_only,
+        "test_only": bool(test_only),
+    }
+    return snapshot, calculations
+
+
+def _db_seed_stage1e2b_methodology(conn: _DBConnection):
+    """Idempotently register Cash & Liquidity Wallet v1.0."""
+    existing = conn.execute(
+        """SELECT * FROM intelligence_methodology
+           WHERE methodology_code=? AND version=?""",
+        ("CASH_LIQUIDITY_WALLET", "1.0"),
+    ).fetchone()
+    if existing is not None:
+        return existing
+
+    methodology_id = _db_next_id(
+        conn, "intelligence_methodology", "methodology_id", "MTH"
+    )
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO intelligence_methodology(
+               methodology_id,methodology_code,methodology_name,version,domain,product,
+               description,required_inputs_json,optional_inputs_json,outputs_json,
+               critical_inputs_json,effective_from,status,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            methodology_id,
+            "CASH_LIQUIDITY_WALLET",
+            "Cash & Liquidity Wallet v1.0 — Liquidity Balance Scope",
+            "1.0",
+            "WALLET",
+            "CASH_LIQUIDITY",
+            "Bank-addressable liquidity balances derived from a governed relevant cash pool and forecast bankable liquidity share; transaction-banking fee wallet remains outside scope.",
+            _stage1e_json(list(CASH_LIQUIDITY_CRITICAL_METRICS)),
+            _stage1e_json([OBSERVED_BANKABLE_LIQUIDITY_SHARE, OUR_AVERAGE_DEPOSITS]),
+            _stage1e_json([
+                ADDRESSABLE_LIQUIDITY_NOTIONAL,
+                DEPOSIT_PENETRATION,
+                RAW_DEPOSIT_GAP,
+                POSITIVE_DEPOSIT_GAP,
+            ]),
+            _stage1e_json(list(CASH_LIQUIDITY_CRITICAL_METRICS)),
+            now,
+            "ACTIVE",
+            now,
+            now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM intelligence_methodology WHERE methodology_id=?",
+        (methodology_id,),
+    ).fetchone()
+
+
+def _db_stage1e2b_create_cash_assessment(
+    company: str,
+    evidence: list[EvidenceItem],
+    *,
+    effective_date: str | None = None,
+    geographic_scope: str = "Global",
+    time_horizon: str = "1Y",
+    test_only: bool = False,
+    actor: str = "EC-AI",
+) -> dict:
+    """Persist a frozen Cash & Liquidity Wallet v1.0 assessment; never auto-publish."""
+    snapshot, calculations = _stage1e2b_evaluate_cash_liquidity(
+        evidence,
+        test_only=test_only,
+    )
+    evidence_map = _stage1e_evidence_map(evidence)
+    missing = [m for m in CASH_LIQUIDITY_CRITICAL_METRICS if m not in evidence_map]
+    if missing:
+        raise ValueError(
+            "Cash & Liquidity persistence refused — missing critical evidence: "
+            + ", ".join(missing)
+        )
+
+    with _db_transaction() as conn:
+        methodology = _db_seed_stage1e2b_methodology(conn)
+        cycle = _db_active_review_cycle(conn)
+        rel = _db_relationship_row(conn, company)
+
+        evidence_ids = []
+        evidence_by_metric = {}
+        for item in evidence:
+            evidence_id = _db_stage1e_persist_evidence(
+                conn,
+                relationship_db_id=rel["id"],
+                review_cycle_db_id=cycle["id"],
+                methodology_db_id=methodology["id"],
+                item=item,
+            )
+            evidence_ids.append(evidence_id)
+            evidence_by_metric[item.metric_code] = evidence_id
+
+        calculation_ids = []
+        for calc in calculations:
+            input_ids = [
+                evidence_by_metric[m]
+                for m in calc.input_metric_codes
+                if m in evidence_by_metric
+            ]
+            calc_id = _db_stage1e_persist_calculation(
+                conn,
+                relationship_db_id=rel["id"],
+                review_cycle_db_id=cycle["id"],
+                methodology_db_id=methodology["id"],
+                record=calc,
+                input_evidence_ids=input_ids,
+            )
+            calculation_ids.append(calc_id)
+
+        frozen_snapshot = dict(snapshot)
+        frozen_snapshot["evidence_ids"] = list(evidence_ids)
+        frozen_snapshot["calculation_ids"] = list(calculation_ids)
+        frozen_snapshot["effective_date"] = effective_date or snapshot.get("effective_date")
+        frozen_snapshot["geographic_scope"] = geographic_scope or snapshot.get("geographic_scope")
+        frozen_snapshot["time_horizon"] = time_horizon
+
+        assessment_id = _db_next_id(
+            conn, "wallet_assessment", "assessment_id", "WAL"
+        )
+        now = _db_now()
+        status = (
+            AssessmentStatus.DRAFT.value
+            if snapshot["publication_result"] == PublicationResult.REJECT.value
+            else AssessmentStatus.VALIDATED.value
+        )
+        validated_at = now if status == AssessmentStatus.VALIDATED.value else None
+        notional_completeness = (
+            CompletenessStatus.COMPLETE.value
+            if snapshot["liquidity_component_status"] == CashLiquidityComponentStatus.COMPLETE.value
+            else CompletenessStatus.PARTIAL.value
+        )
+        quality_gate = {
+            "methodology": "CASH_LIQUIDITY_WALLET 1.0",
+            "methodology_scope": snapshot["methodology_scope"],
+            "wallet_coverage": snapshot["wallet_coverage"],
+            "warnings": snapshot["warnings"],
+            "blocking_issues": snapshot["blocking_issues"],
+            "publication_result": snapshot["publication_result"],
+            "production_publication_allowed": snapshot["production_publication_allowed"],
+            "test_only": bool(test_only),
+        }
+
+        conn.execute(
+            """INSERT INTO wallet_assessment(
+                   assessment_id,relationship_id,review_cycle_id,methodology_id,
+                   product,effective_date,currency,geographic_scope,time_horizon,
+                   evidence_ids_json,calculation_ids_json,
+                   addressable_notional,captured_notional,notional_penetration,
+                   estimated_wallet_revenue,actual_bank_revenue,revenue_share_of_wallet,
+                   revenue_wallet_gap,notional_completeness,revenue_wallet_completeness,
+                   confidence,confidence_explanation,status,publication_result,
+                   quality_gate_json,wallet_scope,wallet_coverage,
+                   capex_component_status,refinancing_component_status,capture_component_status,
+                   bank_capex_notional,bank_refinancing_notional,raw_wallet_gap,positive_wallet_gap,
+                   capture_comparability_status,test_only,economic_interpretation_json,
+                   liquidity_component_status,relevant_cash_pool,
+                   forecast_bankable_liquidity_share,liquidity_time_basis,
+                   created_at,validated_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                assessment_id, rel["id"], cycle["id"], methodology["id"],
+                "CASH_LIQUIDITY", effective_date or snapshot.get("effective_date"),
+                snapshot.get("currency"), geographic_scope, time_horizon,
+                _stage1e_json(evidence_ids), _stage1e_json(calculation_ids),
+                snapshot["addressable_liquidity_notional"],
+                snapshot["comparable_capture_notional"], snapshot["deposit_penetration"],
+                None, None, None, None,
+                notional_completeness, CompletenessStatus.PARTIAL.value,
+                snapshot["confidence"], snapshot["confidence_explanation"],
+                status, snapshot["publication_result"], _stage1e_json(quality_gate),
+                snapshot["methodology_scope"], snapshot["wallet_coverage"],
+                None, None, snapshot["capture_component_status"],
+                None, None, snapshot["raw_deposit_gap"], snapshot["positive_deposit_gap"],
+                snapshot["capture_comparability_status"], 1 if test_only else 0,
+                _stage1e_json(frozen_snapshot), snapshot["liquidity_component_status"],
+                snapshot["relevant_cash_pool"], snapshot["forecast_bankable_liquidity_share"],
+                snapshot["liquidity_time_basis"], now, validated_at,
+            ),
+        )
+
+        _db_append_audit(
+            conn,
+            entity_type="WalletAssessment",
+            entity_id=assessment_id,
+            relationship_id=rel["id"],
+            event_type="CASH_LIQUIDITY_ASSESSMENT_CREATED",
+            actor=actor,
+            payload={
+                "methodology": "CASH_LIQUIDITY_WALLET 1.0",
+                "methodology_scope": snapshot["methodology_scope"],
+                "addressable_notional": snapshot["addressable_liquidity_notional"],
+                "currency": snapshot.get("currency"),
+                "liquidity_time_basis": snapshot.get("liquidity_time_basis"),
+                "publication_result": snapshot["publication_result"],
+                "test_only": bool(test_only),
+            },
+        )
+        if status == AssessmentStatus.VALIDATED.value:
+            _db_append_audit(
+                conn,
+                entity_type="WalletAssessment",
+                entity_id=assessment_id,
+                relationship_id=rel["id"],
+                event_type="CASH_LIQUIDITY_ASSESSMENT_VALIDATED",
+                actor=actor,
+                payload={
+                    "warnings": snapshot["warnings"],
+                    "publication_result": snapshot["publication_result"],
+                    "test_only": bool(test_only),
+                },
+            )
+
+    return _db_stage1e_get_assessment(assessment_id)
+
+
+def _db_stage1e2b_latest_assessment(company: str) -> dict | None:
+    conn = _db_connect()
+    try:
+        rel = _db_relationship_row(conn, company)
+        row = conn.execute(
+            """SELECT wa.assessment_id
+               FROM wallet_assessment wa
+               JOIN intelligence_methodology im ON im.id=wa.methodology_id
+               WHERE wa.relationship_id=? AND im.methodology_code='CASH_LIQUIDITY_WALLET'
+                 AND im.version='1.0'
+               ORDER BY wa.id DESC LIMIT 1""",
+            (rel["id"],),
+        ).fetchone()
+        assessment_id = row["assessment_id"] if row is not None else None
+    finally:
+        conn.close()
+    return _db_stage1e_get_assessment(assessment_id) if assessment_id else None
+
+
+def _stage1e2b_toyota_persistence_fixture() -> list[EvidenceItem]:
+    """Controlled TEST fixture only. Values below are not Toyota production facts."""
+    return [
+        EvidenceItem(
+            metric_code=RELEVANT_CASH_POOL,
+            metric_name="Relevant Cash Pool — Controlled Test",
+            value_numeric=4_000_000_000_000,
+            currency="JPY",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="SCENARIO_ASSUMPTION",
+            source_name="JPY 4.0tn controlled TEST cash-pool scenario — not Toyota disclosure",
+            source_reference="Stage 1-E.2B.6 controlled persistence test",
+            effective_date="FY2027",
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="TOYOTA_TEST_PERIMETER",
+            geographic_scope="Global",
+            time_basis="AVERAGE",
+            rationale="Controlled persistence test input only; not a production estimate of Toyota liquidity.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_BANKABLE_LIQUIDITY_SHARE,
+            metric_name="Forecast Bankable Liquidity Share — Controlled Test",
+            value_numeric=0.60,
+            unit="PERCENT",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="SCENARIO_ASSUMPTION",
+            source_name="60% controlled TEST bankable-liquidity scenario — not Toyota guidance",
+            source_reference="Stage 1-E.2B.6 controlled persistence test",
+            effective_date="FY2027",
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="TOYOTA_TEST_PERIMETER",
+            geographic_scope="Global",
+            time_basis="AVERAGE",
+            rationale="Controlled test of deterministic Cash & Liquidity Wallet v1.0 mechanics.",
+        ),
+    ]
+
+
+def _db_stage1e2b_run_toyota_persistence_test(*, actor: str = "Founder Test") -> dict:
+    return _db_stage1e2b_create_cash_assessment(
+        "Toyota",
+        _stage1e2b_toyota_persistence_fixture(),
+        effective_date="FY2027",
+        geographic_scope="Global",
+        time_horizon="1Y",
+        test_only=True,
+        actor=actor,
+    )
+
+# END STAGE 1-E.2B.6 — CASH & LIQUIDITY WALLET v1.0 / PERSISTENCE INTEGRATION
+
+
 def _db_write_system_metadata():
     """Record the deployed persistence contract without touching domain history."""
     items = {
@@ -4277,9 +4870,10 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.2A.7 v0.3",
+        "intelligence_release": "Stage 1-E.2B.6 v0.1",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
+        "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
     }
     with _db_transaction() as conn:
         now = _db_now()
@@ -5663,7 +6257,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.2A.7 · Test Candidate v0.3 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.2B.6 · Test Candidate v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -5849,8 +6443,8 @@ def render_stage_1c_sidebar():
                     audit_events = [x.get("Event", "") for x in lineage.get("Audit Events", [])]
 
                     expected_audits = {
-                        "WALLET_ASSESSMENT_CREATED",
-                        "WALLET_ASSESSMENT_VALIDATED",
+                        "STRUCTURAL_LENDING_ASSESSMENT_CREATED",
+                        "STRUCTURAL_LENDING_ASSESSMENT_VALIDATED",
                     }
                     lineage_pass = (
                         evidence_count >= 3
@@ -5872,6 +6466,96 @@ def render_stage_1c_sidebar():
                         st.json(lineage)
                 except Exception as exc:
                     st.error(f"Lineage inspection failed: {exc}")
+
+        st.markdown("---")
+        st.markdown("**Stage 1-E.2B · Cash & Liquidity Wallet v1.0**")
+        st.caption("Controlled persistence test · LIQUIDITY_BALANCE_ONLY · no Toyota production cash assumptions")
+
+        if st.button(
+            "Create Toyota Cash & Liquidity v1.0 Test",
+            key="stage1e2b_create_toyota_cash_liquidity_test",
+            use_container_width=True,
+        ):
+            try:
+                result = _db_stage1e2b_run_toyota_persistence_test(actor="Founder Test")
+                st.session_state["stage1e2b_last_test_assessment_id"] = result["Assessment ID"]
+                st.success(
+                    f"Created {result['Assessment ID']} · {result['Status']} · "
+                    f"{result['Publication Result']}"
+                )
+                st.write({
+                    "Methodology": result.get("Methodology"),
+                    "Scope": result.get("Wallet Scope"),
+                    "Relevant Cash Pool": result.get("Relevant Cash Pool"),
+                    "Forecast Bankable Liquidity Share": result.get("Forecast Bankable Liquidity Share"),
+                    "Addressable Liquidity": result.get("Addressable Notional"),
+                    "Currency": result.get("Currency"),
+                    "Liquidity Status": result.get("Liquidity Component Status"),
+                    "Capture Status": result.get("Capture Component Status"),
+                    "Confidence": result.get("Confidence"),
+                    "Test Only": result.get("Test Only"),
+                })
+            except Exception as exc:
+                st.error(f"Cash & Liquidity persistence test failed: {exc}")
+
+        try:
+            cash_latest = _db_stage1e2b_latest_assessment("Toyota")
+        except Exception as exc:
+            cash_latest = None
+            st.error(f"Cash & Liquidity assessment reload failed: {exc}")
+
+        if cash_latest:
+            st.caption(f"Latest Cash & Liquidity assessment: {cash_latest.get('Assessment ID')}")
+            st.write({
+                "Status": cash_latest.get("Status"),
+                "Publication Result": cash_latest.get("Publication Result"),
+                "Scope": cash_latest.get("Wallet Scope"),
+                "Relevant Cash Pool": cash_latest.get("Relevant Cash Pool"),
+                "Forecast Bankable Liquidity Share": cash_latest.get("Forecast Bankable Liquidity Share"),
+                "Addressable Liquidity": cash_latest.get("Addressable Notional"),
+                "Currency": cash_latest.get("Currency"),
+                "Liquidity Time Basis": cash_latest.get("Liquidity Time Basis"),
+                "Capture Status": cash_latest.get("Capture Component Status"),
+                "Confidence": cash_latest.get("Confidence"),
+                "Test Only": cash_latest.get("Test Only"),
+            })
+            st.info("TEST-only Cash & Liquidity assessments cannot be published and do not supersede Lending assessments.")
+
+            with st.expander(
+                f"Inspect {cash_latest.get('Assessment ID')} Cash Evidence / Calculation / Audit Lineage",
+                expanded=False,
+            ):
+                try:
+                    lineage = _db_stage1e2_get_lineage(cash_latest.get("Assessment ID"))
+                    st.caption("Read-only diagnostic view. No database values are changed.")
+                    evidence_count = len(lineage.get("Evidence", []))
+                    calculation_count = len(lineage.get("Calculations", []))
+                    audit_count = len(lineage.get("Audit Events", []))
+                    evidence_ids = lineage.get("Assessment", {}).get("Evidence IDs", [])
+                    calculation_ids = lineage.get("Assessment", {}).get("Calculation IDs", [])
+                    audit_events = [x.get("Event", "") for x in lineage.get("Audit Events", [])]
+                    expected_audits = {
+                        "CASH_LIQUIDITY_ASSESSMENT_CREATED",
+                        "CASH_LIQUIDITY_ASSESSMENT_VALIDATED",
+                    }
+                    lineage_pass = (
+                        evidence_count >= 2
+                        and calculation_count >= 1
+                        and expected_audits.issubset(set(audit_events))
+                    )
+                    st.success(
+                        f"Lineage {'PASS' if lineage_pass else 'CHECK'} · "
+                        f"Evidence {evidence_count} · Calculations {calculation_count} · Audit Events {audit_count}"
+                    )
+                    st.write({
+                        "Evidence IDs": evidence_ids,
+                        "Calculation IDs": calculation_ids,
+                        "Audit Events": audit_events,
+                    })
+                    with st.expander("Full Cash & Liquidity lineage JSON", expanded=False):
+                        st.json(lineage)
+                except Exception as exc:
+                    st.error(f"Cash & Liquidity lineage inspection failed: {exc}")
 
         try:
             current = _db_stage1e_current_assessment("Toyota")
