@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.2B.6 Cash & Liquidity Persistence Integration Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.3.7 OpportunitySignal Persistence & App Integration Candidate v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -18,6 +18,7 @@ import re
 import time
 import os
 import json
+import hashlib
 import sqlite3
 try:
     import psycopg2
@@ -27,7 +28,7 @@ except Exception:
     DictCursor = None
 from contextlib import contextmanager
 from datetime import date, datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 
@@ -1467,9 +1468,9 @@ ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 7
-ECAI_PERSISTENCE_RUNTIME_VERSION = 7  # E.2B.6: Cash & Liquidity Wallet v1.0 persistence integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.2B.6 Cash & Liquidity Persistence Integration Candidate v0.1"
+ECAI_SCHEMA_VERSION = 8
+ECAI_PERSISTENCE_RUNTIME_VERSION = 8  # E.3.7: OpportunitySignal persistence integration
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.3.7 OpportunitySignal Persistence & App Integration Candidate v0.1"
 
 
 def _db_now() -> str:
@@ -2315,6 +2316,7 @@ def _db_init_schema_uncached():
                 conn.execute("SELECT pg_advisory_xact_lock(?)", (831042026,))
             conn.executescript(schema)
             _db_stage1e2_migrate_wallet_assessment_columns(conn)
+            _db_stage1e3_migrate_schema(conn)
             if conn.backend == "sqlite":
                 conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
             conn.commit()
@@ -4863,6 +4865,1176 @@ def _db_stage1e2b_run_toyota_persistence_test(*, actor: str = "Founder Test") ->
 # END STAGE 1-E.2B.6 — CASH & LIQUIDITY WALLET v1.0 / PERSISTENCE INTEGRATION
 
 
+# =============================================================================
+# STAGE 1-E.3.6 — EMBEDDED DETERMINISTIC OPPORTUNITY SIGNAL ENGINE v1.0
+# =============================================================================
+class E3SignalType(str, Enum):
+    LENDING_WALLET_GAP = "LENDING_WALLET_GAP"
+    LIQUIDITY_WALLET_GAP = "LIQUIDITY_WALLET_GAP"
+
+
+class E3SignalStrength(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class E3SignalStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    MONITORING = "MONITORING"
+    SUPPRESSED = "SUPPRESSED"
+    SUPERSEDED = "SUPERSEDED"
+    CLOSED = "CLOSED"
+
+
+class E3LifecycleAction(str, Enum):
+    CREATE = "CREATE"
+    KEEP_EXISTING = "KEEP_EXISTING"
+    SUPERSEDE_AND_CREATE = "SUPERSEDE_AND_CREATE"
+    CLOSE_EXISTING = "CLOSE_EXISTING"
+    MONITOR_EXISTING = "MONITOR_EXISTING"
+    NO_ACTION = "NO_ACTION"
+
+
+class E3ConfidenceLevel(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class E3ComparabilityStatus(str, Enum):
+    COMPARABLE = "COMPARABLE"
+    NOT_COMPARABLE = "NOT_COMPARABLE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+SUPPORTED_METHODOLOGIES = {
+    ("STRUCTURAL_LENDING", "1.0"): E3SignalType.LENDING_WALLET_GAP,
+    ("CASH_LIQUIDITY_WALLET", "1.0"): E3SignalType.LIQUIDITY_WALLET_GAP,
+}
+
+LENDING_RULE_CODE = "LENDING_WALLET_GAP_001"
+LIQUIDITY_RULE_CODE = "LIQUIDITY_WALLET_GAP_001"
+RULE_VERSION = "1.0"
+
+CASH_SIGNAL_ELIGIBLE_TIME_BASES = {
+    "AVERAGE",
+    "NORMALIZED_AVERAGE",
+    "FORECAST_AVERAGE",
+}
+
+
+@dataclass(frozen=True)
+class E3WalletAssessmentInput:
+    assessment_id: str
+    relationship_id: str
+    methodology_code: str
+    methodology_version: str
+    assessment_status: str
+    publication_result: str
+    test_only: bool
+    is_current: bool
+    confidence: E3ConfidenceLevel
+    evidence_ids: tuple[str, ...]
+    calculation_ids: tuple[str, ...]
+    blocking_quality_issues: tuple[str, ...] = ()
+    currency: Optional[str] = None
+    addressable_wallet: Optional[float] = None
+    our_capture: Optional[float] = None
+    positive_gap: Optional[float] = None
+    penetration: Optional[float] = None
+    wallet_component_complete: bool = False
+    capture_component_complete: bool = False
+    capture_comparability_status: E3ComparabilityStatus = E3ComparabilityStatus.NOT_ASSESSED
+    wallet_coverage: Optional[str] = None
+    liquidity_time_basis: Optional[str] = None
+    capex_addressable_notional: Optional[float] = None
+    refinancing_addressable_notional: Optional[float] = None
+    source_assessment_as_of: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class E3ThresholdConfig:
+    config_version: str
+    signal_type: E3SignalType
+    base_currency: str
+    minimum_gap_base_currency: float
+    maximum_penetration: float
+    high_gap_base_currency: Optional[float] = None
+    very_low_penetration: Optional[float] = None
+
+    def validate(self) -> tuple[bool, tuple[str, ...]]:
+        issues: list[str] = []
+        if not self.config_version:
+            issues.append("THRESHOLD_CONFIG_VERSION_MISSING")
+        if not self.base_currency:
+            issues.append("THRESHOLD_BASE_CURRENCY_MISSING")
+        if self.minimum_gap_base_currency < 0:
+            issues.append("THRESHOLD_MINIMUM_GAP_INVALID")
+        if not 0 <= self.maximum_penetration <= 1:
+            issues.append("THRESHOLD_MAXIMUM_PENETRATION_INVALID")
+        if self.high_gap_base_currency is not None and self.high_gap_base_currency < 0:
+            issues.append("THRESHOLD_HIGH_GAP_INVALID")
+        if self.very_low_penetration is not None and not 0 <= self.very_low_penetration <= 1:
+            issues.append("THRESHOLD_VERY_LOW_PENETRATION_INVALID")
+        return (not issues, tuple(issues))
+
+
+@dataclass(frozen=True)
+class E3GovernedFXBasis:
+    base_currency: str
+    fx_method: str
+    fx_effective_date: str
+    rates_to_base: dict[str, float]
+
+    def rate_for(self, source_currency: str) -> Optional[float]:
+        if source_currency.casefold() == self.base_currency.casefold():
+            return 1.0
+        for ccy, rate in self.rates_to_base.items():
+            if ccy.casefold() == source_currency.casefold():
+                return float(rate)
+        return None
+
+
+@dataclass(frozen=True)
+class E3ExistingSignal:
+    signal_id: str
+    relationship_id: str
+    signal_type: E3SignalType
+    source_assessment_id: str
+    idempotency_key: str
+    signal_status: E3SignalStatus
+
+
+@dataclass
+class E3OpportunitySignalCandidate:
+    relationship_id: str
+    signal_type: E3SignalType
+    source_assessment_id: str
+    source_methodology_code: str
+    source_methodology_version: str
+    signal_strength: E3SignalStrength
+    confidence: E3ConfidenceLevel
+    source_currency: str
+    base_currency: str
+    addressable_wallet: float
+    our_capture: float
+    positive_gap: float
+    relative_gap: Optional[float]
+    penetration: float
+    gap_base_currency: float
+    wallet_coverage: Optional[str] = None
+    dominant_driver: Optional[str] = None
+    strategic_relevance: str = "UNKNOWN"
+    reason_codes: tuple[str, ...] = ()
+    quality_flags: tuple[str, ...] = ()
+    rule_code: str = ""
+    rule_version: str = RULE_VERSION
+    threshold_config_version: str = ""
+    threshold_snapshot: dict = field(default_factory=dict)
+    fx_rate_to_base: float = 1.0
+    fx_effective_date: Optional[str] = None
+    fx_method: Optional[str] = None
+    idempotency_key: str = ""
+    source_assessment_as_of: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        out = asdict(self)
+        out["signal_type"] = self.signal_type.value
+        out["signal_strength"] = self.signal_strength.value
+        out["confidence"] = self.confidence.value
+        return out
+
+
+@dataclass
+class E3OpportunityEvaluation:
+    signal_type: Optional[E3SignalType]
+    authoritative_assessment: bool
+    eligible: bool
+    qualifies: bool
+    eligibility_reason_codes: tuple[str, ...] = ()
+    rule_reason_codes: tuple[str, ...] = ()
+    candidate: Optional[E3OpportunitySignalCandidate] = None
+
+
+@dataclass
+class E3LifecycleDecision:
+    action: E3LifecycleAction
+    existing_signal_id: Optional[str] = None
+    candidate: Optional[E3OpportunitySignalCandidate] = None
+    reason_codes: tuple[str, ...] = ()
+
+
+
+def _signal_type_for_assessment(a: E3WalletAssessmentInput) -> Optional[E3SignalType]:
+    return SUPPORTED_METHODOLOGIES.get((a.methodology_code, a.methodology_version))
+
+
+def _is_authoritative(a: E3WalletAssessmentInput) -> bool:
+    return (
+        a.assessment_status == "PUBLISHED"
+        and a.publication_result == "PUBLISH"
+        and a.test_only is False
+        and a.is_current is True
+        and _signal_type_for_assessment(a) is not None
+    )
+
+
+def _common_eligibility_reasons(a: E3WalletAssessmentInput) -> list[str]:
+    reasons: list[str] = []
+    if a.assessment_status != "PUBLISHED":
+        reasons.append("ASSESSMENT_NOT_PUBLISHED")
+    if a.publication_result != "PUBLISH":
+        reasons.append("PUBLICATION_NOT_APPROVED")
+    if a.test_only:
+        reasons.append("TEST_ONLY_ASSESSMENT")
+    if not a.is_current:
+        reasons.append("ASSESSMENT_SUPERSEDED")
+
+    if _signal_type_for_assessment(a) is None:
+        if any(code == a.methodology_code for code, _ in SUPPORTED_METHODOLOGIES):
+            reasons.append("UNSUPPORTED_METHODOLOGY_VERSION")
+        else:
+            reasons.append("UNSUPPORTED_METHODOLOGY")
+
+    if a.confidence == E3ConfidenceLevel.LOW:
+        reasons.append("LOW_CONFIDENCE")
+    if a.blocking_quality_issues:
+        reasons.append("BLOCKING_QUALITY_ISSUE")
+    if not a.evidence_ids or not a.calculation_ids:
+        reasons.append("MISSING_LINEAGE")
+    if not a.wallet_component_complete:
+        reasons.append("INCOMPLETE_WALLET_COMPONENT")
+    return reasons
+
+
+def _gap_signal_specific_reasons(a: E3WalletAssessmentInput, signal_type: E3SignalType) -> list[str]:
+    reasons: list[str] = []
+    if not a.capture_component_complete:
+        reasons.append("INCOMPLETE_CAPTURE_COMPONENT")
+    if a.capture_comparability_status != E3ComparabilityStatus.COMPARABLE:
+        reasons.append("CAPTURE_NOT_COMPARABLE")
+    if a.addressable_wallet is None:
+        reasons.append("ADDRESSABLE_WALLET_MISSING")
+    elif a.addressable_wallet <= 0:
+        reasons.append("NO_ADDRESSABLE_WALLET")
+    if a.our_capture is None:
+        reasons.append("CAPTURE_METRIC_MISSING")
+    if a.positive_gap is None:
+        reasons.append("POSITIVE_GAP_MISSING")
+    if a.penetration is None:
+        reasons.append("PENETRATION_MISSING")
+
+    if signal_type == E3SignalType.LIQUIDITY_WALLET_GAP:
+        if not a.liquidity_time_basis:
+            reasons.append("LIQUIDITY_TIME_BASIS_MISSING")
+        elif a.liquidity_time_basis not in CASH_SIGNAL_ELIGIBLE_TIME_BASES:
+            reasons.append("LIQUIDITY_TIME_BASIS_NOT_SIGNAL_ELIGIBLE")
+    return reasons
+
+
+def _convert_gap_to_base(a: E3WalletAssessmentInput, config: E3ThresholdConfig, fx: Optional[E3GovernedFXBasis]):
+    if not a.currency:
+        return None, None, ["SOURCE_CURRENCY_MISSING"]
+    if a.positive_gap is None:
+        return None, None, ["POSITIVE_GAP_MISSING"]
+    if a.currency.casefold() == config.base_currency.casefold():
+        return float(a.positive_gap), 1.0, []
+    if fx is None:
+        return None, None, ["MISSING_FX_CONVERSION_BASIS"]
+    if fx.base_currency.casefold() != config.base_currency.casefold():
+        return None, None, ["FX_BASE_CURRENCY_MISMATCH"]
+    rate = fx.rate_for(a.currency)
+    if rate is None or rate <= 0:
+        return None, None, ["MISSING_FX_CONVERSION_BASIS"]
+    return float(a.positive_gap) * rate, rate, []
+
+
+def _dominant_lending_driver(a: E3WalletAssessmentInput) -> Optional[str]:
+    capex = a.capex_addressable_notional
+    refi = a.refinancing_addressable_notional
+    if capex is None and refi is None:
+        return None
+    if capex is not None and refi is None:
+        return "CAPEX"
+    if capex is None and refi is not None:
+        return "REFINANCING"
+    total = abs(capex or 0.0) + abs(refi or 0.0)
+    if total == 0:
+        return "BALANCED"
+    capex_share = abs(capex or 0.0) / total
+    if capex_share >= 0.60:
+        return "CAPEX"
+    if capex_share <= 0.40:
+        return "REFINANCING"
+    return "BALANCED"
+
+
+def _signal_strength(gap_base: float, penetration: float, config: E3ThresholdConfig) -> E3SignalStrength:
+    if (
+        config.high_gap_base_currency is not None
+        and config.very_low_penetration is not None
+        and gap_base >= config.high_gap_base_currency
+        and penetration <= config.very_low_penetration
+    ):
+        return E3SignalStrength.HIGH
+    return E3SignalStrength.MEDIUM
+
+
+def _idempotency_key(a: E3WalletAssessmentInput, signal_type: E3SignalType, rule_code: str, config_version: str) -> str:
+    raw = "|".join([
+        a.relationship_id,
+        signal_type.value,
+        a.assessment_id,
+        rule_code,
+        RULE_VERSION,
+        config_version,
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _stage1e3_evaluate_opportunity_signal(
+    assessment: E3WalletAssessmentInput,
+    threshold_config: Optional[E3ThresholdConfig],
+    fx_basis: Optional[E3GovernedFXBasis] = None,
+) -> E3OpportunityEvaluation:
+    signal_type = _signal_type_for_assessment(assessment)
+    common_reasons = _common_eligibility_reasons(assessment)
+
+    if signal_type is None:
+        return E3OpportunityEvaluation(
+            signal_type=None,
+            authoritative_assessment=False,
+            eligible=False,
+            qualifies=False,
+            eligibility_reason_codes=tuple(common_reasons),
+        )
+
+    eligibility_reasons = common_reasons + _gap_signal_specific_reasons(assessment, signal_type)
+
+    if threshold_config is None:
+        eligibility_reasons.append("THRESHOLD_CONFIG_NOT_AVAILABLE")
+    else:
+        config_ok, config_issues = threshold_config.validate()
+        if not config_ok:
+            eligibility_reasons.extend(config_issues)
+        if threshold_config.signal_type != signal_type:
+            eligibility_reasons.append("THRESHOLD_CONFIG_SIGNAL_TYPE_MISMATCH")
+
+    authoritative = _is_authoritative(assessment)
+
+    if eligibility_reasons:
+        return E3OpportunityEvaluation(
+            signal_type=signal_type,
+            authoritative_assessment=authoritative,
+            eligible=False,
+            qualifies=False,
+            eligibility_reason_codes=tuple(dict.fromkeys(eligibility_reasons)),
+        )
+
+    assert threshold_config is not None
+    assert assessment.positive_gap is not None
+    assert assessment.penetration is not None
+    assert assessment.addressable_wallet is not None
+    assert assessment.our_capture is not None
+
+    gap_base, fx_rate, fx_reasons = _convert_gap_to_base(assessment, threshold_config, fx_basis)
+    if fx_reasons:
+        return E3OpportunityEvaluation(
+            signal_type=signal_type,
+            authoritative_assessment=authoritative,
+            eligible=False,
+            qualifies=False,
+            eligibility_reason_codes=tuple(fx_reasons),
+        )
+
+    assert gap_base is not None and fx_rate is not None
+    rule_reasons: list[str] = []
+
+    if assessment.positive_gap <= 0:
+        rule_reasons.append("NO_POSITIVE_GAP")
+
+    material_gap = gap_base >= threshold_config.minimum_gap_base_currency
+    underpenetrated = assessment.penetration <= threshold_config.maximum_penetration
+
+    if material_gap:
+        rule_reasons.append(
+            "MATERIAL_LENDING_GAP" if signal_type == E3SignalType.LENDING_WALLET_GAP else "MATERIAL_LIQUIDITY_GAP"
+        )
+    else:
+        rule_reasons.append("GAP_BELOW_MATERIALITY_THRESHOLD")
+
+    if underpenetrated:
+        rule_reasons.append(
+            "LOW_LENDING_PENETRATION" if signal_type == E3SignalType.LENDING_WALLET_GAP else "LOW_DEPOSIT_PENETRATION"
+        )
+    else:
+        rule_reasons.append("PENETRATION_ABOVE_SIGNAL_THRESHOLD")
+
+    qualifies = assessment.positive_gap > 0 and material_gap and underpenetrated
+    if not qualifies:
+        return E3OpportunityEvaluation(
+            signal_type=signal_type,
+            authoritative_assessment=authoritative,
+            eligible=True,
+            qualifies=False,
+            rule_reason_codes=tuple(rule_reasons),
+        )
+
+    strength = _signal_strength(gap_base, assessment.penetration, threshold_config)
+    if strength == E3SignalStrength.HIGH:
+        if signal_type == E3SignalType.LENDING_WALLET_GAP:
+            rule_reasons.extend(["LARGE_LENDING_GAP", "VERY_LOW_LENDING_PENETRATION"])
+        else:
+            rule_reasons.extend(["LARGE_LIQUIDITY_GAP", "VERY_LOW_DEPOSIT_PENETRATION"])
+
+    relative_gap = assessment.positive_gap / assessment.addressable_wallet if assessment.addressable_wallet > 0 else None
+    dominant_driver = None
+
+    if signal_type == E3SignalType.LENDING_WALLET_GAP:
+        dominant_driver = _dominant_lending_driver(assessment)
+        if dominant_driver == "CAPEX":
+            rule_reasons.append("CAPEX_DRIVEN")
+        elif dominant_driver == "REFINANCING":
+            rule_reasons.append("REFINANCING_DRIVEN")
+        elif dominant_driver == "BALANCED":
+            rule_reasons.append("BALANCED_LENDING_DRIVERS")
+        coverage_code = {
+            "CAPEX_ONLY": "CAPEX_ONLY_COVERAGE",
+            "REFINANCING_ONLY": "REFINANCING_ONLY_COVERAGE",
+            "CAPEX_AND_REFINANCING": "FULL_STRUCTURAL_COVERAGE",
+        }.get(assessment.wallet_coverage)
+        if coverage_code:
+            rule_reasons.append(coverage_code)
+    else:
+        if assessment.liquidity_time_basis == "AVERAGE":
+            rule_reasons.append("AVERAGE_BALANCE_BASIS")
+        elif assessment.liquidity_time_basis == "NORMALIZED_AVERAGE":
+            rule_reasons.append("NORMALIZED_LIQUIDITY_BASIS")
+        elif assessment.liquidity_time_basis == "FORECAST_AVERAGE":
+            rule_reasons.append("FORECAST_AVERAGE_LIQUIDITY_BASIS")
+        if assessment.our_capture == 0:
+            rule_reasons.append("CAPTURE_CONFIRMED_ZERO")
+
+    rule_code = LENDING_RULE_CODE if signal_type == E3SignalType.LENDING_WALLET_GAP else LIQUIDITY_RULE_CODE
+    threshold_snapshot = {
+        "config_version": threshold_config.config_version,
+        "signal_type": threshold_config.signal_type.value,
+        "base_currency": threshold_config.base_currency,
+        "minimum_gap_base_currency": threshold_config.minimum_gap_base_currency,
+        "maximum_penetration": threshold_config.maximum_penetration,
+        "high_gap_base_currency": threshold_config.high_gap_base_currency,
+        "very_low_penetration": threshold_config.very_low_penetration,
+    }
+
+    candidate = E3OpportunitySignalCandidate(
+        relationship_id=assessment.relationship_id,
+        signal_type=signal_type,
+        source_assessment_id=assessment.assessment_id,
+        source_methodology_code=assessment.methodology_code,
+        source_methodology_version=assessment.methodology_version,
+        signal_strength=strength,
+        confidence=assessment.confidence,
+        source_currency=assessment.currency,
+        base_currency=threshold_config.base_currency,
+        addressable_wallet=float(assessment.addressable_wallet),
+        our_capture=float(assessment.our_capture),
+        positive_gap=float(assessment.positive_gap),
+        relative_gap=relative_gap,
+        penetration=float(assessment.penetration),
+        gap_base_currency=float(gap_base),
+        wallet_coverage=assessment.wallet_coverage,
+        dominant_driver=dominant_driver,
+        reason_codes=tuple(dict.fromkeys(rule_reasons)),
+        rule_code=rule_code,
+        threshold_config_version=threshold_config.config_version,
+        threshold_snapshot=threshold_snapshot,
+        fx_rate_to_base=float(fx_rate),
+        fx_effective_date=(fx_basis.fx_effective_date if fx_basis and assessment.currency.casefold() != threshold_config.base_currency.casefold() else None),
+        fx_method=(fx_basis.fx_method if fx_basis and assessment.currency.casefold() != threshold_config.base_currency.casefold() else None),
+        idempotency_key=_idempotency_key(assessment, signal_type, rule_code, threshold_config.config_version),
+        source_assessment_as_of=assessment.source_assessment_as_of,
+    )
+
+    return E3OpportunityEvaluation(
+        signal_type=signal_type,
+        authoritative_assessment=authoritative,
+        eligible=True,
+        qualifies=True,
+        rule_reason_codes=candidate.reason_codes,
+        candidate=candidate,
+    )
+
+
+def _stage1e3_decide_signal_lifecycle(
+    evaluation: E3OpportunityEvaluation,
+    existing_signal: Optional[E3ExistingSignal],
+) -> E3LifecycleDecision:
+    if existing_signal is not None and existing_signal.signal_status == E3SignalStatus.SUPPRESSED:
+        if evaluation.candidate is not None and evaluation.candidate.idempotency_key == existing_signal.idempotency_key:
+            return E3LifecycleDecision(
+                action=E3LifecycleAction.KEEP_EXISTING,
+                existing_signal_id=existing_signal.signal_id,
+                reason_codes=("HUMAN_SUPPRESSION_PRESERVED",),
+            )
+
+    if evaluation.qualifies and evaluation.candidate is not None:
+        candidate = evaluation.candidate
+        if existing_signal is None or existing_signal.signal_status in {E3SignalStatus.CLOSED, E3SignalStatus.SUPERSEDED}:
+            return E3LifecycleDecision(
+                action=E3LifecycleAction.CREATE,
+                candidate=candidate,
+                reason_codes=("NEW_QUALIFYING_OPPORTUNITY",),
+            )
+        if existing_signal.idempotency_key == candidate.idempotency_key:
+            return E3LifecycleDecision(
+                action=E3LifecycleAction.KEEP_EXISTING,
+                existing_signal_id=existing_signal.signal_id,
+                candidate=candidate,
+                reason_codes=("IDEMPOTENT_REEVALUATION",),
+            )
+        return E3LifecycleDecision(
+            action=E3LifecycleAction.SUPERSEDE_AND_CREATE,
+            existing_signal_id=existing_signal.signal_id,
+            candidate=candidate,
+            reason_codes=("NEW_AUTHORITATIVE_QUALIFYING_STATE",),
+        )
+
+    if existing_signal is None:
+        return E3LifecycleDecision(
+            action=E3LifecycleAction.NO_ACTION,
+            reason_codes=("NO_ACTIVE_SIGNAL_AND_NO_QUALIFYING_OPPORTUNITY",),
+        )
+
+    if not evaluation.authoritative_assessment:
+        return E3LifecycleDecision(
+            action=E3LifecycleAction.KEEP_EXISTING,
+            existing_signal_id=existing_signal.signal_id,
+            reason_codes=("NON_AUTHORITATIVE_ASSESSMENT_DOES_NOT_INVALIDATE_SIGNAL",),
+        )
+
+    gap_refresh_failures = {
+        "INCOMPLETE_CAPTURE_COMPONENT",
+        "CAPTURE_NOT_COMPARABLE",
+        "CAPTURE_METRIC_MISSING",
+        "POSITIVE_GAP_MISSING",
+        "PENETRATION_MISSING",
+        "LIQUIDITY_TIME_BASIS_NOT_SIGNAL_ELIGIBLE",
+        "LIQUIDITY_TIME_BASIS_MISSING",
+        "MISSING_FX_CONVERSION_BASIS",
+        "FX_BASE_CURRENCY_MISMATCH",
+        "SOURCE_CURRENCY_MISSING",
+    }
+    if set(evaluation.eligibility_reason_codes) & gap_refresh_failures:
+        return E3LifecycleDecision(
+            action=E3LifecycleAction.MONITOR_EXISTING,
+            existing_signal_id=existing_signal.signal_id,
+            reason_codes=("CURRENT_ASSESSMENT_INSUFFICIENT_TO_REFRESH_GAP",),
+        )
+
+    if evaluation.eligible and not evaluation.qualifies:
+        return E3LifecycleDecision(
+            action=E3LifecycleAction.CLOSE_EXISTING,
+            existing_signal_id=existing_signal.signal_id,
+            reason_codes=("OPPORTUNITY_RULE_NO_LONGER_MET",),
+        )
+
+    return E3LifecycleDecision(
+        action=E3LifecycleAction.MONITOR_EXISTING,
+        existing_signal_id=existing_signal.signal_id,
+        reason_codes=("AUTHORITATIVE_SIGNAL_REFRESH_BLOCKED",),
+    )
+
+
+# =============================================================================
+# STAGE 1-E.3.7 — OPPORTUNITYSIGNAL PERSISTENCE & WALLET LINEAGE
+# =============================================================================
+
+E3_TEST_LENDING_CONFIG_VERSION = "E3_TEST_LENDING_2026_10"
+E3_TEST_LIQUIDITY_CONFIG_VERSION = "E3_TEST_LIQUIDITY_2026_10"
+
+
+def _db_stage1e3_migrate_schema(conn: _DBConnection):
+    """Add OpportunitySignal persistence additively without altering Wallet history."""
+    id_type = "INTEGER PRIMARY KEY AUTOINCREMENT" if conn.backend == "sqlite" else "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+    bool_type = "INTEGER" if conn.backend == "sqlite" else "SMALLINT"
+    real_type = "REAL" if conn.backend == "sqlite" else "DOUBLE PRECISION"
+    fk_type = "INTEGER" if conn.backend == "sqlite" else "BIGINT"
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS opportunity_signal_threshold_config (
+        id {id_type},
+        config_version TEXT NOT NULL,
+        signal_type TEXT NOT NULL,
+        base_currency TEXT NOT NULL,
+        minimum_gap_base_currency {real_type} NOT NULL,
+        maximum_penetration {real_type} NOT NULL,
+        high_gap_base_currency {real_type},
+        very_low_penetration {real_type},
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        test_only {bool_type} NOT NULL DEFAULT 0,
+        effective_from TEXT,
+        effective_to TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(signal_type, config_version)
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS opportunity_signal (
+        id {id_type},
+        signal_id TEXT NOT NULL UNIQUE,
+        relationship_id {fk_type} NOT NULL REFERENCES relationship(id),
+        source_assessment_db_id {fk_type} NOT NULL REFERENCES wallet_assessment(id),
+        source_assessment_id TEXT NOT NULL,
+        signal_type TEXT NOT NULL,
+        signal_status TEXT NOT NULL,
+        signal_strength TEXT NOT NULL,
+        source_methodology_code TEXT NOT NULL,
+        source_methodology_version TEXT NOT NULL,
+        source_currency TEXT NOT NULL,
+        base_currency TEXT NOT NULL,
+        addressable_wallet {real_type} NOT NULL,
+        our_capture {real_type} NOT NULL,
+        positive_gap {real_type} NOT NULL,
+        relative_gap {real_type},
+        penetration {real_type} NOT NULL,
+        gap_base_currency {real_type} NOT NULL,
+        wallet_coverage TEXT,
+        dominant_driver TEXT,
+        strategic_relevance TEXT NOT NULL DEFAULT 'UNKNOWN',
+        confidence TEXT NOT NULL,
+        reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        quality_flags_json TEXT NOT NULL DEFAULT '[]',
+        rule_code TEXT NOT NULL,
+        rule_version TEXT NOT NULL,
+        threshold_config_version TEXT NOT NULL,
+        threshold_snapshot_json TEXT NOT NULL DEFAULT '{{}}',
+        fx_rate_to_base {real_type} NOT NULL DEFAULT 1.0,
+        fx_effective_date TEXT,
+        fx_method TEXT,
+        source_assessment_as_of TEXT,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        test_only {bool_type} NOT NULL DEFAULT 0,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        activated_at TEXT,
+        monitoring_at TEXT,
+        superseded_at TEXT,
+        closed_at TEXT,
+        superseded_by_signal_id TEXT,
+        last_evaluated_at TEXT,
+        lifecycle_reason_json TEXT NOT NULL DEFAULT '[]'
+    )""")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_opportunity_signal_relationship ON opportunity_signal(relationship_id, signal_type, id DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_opportunity_signal_status ON opportunity_signal(signal_status, signal_type, id DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_opportunity_signal_source ON opportunity_signal(source_assessment_id, id DESC)")
+    # One current production signal state per relationship and signal type.
+    conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_opportunity_signal_one_current
+                  ON opportunity_signal(relationship_id, signal_type)
+                  WHERE signal_status IN ('ACTIVE','MONITORING','SUPPRESSED') AND test_only=0""")
+
+
+def _db_stage1e3_seed_test_threshold_configs(conn: _DBConnection):
+    """Seed controlled TEST configs only. They can never authorize production signal persistence."""
+    now = _db_now()
+    configs = [
+        (
+            E3_TEST_LENDING_CONFIG_VERSION,
+            E3SignalType.LENDING_WALLET_GAP.value,
+            "JPY", 50_000_000_000.0, 0.50, 200_000_000_000.0, 0.20,
+        ),
+        (
+            E3_TEST_LIQUIDITY_CONFIG_VERSION,
+            E3SignalType.LIQUIDITY_WALLET_GAP.value,
+            "JPY", 50_000_000_000.0, 0.50, 200_000_000_000.0, 0.20,
+        ),
+    ]
+    for config_version, signal_type, base_currency, min_gap, max_pen, high_gap, very_low_pen in configs:
+        row = conn.execute(
+            "SELECT id FROM opportunity_signal_threshold_config WHERE signal_type=? AND config_version=?",
+            (signal_type, config_version),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                """INSERT INTO opportunity_signal_threshold_config(
+                       config_version,signal_type,base_currency,minimum_gap_base_currency,
+                       maximum_penetration,high_gap_base_currency,very_low_penetration,
+                       status,test_only,effective_from,created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    config_version, signal_type, base_currency, min_gap, max_pen,
+                    high_gap, very_low_pen, "ACTIVE", 1, "2026-10-10", now, now,
+                ),
+            )
+
+
+def _db_stage1e3_threshold_config(conn: _DBConnection, signal_type: E3SignalType, config_version: str) -> tuple[E3ThresholdConfig, bool]:
+    row = conn.execute(
+        """SELECT * FROM opportunity_signal_threshold_config
+           WHERE signal_type=? AND config_version=? AND status='ACTIVE'""",
+        (signal_type.value, config_version),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Opportunity threshold configuration not found: {signal_type.value} / {config_version}")
+    return (
+        E3ThresholdConfig(
+            config_version=row["config_version"],
+            signal_type=signal_type,
+            base_currency=row["base_currency"],
+            minimum_gap_base_currency=float(row["minimum_gap_base_currency"]),
+            maximum_penetration=float(row["maximum_penetration"]),
+            high_gap_base_currency=float(row["high_gap_base_currency"]) if row["high_gap_base_currency"] is not None else None,
+            very_low_penetration=float(row["very_low_penetration"]) if row["very_low_penetration"] is not None else None,
+        ),
+        bool(row["test_only"]),
+    )
+
+
+def _db_stage1e3_wallet_input(conn: _DBConnection, assessment_id: str) -> E3WalletAssessmentInput:
+    row = conn.execute(
+        """SELECT wa.*, r.relationship_id AS relationship_public_id,
+                  im.methodology_code, im.version AS methodology_version
+           FROM wallet_assessment wa
+           JOIN relationship r ON r.id=wa.relationship_id
+           JOIN intelligence_methodology im ON im.id=wa.methodology_id
+           WHERE wa.assessment_id=?""",
+        (assessment_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Wallet assessment {assessment_id} not found.")
+
+    # Current means latest non-superseded assessment for the same relationship/methodology.
+    newer = conn.execute(
+        """SELECT 1
+           FROM wallet_assessment wa2
+           WHERE wa2.relationship_id=? AND wa2.methodology_id=?
+             AND wa2.id>? AND wa2.status<>'SUPERSEDED'
+           LIMIT 1""",
+        (row["relationship_id"], row["methodology_id"], row["id"]),
+    ).fetchone()
+    is_current = newer is None and row["status"] != "SUPERSEDED"
+
+    evidence_ids = tuple(_stage1e2_parse_json_list(row["evidence_ids_json"]))
+    calculation_ids = tuple(_stage1e2_parse_json_list(row["calculation_ids_json"]))
+    try:
+        qg = json.loads(row["quality_gate_json"] or "{}")
+    except Exception:
+        qg = {}
+    blocking = tuple(str(x) for x in (qg.get("blocking_issues") or []))
+
+    methodology_code = row["methodology_code"]
+    if methodology_code == "STRUCTURAL_LENDING":
+        wallet_complete = row["capex_component_status"] == "COMPLETE" or row["refinancing_component_status"] == "COMPLETE"
+    elif methodology_code == "CASH_LIQUIDITY_WALLET":
+        wallet_complete = row["liquidity_component_status"] == "COMPLETE"
+    else:
+        wallet_complete = False
+
+    confidence_value = row["confidence"] or "LOW"
+    try:
+        confidence = E3ConfidenceLevel(confidence_value)
+    except Exception:
+        confidence = E3ConfidenceLevel.LOW
+
+    capture_status = row["capture_component_status"] or "NOT_ASSESSED"
+    capture_complete = capture_status == "COMPLETE"
+    comparability_value = row["capture_comparability_status"] or "NOT_ASSESSED"
+    try:
+        comparability = E3ComparabilityStatus(comparability_value)
+    except Exception:
+        comparability = E3ComparabilityStatus.NOT_ASSESSED
+
+    return E3WalletAssessmentInput(
+        assessment_id=row["assessment_id"],
+        relationship_id=row["relationship_public_id"],
+        methodology_code=methodology_code,
+        methodology_version=row["methodology_version"],
+        assessment_status=row["status"],
+        publication_result=row["publication_result"] or "",
+        test_only=bool(row["test_only"]),
+        is_current=is_current,
+        confidence=confidence,
+        evidence_ids=evidence_ids,
+        calculation_ids=calculation_ids,
+        blocking_quality_issues=blocking,
+        currency=row["currency"],
+        addressable_wallet=float(row["addressable_notional"]) if row["addressable_notional"] is not None else None,
+        our_capture=float(row["captured_notional"]) if row["captured_notional"] is not None else None,
+        positive_gap=float(row["positive_wallet_gap"]) if row["positive_wallet_gap"] is not None else None,
+        penetration=float(row["notional_penetration"]) if row["notional_penetration"] is not None else None,
+        wallet_component_complete=wallet_complete,
+        capture_component_complete=capture_complete,
+        capture_comparability_status=comparability,
+        wallet_coverage=row["wallet_coverage"],
+        liquidity_time_basis=row["liquidity_time_basis"],
+        capex_addressable_notional=float(row["bank_capex_notional"]) if row["bank_capex_notional"] is not None else None,
+        refinancing_addressable_notional=float(row["bank_refinancing_notional"]) if row["bank_refinancing_notional"] is not None else None,
+        source_assessment_as_of=row["effective_date"],
+    )
+
+
+def _db_stage1e3_existing_signal(conn: _DBConnection, relationship_db_id: int, signal_type: E3SignalType) -> E3ExistingSignal | None:
+    row = conn.execute(
+        """SELECT * FROM opportunity_signal
+           WHERE relationship_id=? AND signal_type=?
+             AND signal_status IN ('ACTIVE','MONITORING','SUPPRESSED')
+             AND test_only=0
+           ORDER BY id DESC LIMIT 1""",
+        (relationship_db_id, signal_type.value),
+    ).fetchone()
+    if row is None:
+        return None
+    return E3ExistingSignal(
+        signal_id=row["signal_id"],
+        relationship_id=str(row["relationship_id"]),
+        signal_type=E3SignalType(row["signal_type"]),
+        source_assessment_id=row["source_assessment_id"],
+        idempotency_key=row["idempotency_key"],
+        signal_status=E3SignalStatus(row["signal_status"]),
+    )
+
+
+def _db_stage1e3_insert_signal(
+    conn: _DBConnection,
+    *,
+    candidate: E3OpportunitySignalCandidate,
+    relationship_db_id: int,
+    assessment_db_id: int,
+    created_by: str,
+) -> str:
+    # Test source assessments are categorically prohibited from creating signals.
+    source = conn.execute("SELECT test_only,status,publication_result FROM wallet_assessment WHERE id=?", (assessment_db_id,)).fetchone()
+    if source is None:
+        raise ValueError("Source WalletAssessment not found.")
+    if bool(source["test_only"]):
+        raise ValueError("TEST_ONLY_ASSESSMENT cannot create an OpportunitySignal.")
+    if source["status"] != "PUBLISHED" or source["publication_result"] != "PUBLISH":
+        raise ValueError("Only PUBLISHED / PUBLISH WalletAssessments can create OpportunitySignals.")
+
+    signal_id = _db_next_id(conn, "opportunity_signal", "signal_id", "SIG")
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO opportunity_signal(
+               signal_id,relationship_id,source_assessment_db_id,source_assessment_id,
+               signal_type,signal_status,signal_strength,
+               source_methodology_code,source_methodology_version,
+               source_currency,base_currency,addressable_wallet,our_capture,positive_gap,
+               relative_gap,penetration,gap_base_currency,wallet_coverage,dominant_driver,
+               strategic_relevance,confidence,reason_codes_json,quality_flags_json,
+               rule_code,rule_version,threshold_config_version,threshold_snapshot_json,
+               fx_rate_to_base,fx_effective_date,fx_method,source_assessment_as_of,
+               idempotency_key,test_only,created_by,created_at,activated_at,last_evaluated_at,
+               lifecycle_reason_json
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            signal_id, relationship_db_id, assessment_db_id, candidate.source_assessment_id,
+            candidate.signal_type.value, E3SignalStatus.ACTIVE.value, candidate.signal_strength.value,
+            candidate.source_methodology_code, candidate.source_methodology_version,
+            candidate.source_currency, candidate.base_currency, candidate.addressable_wallet,
+            candidate.our_capture, candidate.positive_gap, candidate.relative_gap,
+            candidate.penetration, candidate.gap_base_currency, candidate.wallet_coverage,
+            candidate.dominant_driver, candidate.strategic_relevance, candidate.confidence.value,
+            json.dumps(list(candidate.reason_codes)), json.dumps(list(candidate.quality_flags)),
+            candidate.rule_code, candidate.rule_version, candidate.threshold_config_version,
+            json.dumps(candidate.threshold_snapshot, default=str), candidate.fx_rate_to_base,
+            candidate.fx_effective_date, candidate.fx_method, candidate.source_assessment_as_of,
+            candidate.idempotency_key, 0, created_by, now, now, now,
+            json.dumps(["NEW_QUALIFYING_OPPORTUNITY"]),
+        ),
+    )
+    _db_append_audit(
+        conn,
+        entity_type="OpportunitySignal",
+        entity_id=signal_id,
+        relationship_id=relationship_db_id,
+        event_type="OPPORTUNITY_SIGNAL_CREATED",
+        actor=created_by,
+        payload={
+            "signal_type": candidate.signal_type.value,
+            "signal_strength": candidate.signal_strength.value,
+            "source_assessment_id": candidate.source_assessment_id,
+            "rule_code": candidate.rule_code,
+            "rule_version": candidate.rule_version,
+            "threshold_config_version": candidate.threshold_config_version,
+            "reason_codes": list(candidate.reason_codes),
+        },
+    )
+    _db_append_audit(
+        conn,
+        entity_type="OpportunitySignal",
+        entity_id=signal_id,
+        relationship_id=relationship_db_id,
+        event_type="OPPORTUNITY_SIGNAL_ACTIVATED",
+        actor=created_by,
+        payload={"source_assessment_id": candidate.source_assessment_id},
+    )
+    return signal_id
+
+
+def _db_stage1e3_apply_lifecycle(
+    assessment_id: str,
+    config_version: str,
+    *,
+    actor: str = "EC-AI Rule Engine",
+    fx_basis: E3GovernedFXBasis | None = None,
+) -> dict:
+    """Evaluate + persist one production signal lifecycle transition transactionally."""
+    with _db_transaction() as conn:
+        assessment = _db_stage1e3_wallet_input(conn, assessment_id)
+        signal_type = _signal_type_for_assessment(assessment)
+        if signal_type is None:
+            evaluation = _stage1e3_evaluate_opportunity_signal(assessment, None, fx_basis)
+            return {"Evaluation": evaluation, "Decision": None, "Signal ID": None}
+
+        threshold_config, threshold_test_only = _db_stage1e3_threshold_config(conn, signal_type, config_version)
+        evaluation = _stage1e3_evaluate_opportunity_signal(assessment, threshold_config, fx_basis)
+
+        source_row = conn.execute(
+            "SELECT id,relationship_id FROM wallet_assessment WHERE assessment_id=?",
+            (assessment_id,),
+        ).fetchone()
+        relationship_db_id = int(source_row["relationship_id"])
+
+        if conn.backend == "postgresql":
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(?))",
+                (f"ecai-opportunity-signal:{relationship_db_id}:{signal_type.value}",),
+            )
+
+        existing = _db_stage1e3_existing_signal(conn, relationship_db_id, signal_type)
+        decision = _stage1e3_decide_signal_lifecycle(evaluation, existing)
+
+        # TEST threshold configurations are allowed for read-only gate evaluation only.
+        if threshold_test_only:
+            return {
+                "Evaluation": evaluation,
+                "Decision": decision,
+                "Signal ID": None,
+                "Persistence Blocked": "TEST_THRESHOLD_CONFIG",
+            }
+
+        now = _db_now()
+        signal_id = None
+        if decision.action == E3LifecycleAction.CREATE and decision.candidate is not None:
+            signal_id = _db_stage1e3_insert_signal(
+                conn,
+                candidate=decision.candidate,
+                relationship_db_id=relationship_db_id,
+                assessment_db_id=int(source_row["id"]),
+                created_by=actor,
+            )
+        elif decision.action == E3LifecycleAction.SUPERSEDE_AND_CREATE and decision.candidate is not None and existing is not None:
+            # Create replacement first as non-current transition requires freeing the unique current slot.
+            conn.execute(
+                "UPDATE opportunity_signal SET signal_status='SUPERSEDED',superseded_at=?,last_evaluated_at=?,lifecycle_reason_json=? WHERE signal_id=?",
+                (now, now, json.dumps(list(decision.reason_codes)), existing.signal_id),
+            )
+            signal_id = _db_stage1e3_insert_signal(
+                conn,
+                candidate=decision.candidate,
+                relationship_db_id=relationship_db_id,
+                assessment_db_id=int(source_row["id"]),
+                created_by=actor,
+            )
+            conn.execute(
+                "UPDATE opportunity_signal SET superseded_by_signal_id=? WHERE signal_id=?",
+                (signal_id, existing.signal_id),
+            )
+            _db_append_audit(
+                conn, entity_type="OpportunitySignal", entity_id=existing.signal_id,
+                relationship_id=relationship_db_id, event_type="OPPORTUNITY_SIGNAL_SUPERSEDED",
+                actor=actor, payload={"superseded_by_signal_id": signal_id, "reason_codes": list(decision.reason_codes)},
+            )
+        elif decision.action == E3LifecycleAction.CLOSE_EXISTING and existing is not None:
+            conn.execute(
+                "UPDATE opportunity_signal SET signal_status='CLOSED',closed_at=?,last_evaluated_at=?,lifecycle_reason_json=? WHERE signal_id=?",
+                (now, now, json.dumps(list(decision.reason_codes)), existing.signal_id),
+            )
+            _db_append_audit(
+                conn, entity_type="OpportunitySignal", entity_id=existing.signal_id,
+                relationship_id=relationship_db_id, event_type="OPPORTUNITY_SIGNAL_CLOSED",
+                actor=actor, payload={"reason_codes": list(decision.reason_codes), "source_assessment_id": assessment_id},
+            )
+            signal_id = existing.signal_id
+        elif decision.action == E3LifecycleAction.MONITOR_EXISTING and existing is not None:
+            row = conn.execute("SELECT signal_status FROM opportunity_signal WHERE signal_id=?", (existing.signal_id,)).fetchone()
+            if row is not None and row["signal_status"] != E3SignalStatus.MONITORING.value:
+                conn.execute(
+                    "UPDATE opportunity_signal SET signal_status='MONITORING',monitoring_at=?,last_evaluated_at=?,lifecycle_reason_json=? WHERE signal_id=?",
+                    (now, now, json.dumps(list(decision.reason_codes)), existing.signal_id),
+                )
+                _db_append_audit(
+                    conn, entity_type="OpportunitySignal", entity_id=existing.signal_id,
+                    relationship_id=relationship_db_id, event_type="OPPORTUNITY_SIGNAL_MONITORING",
+                    actor=actor, payload={"reason_codes": list(decision.reason_codes), "source_assessment_id": assessment_id},
+                )
+            signal_id = existing.signal_id
+        elif decision.action == E3LifecycleAction.KEEP_EXISTING and existing is not None:
+            signal_id = existing.signal_id
+
+        return {"Evaluation": evaluation, "Decision": decision, "Signal ID": signal_id}
+
+
+def _db_stage1e3_evaluate_read_only(assessment_id: str, config_version: str) -> dict:
+    conn = _db_connect()
+    try:
+        assessment = _db_stage1e3_wallet_input(conn, assessment_id)
+        signal_type = _signal_type_for_assessment(assessment)
+        if signal_type is None:
+            evaluation = _stage1e3_evaluate_opportunity_signal(assessment, None, None)
+            return {"Assessment ID": assessment_id, "Evaluation": evaluation, "Config Test Only": None}
+        threshold_config, config_test_only = _db_stage1e3_threshold_config(conn, signal_type, config_version)
+        evaluation = _stage1e3_evaluate_opportunity_signal(assessment, threshold_config, None)
+        return {
+            "Assessment ID": assessment_id,
+            "Signal Type": signal_type.value,
+            "Evaluation": evaluation,
+            "Config Test Only": config_test_only,
+        }
+    finally:
+        conn.close()
+
+
+def _db_stage1e3_latest_assessment_id(company: str, methodology_code: str) -> str | None:
+    conn = _db_connect()
+    try:
+        rel = _db_relationship_row(conn, company)
+        row = conn.execute(
+            """SELECT wa.assessment_id
+               FROM wallet_assessment wa
+               JOIN intelligence_methodology im ON im.id=wa.methodology_id
+               WHERE wa.relationship_id=? AND im.methodology_code=? AND im.version='1.0'
+               ORDER BY wa.id DESC LIMIT 1""",
+            (rel["id"], methodology_code),
+        ).fetchone()
+        return row["assessment_id"] if row is not None else None
+    finally:
+        conn.close()
+
+
+def _db_stage1e3_list_signals(company: str | None = None) -> list[dict]:
+    conn = _db_connect()
+    try:
+        params = []
+        where = ""
+        if company:
+            rel = _db_relationship_row(conn, company)
+            where = "WHERE os.relationship_id=?"
+            params.append(rel["id"])
+        rows = conn.execute(
+            f"""SELECT os.*, r.name AS relationship_name
+                FROM opportunity_signal os
+                JOIN relationship r ON r.id=os.relationship_id
+                {where}
+                ORDER BY os.id DESC""",
+            tuple(params),
+        ).fetchall()
+        return [
+            {
+                "Signal ID": r["signal_id"],
+                "Relationship": r["relationship_name"],
+                "Signal Type": r["signal_type"],
+                "Status": r["signal_status"],
+                "Strength": r["signal_strength"],
+                "Source Assessment": r["source_assessment_id"],
+                "Gap": r["positive_gap"],
+                "Penetration": r["penetration"],
+                "Confidence": r["confidence"],
+                "Rule": f"{r['rule_code']} {r['rule_version']}",
+                "Threshold Config": r["threshold_config_version"],
+                "Created": r["created_at"],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def _db_stage1e3_signal_lineage(signal_id: str) -> dict:
+    conn = _db_connect()
+    try:
+        row = conn.execute(
+            """SELECT os.*,r.name AS relationship_name
+               FROM opportunity_signal os JOIN relationship r ON r.id=os.relationship_id
+               WHERE os.signal_id=?""",
+            (signal_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"OpportunitySignal {signal_id} not found.")
+        lineage = _db_stage1e2_get_lineage(row["source_assessment_id"])
+        audits = conn.execute(
+            """SELECT audit_event_id,event_type,event_timestamp,actor,payload_json
+               FROM audit_event WHERE entity_type='OpportunitySignal' AND entity_id=? ORDER BY id""",
+            (signal_id,),
+        ).fetchall()
+        return {
+            "Signal": {
+                "Signal ID": row["signal_id"],
+                "Relationship": row["relationship_name"],
+                "Signal Type": row["signal_type"],
+                "Status": row["signal_status"],
+                "Strength": row["signal_strength"],
+                "Source Assessment": row["source_assessment_id"],
+                "Rule": f"{row['rule_code']} {row['rule_version']}",
+                "Threshold Config": row["threshold_config_version"],
+                "Reason Codes": json.loads(row["reason_codes_json"] or "[]"),
+            },
+            "Wallet Assessment Lineage": lineage,
+            "Signal Audit Events": [
+                {
+                    "Audit Event ID": a["audit_event_id"],
+                    "Event": a["event_type"],
+                    "Timestamp": a["event_timestamp"],
+                    "Actor": a["actor"],
+                    "Payload": json.loads(a["payload_json"] or "{}"),
+                }
+                for a in audits
+            ],
+        }
+    finally:
+        conn.close()
+
+
+def _db_stage1e3_run_live_safety_gate_test(company: str = "Toyota") -> dict:
+    """Read-only signal evaluation of controlled WAL test assessments.
+
+    Expected result: zero OpportunitySignals because WAL-0002/WAL-0003-style
+    assessments are VALIDATED/HOLD/TEST_ONLY. The test proves the E.3.1 firewall.
+    """
+    with _db_transaction() as conn:
+        _db_stage1e3_seed_test_threshold_configs(conn)
+    before = len(_db_stage1e3_list_signals(company))
+    results = []
+    pairs = [
+        ("STRUCTURAL_LENDING", E3_TEST_LENDING_CONFIG_VERSION),
+        ("CASH_LIQUIDITY_WALLET", E3_TEST_LIQUIDITY_CONFIG_VERSION),
+    ]
+    for methodology, config in pairs:
+        assessment_id = _db_stage1e3_latest_assessment_id(company, methodology)
+        if assessment_id:
+            item = _db_stage1e3_evaluate_read_only(assessment_id, config)
+            evaluation = item["Evaluation"]
+            results.append({
+                "Assessment ID": assessment_id,
+                "Methodology": methodology,
+                "Signal Type": evaluation.signal_type.value if evaluation.signal_type else None,
+                "Authoritative": evaluation.authoritative_assessment,
+                "Eligible": evaluation.eligible,
+                "Qualifies": evaluation.qualifies,
+                "Eligibility Reasons": list(evaluation.eligibility_reason_codes),
+                "Rule Reasons": list(evaluation.rule_reason_codes),
+                "Test Threshold Config": bool(item.get("Config Test Only")),
+            })
+    after = len(_db_stage1e3_list_signals(company))
+    return {
+        "Results": results,
+        "Signals Before": before,
+        "Signals After": after,
+        "Safety Gate PASS": before == after and all(not r["Qualifies"] for r in results),
+    }
+
+# END STAGE 1-E.3.7 — OPPORTUNITYSIGNAL PERSISTENCE & WALLET LINEAGE
+
 def _db_write_system_metadata():
     """Record the deployed persistence contract without touching domain history."""
     items = {
@@ -4870,10 +6042,12 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.2B.6 v0.1",
+        "intelligence_release": "Stage 1-E.3.7 v0.1",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
+        "opportunity_signal_release": "Stage 1-E.3.7 v0.1",
+        "opportunity_signal_rule_version": "1.0",
     }
     with _db_transaction() as conn:
         now = _db_now()
@@ -6257,7 +7431,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.2B.6 · Test Candidate v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.3.7 · Test Candidate v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -6556,6 +7730,64 @@ def render_stage_1c_sidebar():
                         st.json(lineage)
                 except Exception as exc:
                     st.error(f"Cash & Liquidity lineage inspection failed: {exc}")
+
+        st.markdown("---")
+        st.markdown("**Stage 1-E.3 · Opportunity Signal Architecture v1.0**")
+        st.caption("Deterministic signal layer · PUBLISHED/PUBLISH/non-test firewall · controlled test thresholds only")
+
+        try:
+            opportunity_signals = _db_stage1e3_list_signals("Toyota")
+            current_signal_count = len([
+                s for s in opportunity_signals if s.get("Status") in ("ACTIVE", "MONITORING", "SUPPRESSED")
+            ])
+            st.write({
+                "Persisted Opportunity Signals": len(opportunity_signals),
+                "Current Signal States": current_signal_count,
+                "Supported Methodologies": ["STRUCTURAL_LENDING 1.0", "CASH_LIQUIDITY_WALLET 1.0"],
+            })
+            if opportunity_signals:
+                st.dataframe(pd.DataFrame(opportunity_signals), use_container_width=True, hide_index=True)
+                inspect_signal_id = opportunity_signals[0]["Signal ID"]
+                with st.expander(f"Inspect {inspect_signal_id} Signal → Wallet → Calculation → Evidence Lineage", expanded=False):
+                    st.json(_db_stage1e3_signal_lineage(inspect_signal_id))
+            else:
+                st.info(
+                    "No OpportunitySignals are expected yet. Current Structural Lending and Cash assessments "
+                    "are controlled VALIDATED / HOLD / TEST-only records and are intentionally ineligible."
+                )
+        except Exception as exc:
+            st.error(f"OpportunitySignal reload failed: {exc}")
+
+        if st.button(
+            "Run E.3 Opportunity Signal Safety Gate Test",
+            key="stage1e3_run_opportunity_signal_gate_test",
+            use_container_width=True,
+        ):
+            try:
+                gate = _db_stage1e3_run_live_safety_gate_test("Toyota")
+                if gate.get("Safety Gate PASS"):
+                    st.success(
+                        "Safety Gate PASS · controlled Wallet test assessments generated 0 OpportunitySignals."
+                    )
+                else:
+                    st.error("Safety Gate CHECK · review OpportunitySignal eligibility results.")
+                st.write({
+                    "Signals Before": gate.get("Signals Before"),
+                    "Signals After": gate.get("Signals After"),
+                })
+                for result in gate.get("Results", []):
+                    st.write({
+                        "Assessment ID": result.get("Assessment ID"),
+                        "Methodology": result.get("Methodology"),
+                        "Signal Type": result.get("Signal Type"),
+                        "Authoritative": result.get("Authoritative"),
+                        "Eligible": result.get("Eligible"),
+                        "Qualifies": result.get("Qualifies"),
+                        "Eligibility Reasons": result.get("Eligibility Reasons"),
+                        "Test Threshold Config": result.get("Test Threshold Config"),
+                    })
+            except Exception as exc:
+                st.error(f"Opportunity Signal safety gate test failed: {exc}")
 
         try:
             current = _db_stage1e_current_assessment("Toyota")
