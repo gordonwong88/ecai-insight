@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.3.7 OpportunitySignal Persistence & App Integration Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.3.8 Final Live Validation Candidate v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1469,8 +1469,8 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 8
-ECAI_PERSISTENCE_RUNTIME_VERSION = 8  # E.3.7: OpportunitySignal persistence integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.3.7 OpportunitySignal Persistence & App Integration Candidate v0.1"
+ECAI_PERSISTENCE_RUNTIME_VERSION = 9  # E.3.8: OpportunitySignal final live validation
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.3.8 OpportunitySignal Final Live Validation Candidate v0.1"
 
 
 def _db_now() -> str:
@@ -2426,7 +2426,9 @@ def _db_list_relationship_registry(conn: _DBConnection | None = None) -> list[di
             """SELECT id,relationship_id,name,country,sector,external_rating,outlook,
                       score,attention_rating,primary_driver,recommended_action,
                       created_at,updated_at
-               FROM relationship ORDER BY id"""
+               FROM relationship
+               WHERE relationship_id <> 'REL-EC-AI-E3-VALIDATION-CO'
+               ORDER BY id"""
         ).fetchall()
         return [
             {
@@ -5673,14 +5675,20 @@ def _db_stage1e3_wallet_input(conn: _DBConnection, assessment_id: str) -> E3Wall
     )
 
 
-def _db_stage1e3_existing_signal(conn: _DBConnection, relationship_db_id: int, signal_type: E3SignalType) -> E3ExistingSignal | None:
+def _db_stage1e3_existing_signal(
+    conn: _DBConnection,
+    relationship_db_id: int,
+    signal_type: E3SignalType,
+    *,
+    test_only: bool = False,
+) -> E3ExistingSignal | None:
     row = conn.execute(
         """SELECT * FROM opportunity_signal
            WHERE relationship_id=? AND signal_type=?
              AND signal_status IN ('ACTIVE','MONITORING','SUPPRESSED')
-             AND test_only=0
+             AND test_only=?
            ORDER BY id DESC LIMIT 1""",
-        (relationship_db_id, signal_type.value),
+        (relationship_db_id, signal_type.value, 1 if test_only else 0),
     ).fetchone()
     if row is None:
         return None
@@ -5701,6 +5709,7 @@ def _db_stage1e3_insert_signal(
     relationship_db_id: int,
     assessment_db_id: int,
     created_by: str,
+    signal_test_only: bool = False,
 ) -> str:
     # Test source assessments are categorically prohibited from creating signals.
     source = conn.execute("SELECT test_only,status,publication_result FROM wallet_assessment WHERE id=?", (assessment_db_id,)).fetchone()
@@ -5738,7 +5747,7 @@ def _db_stage1e3_insert_signal(
             candidate.rule_code, candidate.rule_version, candidate.threshold_config_version,
             json.dumps(candidate.threshold_snapshot, default=str), candidate.fx_rate_to_base,
             candidate.fx_effective_date, candidate.fx_method, candidate.source_assessment_as_of,
-            candidate.idempotency_key, 0, created_by, now, now, now,
+            candidate.idempotency_key, 1 if signal_test_only else 0, created_by, now, now, now,
             json.dumps(["NEW_QUALIFYING_OPPORTUNITY"]),
         ),
     )
@@ -5777,6 +5786,7 @@ def _db_stage1e3_apply_lifecycle(
     *,
     actor: str = "EC-AI Rule Engine",
     fx_basis: E3GovernedFXBasis | None = None,
+    persistence_test_only: bool = False,
 ) -> dict:
     """Evaluate + persist one production signal lifecycle transition transactionally."""
     with _db_transaction() as conn:
@@ -5801,7 +5811,12 @@ def _db_stage1e3_apply_lifecycle(
                 (f"ecai-opportunity-signal:{relationship_db_id}:{signal_type.value}",),
             )
 
-        existing = _db_stage1e3_existing_signal(conn, relationship_db_id, signal_type)
+        existing = _db_stage1e3_existing_signal(
+            conn,
+            relationship_db_id,
+            signal_type,
+            test_only=persistence_test_only,
+        )
         decision = _stage1e3_decide_signal_lifecycle(evaluation, existing)
 
         # TEST threshold configurations are allowed for read-only gate evaluation only.
@@ -5822,6 +5837,7 @@ def _db_stage1e3_apply_lifecycle(
                 relationship_db_id=relationship_db_id,
                 assessment_db_id=int(source_row["id"]),
                 created_by=actor,
+                signal_test_only=persistence_test_only,
             )
         elif decision.action == E3LifecycleAction.SUPERSEDE_AND_CREATE and decision.candidate is not None and existing is not None:
             # Create replacement first as non-current transition requires freeing the unique current slot.
@@ -5835,6 +5851,7 @@ def _db_stage1e3_apply_lifecycle(
                 relationship_db_id=relationship_db_id,
                 assessment_db_id=int(source_row["id"]),
                 created_by=actor,
+                signal_test_only=persistence_test_only,
             )
             conn.execute(
                 "UPDATE opportunity_signal SET superseded_by_signal_id=? WHERE signal_id=?",
@@ -5912,15 +5929,22 @@ def _db_stage1e3_latest_assessment_id(company: str, methodology_code: str) -> st
         conn.close()
 
 
-def _db_stage1e3_list_signals(company: str | None = None) -> list[dict]:
+def _db_stage1e3_list_signals(
+    company: str | None = None,
+    *,
+    include_test_only: bool = False,
+) -> list[dict]:
     conn = _db_connect()
     try:
         params = []
-        where = ""
+        clauses = []
         if company:
             rel = _db_relationship_row(conn, company)
-            where = "WHERE os.relationship_id=?"
+            clauses.append("os.relationship_id=?")
             params.append(rel["id"])
+        if not include_test_only:
+            clauses.append("os.test_only=0")
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         rows = conn.execute(
             f"""SELECT os.*, r.name AS relationship_name
                 FROM opportunity_signal os
@@ -5942,6 +5966,7 @@ def _db_stage1e3_list_signals(company: str | None = None) -> list[dict]:
                 "Confidence": r["confidence"],
                 "Rule": f"{r['rule_code']} {r['rule_version']}",
                 "Threshold Config": r["threshold_config_version"],
+                "Test Only": bool(r["test_only"]),
                 "Created": r["created_at"],
             }
             for r in rows
@@ -6033,6 +6058,417 @@ def _db_stage1e3_run_live_safety_gate_test(company: str = "Toyota") -> dict:
         "Safety Gate PASS": before == after and all(not r["Qualifies"] for r in results),
     }
 
+
+# =============================================================================
+# STAGE 1-E.3.8 — FINAL LIVE VALIDATION HARNESS
+# =============================================================================
+
+E3_VALIDATION_COMPANY = "EC-AI E3 Validation Co"
+E3_VALIDATION_RELATIONSHIP_ID = "REL-EC-AI-E3-VALIDATION-CO"
+E3_VALIDATION_CONFIG_VERSION = "E3_VALIDATION_LENDING_2026_10"
+E3_VALIDATION_PUBLICATION_MODE = "E3.8_VALIDATION"
+
+
+def _db_stage1e3_8_ensure_validation_relationship(conn: _DBConnection):
+    row = conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E3_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+    if row is not None:
+        return row
+
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO relationship(
+               relationship_id,name,country,sector,external_rating,outlook,score,
+               attention_rating,primary_driver,recommended_action,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            E3_VALIDATION_RELATIONSHIP_ID,
+            E3_VALIDATION_COMPANY,
+            "SYSTEM",
+            "VALIDATION",
+            None,
+            None,
+            None,
+            None,
+            "E3.8 controlled validation fixture",
+            "Hidden from business UI; do not use for management decisions.",
+            now,
+            now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E3_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+
+
+def _db_stage1e3_8_seed_validation_threshold(conn: _DBConnection):
+    row = conn.execute(
+        """SELECT * FROM opportunity_signal_threshold_config
+           WHERE signal_type=? AND config_version=?""",
+        (E3SignalType.LENDING_WALLET_GAP.value, E3_VALIDATION_CONFIG_VERSION),
+    ).fetchone()
+    if row is not None:
+        return row
+
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO opportunity_signal_threshold_config(
+               config_version,signal_type,base_currency,minimum_gap_base_currency,
+               maximum_penetration,high_gap_base_currency,very_low_penetration,
+               status,test_only,effective_from,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            E3_VALIDATION_CONFIG_VERSION,
+            E3SignalType.LENDING_WALLET_GAP.value,
+            "JPY",
+            50_000_000_000.0,
+            0.50,
+            200_000_000_000.0,
+            0.20,
+            "ACTIVE",
+            0,  # production-like config; explicitly scoped to hidden validation fixture
+            "2026-10-11",
+            now,
+            now,
+        ),
+    )
+    return conn.execute(
+        """SELECT * FROM opportunity_signal_threshold_config
+           WHERE signal_type=? AND config_version=?""",
+        (E3SignalType.LENDING_WALLET_GAP.value, E3_VALIDATION_CONFIG_VERSION),
+    ).fetchone()
+
+
+def _db_stage1e3_8_existing_validation_wallet(conn: _DBConnection):
+    rel = _db_stage1e3_8_ensure_validation_relationship(conn)
+    return conn.execute(
+        """SELECT wa.*
+           FROM wallet_assessment wa
+           JOIN intelligence_methodology im ON im.id=wa.methodology_id
+           WHERE wa.relationship_id=?
+             AND im.methodology_code='STRUCTURAL_LENDING'
+             AND im.version='1.0'
+             AND wa.test_only=0
+             AND wa.publication_mode=?
+           ORDER BY wa.id DESC LIMIT 1""",
+        (rel["id"], E3_VALIDATION_PUBLICATION_MODE),
+    ).fetchone()
+
+
+def _db_stage1e3_8_create_or_reuse_validation_wallet() -> str:
+    # Establish the hidden system relationship and governed validation threshold.
+    with _db_transaction() as conn:
+        _db_stage1e3_8_ensure_validation_relationship(conn)
+        _db_stage1e3_8_seed_validation_threshold(conn)
+        existing = _db_stage1e3_8_existing_validation_wallet(conn)
+        if existing is not None:
+            return existing["assessment_id"]
+
+    # Production-like source economics: 1.0tn capex × 80% debt funding × 75% bank
+    # share = 600bn addressable; comparable capture = 60bn; penetration = 10%;
+    # positive gap = 540bn. The company is synthetic and hidden from business UI.
+    evidence = [
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX,
+            metric_name="Forecast Capex",
+            value_numeric=1_000_000_000_000.0,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E3_VALIDATION_FIXTURE",
+            source_name="EC-AI E3.8 Controlled Validation",
+            source_reference="E3.8-FORECAST-CAPEX",
+            effective_date="2026-10-11",
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E3_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic controlled fixture for positive OpportunitySignal validation only.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX_DEBT_FUNDING_PCT,
+            metric_name="Forecast Capex Debt Funding %",
+            value_numeric=0.80,
+            unit="RATIO",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="E3_VALIDATION_FIXTURE",
+            source_name="EC-AI E3.8 Controlled Validation",
+            source_reference="E3.8-DEBT-FUNDING",
+            effective_date="2026-10-11",
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="E3_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic governed assumption chosen to create a deterministic qualifying wallet.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_BANK_CAPEX_SHARE,
+            metric_name="Forecast Bank Capex Share",
+            value_numeric=0.75,
+            unit="RATIO",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="E3_VALIDATION_FIXTURE",
+            source_name="EC-AI E3.8 Controlled Validation",
+            source_reference="E3.8-BANK-SHARE",
+            effective_date="2026-10-11",
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="E3_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic governed assumption chosen to create a deterministic qualifying wallet.",
+        ),
+        EvidenceItem(
+            metric_code=OUR_BANK_COMPARABLE_COMMITMENT,
+            metric_name="Our Bank Comparable Commitment",
+            value_numeric=60_000_000_000.0,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E3_VALIDATION_FIXTURE",
+            source_name="EC-AI E3.8 Controlled Validation",
+            source_reference="E3.8-CAPTURE",
+            effective_date="2026-10-11",
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E3_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic comparable capture for deterministic signal validation only.",
+        ),
+    ]
+
+    assessment_input = StructuralLendingAssessmentInput(
+        capex=StructuralLendingComponent(
+            base_amount=1_000_000_000_000.0,
+            funding_rate=0.80,
+            bank_share=0.75,
+            economic_perimeter="E3_VALIDATION_GROUP",
+            time_horizon="1Y",
+            currency="JPY",
+            evidence_ids=(
+                "E3.8-FORECAST-CAPEX",
+                "E3.8-DEBT-FUNDING",
+                "E3.8-BANK-SHARE",
+            ),
+            estimation_method="Controlled E3.8 deterministic validation fixture",
+            rationale="Synthetic production-like Structural Lending wallet used only to validate positive signal creation.",
+            confidence="MEDIUM",
+            financing_need_ids=("E3.8-CAPEX-NEED",),
+            assessed=True,
+        ),
+        refinancing=None,
+        capture=StructuralLendingCapture(
+            comparable_commitment=60_000_000_000.0,
+            comparability_status=CaptureComparabilityStatus.COMPARABLE,
+            comparability_reason="Synthetic capture matches wallet perimeter, currency and horizon.",
+            evidence_ids=("E3.8-CAPTURE",),
+            verified_zero=False,
+        ),
+        test_only=False,
+    )
+
+    created = _db_stage1e2_create_structural_assessment(
+        E3_VALIDATION_COMPANY,
+        assessment_input,
+        evidence,
+        effective_date="2026-10-11",
+        currency="JPY",
+        geographic_scope="Global",
+        time_horizon="1Y",
+        actor="E3.8 Validation Harness",
+    )
+    assessment_id = created["Assessment ID"]
+
+    # The normal Stage 1-E.2 persistence path never auto-publishes. For this
+    # dedicated hidden fixture only, promote the already PUBLISH-qualified,
+    # non-test VALIDATED assessment to PUBLISHED after re-checking its gate.
+    with _db_transaction() as conn:
+        row = conn.execute(
+            """SELECT wa.*, r.relationship_id AS relationship_public_id
+               FROM wallet_assessment wa
+               JOIN relationship r ON r.id=wa.relationship_id
+               WHERE wa.assessment_id=?""",
+            (assessment_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("E3.8 validation WalletAssessment disappeared before publication.")
+        if row["relationship_public_id"] != E3_VALIDATION_RELATIONSHIP_ID:
+            raise ValueError("E3.8 validation publication refused outside hidden validation relationship.")
+        if bool(row["test_only"]):
+            raise ValueError("E3.8 validation source must be non-test to exercise the production eligibility gate.")
+        if row["status"] != "VALIDATED" or row["publication_result"] != "PUBLISH":
+            raise ValueError(
+                f"E3.8 validation source is not publication-qualified: "
+                f"{row['status']} / {row['publication_result']}."
+            )
+        qg = json.loads(row["quality_gate_json"] or "{}")
+        if not bool(qg.get("production_publication_allowed")):
+            raise ValueError("E3.8 validation source failed the underlying Wallet publication gate.")
+
+        now = _db_now()
+        conn.execute(
+            """UPDATE wallet_assessment
+               SET status='PUBLISHED',published_at=?,published_by=?,publication_mode=?
+               WHERE assessment_id=?""",
+            (
+                now,
+                "E3.8 Validation Harness",
+                E3_VALIDATION_PUBLICATION_MODE,
+                assessment_id,
+            ),
+        )
+        _db_append_audit(
+            conn,
+            entity_type="WalletAssessment",
+            entity_id=assessment_id,
+            relationship_id=row["relationship_id"],
+            event_type="WALLET_ASSESSMENT_PUBLISHED",
+            actor="E3.8 Validation Harness",
+            payload={
+                "validation_fixture": True,
+                "publication_mode": E3_VALIDATION_PUBLICATION_MODE,
+                "methodology": "STRUCTURAL_LENDING 1.0",
+            },
+        )
+
+    return assessment_id
+
+
+def _db_stage1e3_8_positive_validation() -> dict:
+    assessment_id = _db_stage1e3_8_create_or_reuse_validation_wallet()
+    before = _db_stage1e3_list_signals(
+        E3_VALIDATION_COMPANY,
+        include_test_only=True,
+    )
+
+    result = _db_stage1e3_apply_lifecycle(
+        assessment_id,
+        E3_VALIDATION_CONFIG_VERSION,
+        actor="E3.8 Validation Harness",
+        persistence_test_only=True,
+    )
+
+    after = _db_stage1e3_list_signals(
+        E3_VALIDATION_COMPANY,
+        include_test_only=True,
+    )
+    evaluation = result.get("Evaluation")
+    decision = result.get("Decision")
+    signal_id = result.get("Signal ID")
+
+    return {
+        "Assessment ID": assessment_id,
+        "Assessment Is Production-Like": True,
+        "Signal Persistence Test Only": True,
+        "Eligible": bool(evaluation and evaluation.eligible),
+        "Qualifies": bool(evaluation and evaluation.qualifies),
+        "Signal Type": evaluation.signal_type.value if evaluation and evaluation.signal_type else None,
+        "Decision": decision.action.value if decision else None,
+        "Signal ID": signal_id,
+        "Signals Before": len(before),
+        "Signals After": len(after),
+        "Positive Validation PASS": bool(
+            evaluation
+            and evaluation.eligible
+            and evaluation.qualifies
+            and signal_id
+            and len(after) == max(1, len(before))
+        ),
+    }
+
+
+def _db_stage1e3_8_idempotency_validation() -> dict:
+    assessment_id = _db_stage1e3_8_create_or_reuse_validation_wallet()
+
+    # Ensure the first signal exists.
+    first = _db_stage1e3_apply_lifecycle(
+        assessment_id,
+        E3_VALIDATION_CONFIG_VERSION,
+        actor="E3.8 Validation Harness",
+        persistence_test_only=True,
+    )
+    before = _db_stage1e3_list_signals(
+        E3_VALIDATION_COMPANY,
+        include_test_only=True,
+    )
+
+    second = _db_stage1e3_apply_lifecycle(
+        assessment_id,
+        E3_VALIDATION_CONFIG_VERSION,
+        actor="E3.8 Validation Harness",
+        persistence_test_only=True,
+    )
+    after = _db_stage1e3_list_signals(
+        E3_VALIDATION_COMPANY,
+        include_test_only=True,
+    )
+
+    decision = second.get("Decision")
+    first_signal_id = first.get("Signal ID")
+    second_signal_id = second.get("Signal ID")
+
+    return {
+        "Assessment ID": assessment_id,
+        "First Signal ID": first_signal_id,
+        "Second Signal ID": second_signal_id,
+        "Second Decision": decision.action.value if decision else None,
+        "Signals Before Re-evaluation": len(before),
+        "Signals After Re-evaluation": len(after),
+        "Idempotency PASS": bool(
+            first_signal_id
+            and second_signal_id == first_signal_id
+            and len(after) == len(before)
+            and decision is not None
+            and decision.action == E3LifecycleAction.KEEP_EXISTING
+        ),
+    }
+
+
+def _db_stage1e3_8_validation_summary() -> dict:
+    conn = _db_connect()
+    try:
+        rel = conn.execute(
+            "SELECT * FROM relationship WHERE relationship_id=?",
+            (E3_VALIDATION_RELATIONSHIP_ID,),
+        ).fetchone()
+        if rel is None:
+            return {
+                "Fixture Exists": False,
+                "Assessment": None,
+                "Signals": [],
+            }
+
+        wallet = _db_stage1e3_8_existing_validation_wallet(conn)
+        wallet_summary = None
+        if wallet is not None:
+            wallet_summary = {
+                "Assessment ID": wallet["assessment_id"],
+                "Status": wallet["status"],
+                "Publication Result": wallet["publication_result"],
+                "Test Only": bool(wallet["test_only"]),
+                "Addressable Wallet": wallet["addressable_notional"],
+                "Our Capture": wallet["captured_notional"],
+                "Positive Gap": wallet["positive_wallet_gap"],
+                "Penetration": wallet["notional_penetration"],
+                "Currency": wallet["currency"],
+                "Publication Mode": wallet["publication_mode"],
+            }
+    finally:
+        conn.close()
+
+    return {
+        "Fixture Exists": True,
+        "Assessment": wallet_summary,
+        "Signals": _db_stage1e3_list_signals(
+            E3_VALIDATION_COMPANY,
+            include_test_only=True,
+        ),
+    }
+
+# END STAGE 1-E.3.8 — FINAL LIVE VALIDATION HARNESS
+
 # END STAGE 1-E.3.7 — OPPORTUNITYSIGNAL PERSISTENCE & WALLET LINEAGE
 
 def _db_write_system_metadata():
@@ -6042,11 +6478,11 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.3.7 v0.1",
+        "intelligence_release": "Stage 1-E.3.8 v0.1",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
-        "opportunity_signal_release": "Stage 1-E.3.7 v0.1",
+        "opportunity_signal_release": "Stage 1-E.3.8 v0.1",
         "opportunity_signal_rule_version": "1.0",
     }
     with _db_transaction() as conn:
@@ -7471,7 +7907,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.3.7 · Performance Hotfix v0.2 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.3.8 · Final Live Validation v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -7878,6 +8314,117 @@ def render_stage_1c_sidebar():
                         "Test Threshold Config": result.get("Test Threshold Config"),
                     })
 
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.3.8 · Positive Signal Validation**")
+            st.caption(
+                "Hidden synthetic relationship · production-like PUBLISHED/PUBLISH/non-test WalletAssessment · "
+                "resulting OpportunitySignal is persisted TEST-only so it cannot enter downstream production workflows."
+            )
+
+            if st.button(
+                "Create / Validate E.3.8 Positive OpportunitySignal",
+                key="stage1e3_8_positive_validation",
+                use_container_width=True,
+            ):
+                try:
+                    result = _db_stage1e3_8_positive_validation()
+                    st.session_state["stage1e3_8_positive_result"] = result
+                except Exception as exc:
+                    st.error(f"E.3.8 positive validation failed: {exc}")
+
+            positive = st.session_state.get("stage1e3_8_positive_result")
+            if positive:
+                if positive.get("Positive Validation PASS"):
+                    st.success(
+                        "Positive Validation PASS · eligible production-like WalletAssessment generated exactly one controlled OpportunitySignal."
+                    )
+                else:
+                    st.error("Positive Validation CHECK · inspect the validation result.")
+                st.write(positive)
+
+            try:
+                validation_summary = _db_stage1e3_8_validation_summary()
+            except Exception as exc:
+                validation_summary = None
+                st.error(f"E.3.8 validation summary failed: {exc}")
+
+            if validation_summary and validation_summary.get("Fixture Exists"):
+                st.write({
+                    "Validation Wallet": validation_summary.get("Assessment"),
+                    "Validation Signal Count": len(validation_summary.get("Signals", [])),
+                })
+                validation_signals = validation_summary.get("Signals", [])
+                if validation_signals:
+                    st.dataframe(
+                        pd.DataFrame(validation_signals),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                    validation_signal_id = validation_signals[0]["Signal ID"]
+                    validation_lineage_key = f"stage1e3_8_lineage::{validation_signal_id}"
+                    if st.button(
+                        f"Load {validation_signal_id} E.3.8 Signal Lineage",
+                        key=f"stage1e3_8_load_lineage::{validation_signal_id}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            st.session_state[validation_lineage_key] = _db_stage1e3_signal_lineage(
+                                validation_signal_id
+                            )
+                        except Exception as exc:
+                            st.error(f"E.3.8 lineage load failed: {exc}")
+
+                    validation_lineage = st.session_state.get(validation_lineage_key)
+                    if validation_lineage:
+                        with st.expander(
+                            f"Inspect {validation_signal_id} Signal → Wallet → Calculation → Evidence",
+                            expanded=False,
+                        ):
+                            wallet_lineage = validation_lineage.get("Wallet Assessment Lineage", {})
+                            signal_audits = validation_lineage.get("Signal Audit Events", [])
+                            evidence_count = len(wallet_lineage.get("Evidence", []))
+                            calculation_count = len(wallet_lineage.get("Calculations", []))
+                            signal_audit_events = [a.get("Event", "") for a in signal_audits]
+                            lineage_pass = (
+                                evidence_count >= 4
+                                and calculation_count >= 5
+                                and "OPPORTUNITY_SIGNAL_CREATED" in signal_audit_events
+                                and "OPPORTUNITY_SIGNAL_ACTIVATED" in signal_audit_events
+                            )
+                            st.success(
+                                f"E.3.8 Lineage {'PASS' if lineage_pass else 'CHECK'} · "
+                                f"Evidence {evidence_count} · Calculations {calculation_count} · "
+                                f"Signal Audit Events {len(signal_audits)}"
+                            )
+                            st.write({
+                                "Signal Audit Events": signal_audit_events,
+                                "Source Assessment": validation_lineage.get("Signal", {}).get("Source Assessment"),
+                            })
+                            with st.expander("Full E.3.8 lineage JSON", expanded=False):
+                                st.json(validation_lineage)
+
+            if st.button(
+                "Run E.3.8 Idempotency Re-evaluation",
+                key="stage1e3_8_idempotency_validation",
+                use_container_width=True,
+            ):
+                try:
+                    idem = _db_stage1e3_8_idempotency_validation()
+                    st.session_state["stage1e3_8_idempotency_result"] = idem
+                except Exception as exc:
+                    st.error(f"E.3.8 idempotency validation failed: {exc}")
+
+            idem = st.session_state.get("stage1e3_8_idempotency_result")
+            if idem:
+                if idem.get("Idempotency PASS"):
+                    st.success(
+                        "Idempotency PASS · repeated evaluation returned the same Signal ID and created no duplicate."
+                    )
+                else:
+                    st.error("Idempotency CHECK · inspect the re-evaluation result.")
+                st.write(idem)
+
         if diagnostics_enabled:
             if st.button(
                 "Refresh Stage 1-E Diagnostics",
@@ -7887,7 +8434,12 @@ def render_stage_1c_sidebar():
                 _load_persistent_state_snapshot_cached.clear()
                 _db_validate_persistence_contract.clear()
                 for key in list(st.session_state.keys()):
-                    if key.startswith("stage1e2_structural_lineage::") or key.startswith("stage1e2_cash_lineage::") or key.startswith("stage1e3_signal_lineage::"):
+                    if (
+                        key.startswith("stage1e2_structural_lineage::")
+                        or key.startswith("stage1e2_cash_lineage::")
+                        or key.startswith("stage1e3_signal_lineage::")
+                        or key.startswith("stage1e3_8_lineage::")
+                    ):
                         del st.session_state[key]
                 st.rerun()
 
