@@ -6776,25 +6776,62 @@ def _db_list_execution_history(action_id: str | None = None, conn=None) -> list[
             conn.close()
 
 
-def _refresh_persistent_state_cache():
-    """Hydrate the UI cache from one authoritative SQL snapshot.
-
-    D.3 hydrates ReviewCycle, Relationship, ReviewItem, PortfolioSignal, Decision,
-    ExecutionAction and AuditEvent-backed history from one authoritative SQL snapshot.
-    Session state is only a compatibility/read cache for the locked Stage 1-C.10 UI.
-    """
+def _load_persistent_state_snapshot_uncached() -> dict:
+    """Read the authoritative Stage 1-D application snapshot in one DB session."""
     conn = _db_connect()
     try:
-        cycle = _db_active_review_cycle_contract(conn)
-        relationships = _db_list_relationship_registry(conn)
-        review_items = _db_list_review_items(conn)
-        portfolio_signals = _db_list_portfolio_signals(conn)
-        decisions = _db_list_decisions(conn)
-        actions = _db_list_execution_actions(conn)
-        history = _db_list_execution_history(conn=conn)
-        portfolio_items = _db_list_portfolio_review_items(conn)
+        return {
+            "cycle": _db_active_review_cycle_contract(conn),
+            "relationships": _db_list_relationship_registry(conn),
+            "review_items": _db_list_review_items(conn),
+            "portfolio_signals": _db_list_portfolio_signals(conn),
+            "decisions": _db_list_decisions(conn),
+            "actions": _db_list_execution_actions(conn),
+            "history": _db_list_execution_history(conn=conn),
+            "portfolio_items": _db_list_portfolio_review_items(conn),
+        }
     finally:
         conn.close()
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_persistent_state_snapshot_cached(
+    backend: str,
+    schema_version: int,
+    database_identity: str,
+) -> dict:
+    """Short-lived read cache used for ordinary Streamlit navigation reruns.
+
+    All mutation paths explicitly clear this cache before rehydrating state, so
+    Decisions / Execution / Portfolio actions remain immediately consistent.
+    """
+    return _load_persistent_state_snapshot_uncached()
+
+
+def _refresh_persistent_state_cache(*, force: bool = False):
+    """Hydrate the locked Stage 1-C UI from the authoritative SQL snapshot.
+
+    Ordinary page navigation reuses a short-lived read-only snapshot instead of
+    reopening PostgreSQL and rereading every persistence object on every rerun.
+    Real writes call ``force=True`` to invalidate the cache immediately.
+    """
+    if force:
+        _load_persistent_state_snapshot_cached.clear()
+
+    snapshot = _load_persistent_state_snapshot_cached(
+        ECAI_DB_BACKEND,
+        ECAI_SCHEMA_VERSION,
+        _db_database_identity(),
+    )
+
+    cycle = snapshot["cycle"]
+    relationships = snapshot["relationships"]
+    review_items = snapshot["review_items"]
+    portfolio_signals = snapshot["portfolio_signals"]
+    decisions = snapshot["decisions"]
+    actions = snapshot["actions"]
+    history = snapshot["history"]
+    portfolio_items = snapshot["portfolio_items"]
 
     st.session_state.review_cycle = cycle["Review Cycle"]
     st.session_state.review_cycle_contract = cycle
@@ -6803,7 +6840,9 @@ def _refresh_persistent_state_cache():
     st.session_state.portfolio_signal_registry = portfolio_signals
     st.session_state.decision_history = decisions
     st.session_state.execution_actions = actions
-    st.session_state.decision_execution_actions = [a for a in actions if a.get("Source") == "Management Decision"]
+    st.session_state.decision_execution_actions = [
+        a for a in actions if a.get("Source") == "Management Decision"
+    ]
     st.session_state.execution_history = history
     st.session_state.portfolio_review_items = portfolio_items
 
@@ -6928,7 +6967,7 @@ def _db_record_management_decision(
                 },
             )
 
-    _refresh_persistent_state_cache()
+    _refresh_persistent_state_cache(force=True)
     # Return the same Stage 1-C dictionary contract so the UI does not change.
     return next(r for r in st.session_state.decision_history if r["Decision ID"] == decision_id)
 
@@ -7073,7 +7112,7 @@ def _db_update_execution(
                     payload={"execution_action_id": action_id, "outcome_status": outcome_status},
                 )
 
-    _refresh_persistent_state_cache()
+    _refresh_persistent_state_cache(force=True)
     return next(a for a in st.session_state.execution_actions if a["Execution Action ID"] == action_id)
 
 
@@ -7111,6 +7150,7 @@ def _execution_history_df(action_id=None):
         return pd.DataFrame()
     return pd.DataFrame(history).iloc[::-1].reset_index(drop=True)
 
+@st.cache_data(ttl=60, show_spinner=False)
 def _db_validate_persistence_contract() -> dict:
     """Validate the Stage 1-D.3.2 production persistence contract.
 
@@ -7431,7 +7471,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.3.7 · Test Candidate v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.3.7 · Performance Hotfix v0.2 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -7486,6 +7526,17 @@ def render_stage_1c_sidebar():
     # This control surface is intentionally isolated from Stage 1-C.10 product UI.
     with st.sidebar.expander("🧪 Stage 1-E Test Controls", expanded=False):
         st.caption("Test branch only · Toyota fixture · no automatic publication")
+        diagnostics_enabled = st.checkbox(
+            "Load persistence diagnostics",
+            value=False,
+            key="stage1e_load_persistence_diagnostics",
+            help=(
+                "Off by default for fast page navigation. Enable only when inspecting "
+                "Wallet / OpportunitySignal persistence and lineage."
+            ),
+        )
+        if not diagnostics_enabled:
+            st.caption("Diagnostics paused · database lineage queries are not run during normal navigation.")
 
         if st.button(
             "Create Toyota Lending Test Assessment",
@@ -7510,7 +7561,7 @@ def render_stage_1c_sidebar():
                 st.error(f"Toyota test creation failed: {exc}")
 
         last_assessment_id = st.session_state.get("stage1e_last_test_assessment_id")
-        if last_assessment_id:
+        if diagnostics_enabled and last_assessment_id:
             try:
                 snapshot = _db_stage1e_get_assessment(last_assessment_id)
             except Exception as exc:
@@ -7582,64 +7633,71 @@ def render_stage_1c_sidebar():
             except Exception as exc:
                 st.error(f"Structural Lending persistence test failed: {exc}")
 
-        try:
-            structural_latest = _db_stage1e2_latest_assessment("Toyota")
-        except Exception as exc:
-            structural_latest = None
-            st.error(f"Structural assessment reload failed: {exc}")
+        if diagnostics_enabled:
+            try:
+                structural_latest = _db_stage1e2_latest_assessment("Toyota")
+            except Exception as exc:
+                structural_latest = None
+                st.error(f"Structural assessment reload failed: {exc}")
 
-        if structural_latest:
-            st.caption(f"Latest Structural Lending assessment: {structural_latest.get('Assessment ID')}")
-            st.write({
-                "Status": structural_latest.get("Status"),
-                "Publication Result": structural_latest.get("Publication Result"),
-                "Wallet Coverage": structural_latest.get("Wallet Coverage"),
-                "Addressable Notional": structural_latest.get("Addressable Notional"),
-                "Currency": structural_latest.get("Currency"),
-                "Confidence": structural_latest.get("Confidence"),
-                "Test Only": structural_latest.get("Test Only"),
-            })
-            st.info("TEST-only Structural Lending assessments cannot be published. WAL-0001 remains untouched.")
+            if structural_latest:
+                structural_id = structural_latest.get("Assessment ID")
+                st.caption(f"Latest Structural Lending assessment: {structural_id}")
+                st.write({
+                    "Status": structural_latest.get("Status"),
+                    "Publication Result": structural_latest.get("Publication Result"),
+                    "Wallet Coverage": structural_latest.get("Wallet Coverage"),
+                    "Addressable Notional": structural_latest.get("Addressable Notional"),
+                    "Currency": structural_latest.get("Currency"),
+                    "Confidence": structural_latest.get("Confidence"),
+                    "Test Only": structural_latest.get("Test Only"),
+                })
+                st.info("TEST-only Structural Lending assessments cannot be published. WAL-0001 remains untouched.")
 
-            with st.expander(
-                f"Inspect {structural_latest.get('Assessment ID')} Evidence / Calculation / Audit Lineage",
-                expanded=False,
-            ):
-                try:
-                    lineage = _db_stage1e2_get_lineage(structural_latest.get("Assessment ID"))
-                    st.caption("Read-only diagnostic view. No database values are changed.")
+                structural_lineage_key = f"stage1e2_structural_lineage::{structural_id}"
+                if st.button(
+                    f"Load {structural_id} Structural Lineage",
+                    key=f"stage1e2_load_structural_lineage::{structural_id}",
+                    use_container_width=True,
+                ):
+                    try:
+                        st.session_state[structural_lineage_key] = _db_stage1e2_get_lineage(structural_id)
+                    except Exception as exc:
+                        st.error(f"Lineage inspection failed: {exc}")
 
-                    evidence_count = len(lineage.get("Evidence", []))
-                    calculation_count = len(lineage.get("Calculations", []))
-                    audit_count = len(lineage.get("Audit Events", []))
-                    evidence_ids = lineage.get("Assessment", {}).get("Evidence IDs", [])
-                    calculation_ids = lineage.get("Assessment", {}).get("Calculation IDs", [])
-                    audit_events = [x.get("Event", "") for x in lineage.get("Audit Events", [])]
-
-                    expected_audits = {
-                        "STRUCTURAL_LENDING_ASSESSMENT_CREATED",
-                        "STRUCTURAL_LENDING_ASSESSMENT_VALIDATED",
-                    }
-                    lineage_pass = (
-                        evidence_count >= 3
-                        and calculation_count >= 2
-                        and expected_audits.issubset(set(audit_events))
-                    )
-
-                    st.success(
-                        f"Lineage {'PASS' if lineage_pass else 'CHECK'} · "
-                        f"Evidence {evidence_count} · Calculations {calculation_count} · Audit Events {audit_count}"
-                    )
-                    st.write({
-                        "Evidence IDs": evidence_ids,
-                        "Calculation IDs": calculation_ids,
-                        "Audit Events": audit_events,
-                    })
-
-                    with st.expander("Full lineage JSON", expanded=False):
-                        st.json(lineage)
-                except Exception as exc:
-                    st.error(f"Lineage inspection failed: {exc}")
+                lineage = st.session_state.get(structural_lineage_key)
+                if lineage:
+                    with st.expander(
+                        f"Inspect {structural_id} Evidence / Calculation / Audit Lineage",
+                        expanded=False,
+                    ):
+                        st.caption("Cached read-only diagnostic view. No database values are changed.")
+                        evidence_count = len(lineage.get("Evidence", []))
+                        calculation_count = len(lineage.get("Calculations", []))
+                        audit_count = len(lineage.get("Audit Events", []))
+                        evidence_ids = lineage.get("Assessment", {}).get("Evidence IDs", [])
+                        calculation_ids = lineage.get("Assessment", {}).get("Calculation IDs", [])
+                        audit_events = [x.get("Event", "") for x in lineage.get("Audit Events", [])]
+                        expected_audits = {
+                            "STRUCTURAL_LENDING_ASSESSMENT_CREATED",
+                            "STRUCTURAL_LENDING_ASSESSMENT_VALIDATED",
+                        }
+                        lineage_pass = (
+                            evidence_count >= 3
+                            and calculation_count >= 2
+                            and expected_audits.issubset(set(audit_events))
+                        )
+                        st.success(
+                            f"Lineage {'PASS' if lineage_pass else 'CHECK'} · "
+                            f"Evidence {evidence_count} · Calculations {calculation_count} · Audit Events {audit_count}"
+                        )
+                        st.write({
+                            "Evidence IDs": evidence_ids,
+                            "Calculation IDs": calculation_ids,
+                            "Audit Events": audit_events,
+                        })
+                        with st.expander("Full lineage JSON", expanded=False):
+                            st.json(lineage)
 
         st.markdown("---")
         st.markdown("**Stage 1-E.2B · Cash & Liquidity Wallet v1.0**")
@@ -7672,91 +7730,117 @@ def render_stage_1c_sidebar():
             except Exception as exc:
                 st.error(f"Cash & Liquidity persistence test failed: {exc}")
 
-        try:
-            cash_latest = _db_stage1e2b_latest_assessment("Toyota")
-        except Exception as exc:
-            cash_latest = None
-            st.error(f"Cash & Liquidity assessment reload failed: {exc}")
+        if diagnostics_enabled:
+            try:
+                cash_latest = _db_stage1e2b_latest_assessment("Toyota")
+            except Exception as exc:
+                cash_latest = None
+                st.error(f"Cash & Liquidity assessment reload failed: {exc}")
 
-        if cash_latest:
-            st.caption(f"Latest Cash & Liquidity assessment: {cash_latest.get('Assessment ID')}")
-            st.write({
-                "Status": cash_latest.get("Status"),
-                "Publication Result": cash_latest.get("Publication Result"),
-                "Scope": cash_latest.get("Wallet Scope"),
-                "Relevant Cash Pool": cash_latest.get("Relevant Cash Pool"),
-                "Forecast Bankable Liquidity Share": cash_latest.get("Forecast Bankable Liquidity Share"),
-                "Addressable Liquidity": cash_latest.get("Addressable Notional"),
-                "Currency": cash_latest.get("Currency"),
-                "Liquidity Time Basis": cash_latest.get("Liquidity Time Basis"),
-                "Capture Status": cash_latest.get("Capture Component Status"),
-                "Confidence": cash_latest.get("Confidence"),
-                "Test Only": cash_latest.get("Test Only"),
-            })
-            st.info("TEST-only Cash & Liquidity assessments cannot be published and do not supersede Lending assessments.")
+            if cash_latest:
+                cash_id = cash_latest.get("Assessment ID")
+                st.caption(f"Latest Cash & Liquidity assessment: {cash_id}")
+                st.write({
+                    "Status": cash_latest.get("Status"),
+                    "Publication Result": cash_latest.get("Publication Result"),
+                    "Scope": cash_latest.get("Wallet Scope"),
+                    "Relevant Cash Pool": cash_latest.get("Relevant Cash Pool"),
+                    "Forecast Bankable Liquidity Share": cash_latest.get("Forecast Bankable Liquidity Share"),
+                    "Addressable Liquidity": cash_latest.get("Addressable Notional"),
+                    "Currency": cash_latest.get("Currency"),
+                    "Liquidity Time Basis": cash_latest.get("Liquidity Time Basis"),
+                    "Capture Status": cash_latest.get("Capture Component Status"),
+                    "Confidence": cash_latest.get("Confidence"),
+                    "Test Only": cash_latest.get("Test Only"),
+                })
+                st.info("TEST-only Cash & Liquidity assessments cannot be published and do not supersede Lending assessments.")
 
-            with st.expander(
-                f"Inspect {cash_latest.get('Assessment ID')} Cash Evidence / Calculation / Audit Lineage",
-                expanded=False,
-            ):
-                try:
-                    lineage = _db_stage1e2_get_lineage(cash_latest.get("Assessment ID"))
-                    st.caption("Read-only diagnostic view. No database values are changed.")
-                    evidence_count = len(lineage.get("Evidence", []))
-                    calculation_count = len(lineage.get("Calculations", []))
-                    audit_count = len(lineage.get("Audit Events", []))
-                    evidence_ids = lineage.get("Assessment", {}).get("Evidence IDs", [])
-                    calculation_ids = lineage.get("Assessment", {}).get("Calculation IDs", [])
-                    audit_events = [x.get("Event", "") for x in lineage.get("Audit Events", [])]
-                    expected_audits = {
-                        "CASH_LIQUIDITY_ASSESSMENT_CREATED",
-                        "CASH_LIQUIDITY_ASSESSMENT_VALIDATED",
-                    }
-                    lineage_pass = (
-                        evidence_count >= 2
-                        and calculation_count >= 1
-                        and expected_audits.issubset(set(audit_events))
-                    )
-                    st.success(
-                        f"Lineage {'PASS' if lineage_pass else 'CHECK'} · "
-                        f"Evidence {evidence_count} · Calculations {calculation_count} · Audit Events {audit_count}"
-                    )
-                    st.write({
-                        "Evidence IDs": evidence_ids,
-                        "Calculation IDs": calculation_ids,
-                        "Audit Events": audit_events,
-                    })
-                    with st.expander("Full Cash & Liquidity lineage JSON", expanded=False):
-                        st.json(lineage)
-                except Exception as exc:
-                    st.error(f"Cash & Liquidity lineage inspection failed: {exc}")
+                cash_lineage_key = f"stage1e2_cash_lineage::{cash_id}"
+                if st.button(
+                    f"Load {cash_id} Cash Lineage",
+                    key=f"stage1e2_load_cash_lineage::{cash_id}",
+                    use_container_width=True,
+                ):
+                    try:
+                        st.session_state[cash_lineage_key] = _db_stage1e2_get_lineage(cash_id)
+                    except Exception as exc:
+                        st.error(f"Cash & Liquidity lineage inspection failed: {exc}")
+
+                lineage = st.session_state.get(cash_lineage_key)
+                if lineage:
+                    with st.expander(
+                        f"Inspect {cash_id} Cash Evidence / Calculation / Audit Lineage",
+                        expanded=False,
+                    ):
+                        st.caption("Cached read-only diagnostic view. No database values are changed.")
+                        evidence_count = len(lineage.get("Evidence", []))
+                        calculation_count = len(lineage.get("Calculations", []))
+                        audit_count = len(lineage.get("Audit Events", []))
+                        evidence_ids = lineage.get("Assessment", {}).get("Evidence IDs", [])
+                        calculation_ids = lineage.get("Assessment", {}).get("Calculation IDs", [])
+                        audit_events = [x.get("Event", "") for x in lineage.get("Audit Events", [])]
+                        expected_audits = {
+                            "CASH_LIQUIDITY_ASSESSMENT_CREATED",
+                            "CASH_LIQUIDITY_ASSESSMENT_VALIDATED",
+                        }
+                        lineage_pass = (
+                            evidence_count >= 2
+                            and calculation_count >= 1
+                            and expected_audits.issubset(set(audit_events))
+                        )
+                        st.success(
+                            f"Lineage {'PASS' if lineage_pass else 'CHECK'} · "
+                            f"Evidence {evidence_count} · Calculations {calculation_count} · Audit Events {audit_count}"
+                        )
+                        st.write({
+                            "Evidence IDs": evidence_ids,
+                            "Calculation IDs": calculation_ids,
+                            "Audit Events": audit_events,
+                        })
+                        with st.expander("Full Cash & Liquidity lineage JSON", expanded=False):
+                            st.json(lineage)
 
         st.markdown("---")
         st.markdown("**Stage 1-E.3 · Opportunity Signal Architecture v1.0**")
         st.caption("Deterministic signal layer · PUBLISHED/PUBLISH/non-test firewall · controlled test thresholds only")
 
-        try:
-            opportunity_signals = _db_stage1e3_list_signals("Toyota")
-            current_signal_count = len([
-                s for s in opportunity_signals if s.get("Status") in ("ACTIVE", "MONITORING", "SUPPRESSED")
-            ])
-            st.write({
-                "Persisted Opportunity Signals": len(opportunity_signals),
-                "Current Signal States": current_signal_count,
-                "Supported Methodologies": ["STRUCTURAL_LENDING 1.0", "CASH_LIQUIDITY_WALLET 1.0"],
-            })
-            if opportunity_signals:
-                st.dataframe(pd.DataFrame(opportunity_signals), use_container_width=True, hide_index=True)
-                inspect_signal_id = opportunity_signals[0]["Signal ID"]
-                with st.expander(f"Inspect {inspect_signal_id} Signal → Wallet → Calculation → Evidence Lineage", expanded=False):
-                    st.json(_db_stage1e3_signal_lineage(inspect_signal_id))
-            else:
-                st.info(
-                    "No OpportunitySignals are expected yet. Current Structural Lending and Cash assessments "
-                    "are controlled VALIDATED / HOLD / TEST-only records and are intentionally ineligible."
-                )
-        except Exception as exc:
-            st.error(f"OpportunitySignal reload failed: {exc}")
+        if diagnostics_enabled:
+            try:
+                opportunity_signals = _db_stage1e3_list_signals("Toyota")
+                current_signal_count = len([
+                    s for s in opportunity_signals if s.get("Status") in ("ACTIVE", "MONITORING", "SUPPRESSED")
+                ])
+                st.write({
+                    "Persisted Opportunity Signals": len(opportunity_signals),
+                    "Current Signal States": current_signal_count,
+                    "Supported Methodologies": ["STRUCTURAL_LENDING 1.0", "CASH_LIQUIDITY_WALLET 1.0"],
+                })
+                if opportunity_signals:
+                    st.dataframe(pd.DataFrame(opportunity_signals), use_container_width=True, hide_index=True)
+                    inspect_signal_id = opportunity_signals[0]["Signal ID"]
+                    signal_lineage_key = f"stage1e3_signal_lineage::{inspect_signal_id}"
+                    if st.button(
+                        f"Load {inspect_signal_id} Signal Lineage",
+                        key=f"stage1e3_load_signal_lineage::{inspect_signal_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[signal_lineage_key] = _db_stage1e3_signal_lineage(inspect_signal_id)
+                    signal_lineage = st.session_state.get(signal_lineage_key)
+                    if signal_lineage:
+                        with st.expander(
+                            f"Inspect {inspect_signal_id} Signal → Wallet → Calculation → Evidence Lineage",
+                            expanded=False,
+                        ):
+                            st.json(signal_lineage)
+                else:
+                    st.info(
+                        "No OpportunitySignals are expected yet. Current Structural Lending and Cash assessments "
+                        "are controlled VALIDATED / HOLD / TEST-only records and are intentionally ineligible."
+                    )
+            except Exception as exc:
+                st.error(f"OpportunitySignal reload failed: {exc}")
+        else:
+            st.caption("OpportunitySignal persistence summary paused during normal navigation.")
 
         if st.button(
             "Run E.3 Opportunity Signal Safety Gate Test",
@@ -7765,16 +7849,23 @@ def render_stage_1c_sidebar():
         ):
             try:
                 gate = _db_stage1e3_run_live_safety_gate_test("Toyota")
-                if gate.get("Safety Gate PASS"):
-                    st.success(
-                        "Safety Gate PASS · controlled Wallet test assessments generated 0 OpportunitySignals."
-                    )
-                else:
-                    st.error("Safety Gate CHECK · review OpportunitySignal eligibility results.")
-                st.write({
-                    "Signals Before": gate.get("Signals Before"),
-                    "Signals After": gate.get("Signals After"),
-                })
+                st.session_state["stage1e3_last_safety_gate"] = gate
+            except Exception as exc:
+                st.error(f"Opportunity Signal safety gate test failed: {exc}")
+
+        gate = st.session_state.get("stage1e3_last_safety_gate")
+        if gate:
+            if gate.get("Safety Gate PASS"):
+                st.success(
+                    "Safety Gate PASS · controlled Wallet test assessments generated 0 OpportunitySignals."
+                )
+            else:
+                st.error("Safety Gate CHECK · review OpportunitySignal eligibility results.")
+            st.write({
+                "Signals Before": gate.get("Signals Before"),
+                "Signals After": gate.get("Signals After"),
+            })
+            if diagnostics_enabled:
                 for result in gate.get("Results", []):
                     st.write({
                         "Assessment ID": result.get("Assessment ID"),
@@ -7786,27 +7877,38 @@ def render_stage_1c_sidebar():
                         "Eligibility Reasons": result.get("Eligibility Reasons"),
                         "Test Threshold Config": result.get("Test Threshold Config"),
                     })
+
+        if diagnostics_enabled:
+            if st.button(
+                "Refresh Stage 1-E Diagnostics",
+                key="stage1e_refresh_diagnostics",
+                use_container_width=True,
+            ):
+                _load_persistent_state_snapshot_cached.clear()
+                _db_validate_persistence_contract.clear()
+                for key in list(st.session_state.keys()):
+                    if key.startswith("stage1e2_structural_lineage::") or key.startswith("stage1e2_cash_lineage::") or key.startswith("stage1e3_signal_lineage::"):
+                        del st.session_state[key]
+                st.rerun()
+
+            try:
+                current = _db_stage1e_current_assessment("Toyota")
             except Exception as exc:
-                st.error(f"Opportunity Signal safety gate test failed: {exc}")
+                current = None
+                st.error(f"Current assessment lookup failed: {exc}")
 
-        try:
-            current = _db_stage1e_current_assessment("Toyota")
-        except Exception as exc:
-            current = None
-            st.error(f"Current assessment lookup failed: {exc}")
-
-        if current:
-            st.markdown("**Current published Toyota Lending assessment**")
-            st.write({
-                "Assessment ID": current.get("Assessment ID"),
-                "Status": current.get("Status"),
-                "Addressable Notional": current.get("Addressable Notional"),
-                "Currency": current.get("Currency"),
-                "Confidence": current.get("Confidence"),
-                "Published": current.get("Published"),
-            })
-        else:
-            st.caption("No current published Toyota Lending assessment.")
+            if current:
+                st.markdown("**Current published Toyota Lending assessment**")
+                st.write({
+                    "Assessment ID": current.get("Assessment ID"),
+                    "Status": current.get("Status"),
+                    "Addressable Notional": current.get("Addressable Notional"),
+                    "Currency": current.get("Currency"),
+                    "Confidence": current.get("Confidence"),
+                    "Published": current.get("Published"),
+                })
+            else:
+                st.caption("No current published Toyota Lending assessment.")
 
     return selected_key
 
