@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.3.8 Final Live Validation Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.4.8 ChangeEvent Persistence & App Integration Candidate v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1468,9 +1468,9 @@ ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 8
-ECAI_PERSISTENCE_RUNTIME_VERSION = 9  # E.3.8: OpportunitySignal final live validation
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.3.8 OpportunitySignal Final Live Validation Candidate v0.1"
+ECAI_SCHEMA_VERSION = 9
+ECAI_PERSISTENCE_RUNTIME_VERSION = 10  # E.4.8: ChangeEvent persistence integration
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.4.8 ChangeEvent Persistence & App Integration Candidate v0.1"
 
 
 def _db_now() -> str:
@@ -2317,6 +2317,7 @@ def _db_init_schema_uncached():
             conn.executescript(schema)
             _db_stage1e2_migrate_wallet_assessment_columns(conn)
             _db_stage1e3_migrate_schema(conn)
+            _db_stage1e4_migrate_schema(conn)
             if conn.backend == "sqlite":
                 conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
             conn.commit()
@@ -2427,7 +2428,7 @@ def _db_list_relationship_registry(conn: _DBConnection | None = None) -> list[di
                       score,attention_rating,primary_driver,recommended_action,
                       created_at,updated_at
                FROM relationship
-               WHERE relationship_id <> 'REL-EC-AI-E3-VALIDATION-CO'
+               WHERE relationship_id NOT IN ('REL-EC-AI-E3-VALIDATION-CO','REL-EC-AI-E4-VALIDATION-CO')
                ORDER BY id"""
         ).fetchall()
         return [
@@ -5448,6 +5449,1497 @@ def _stage1e3_decide_signal_lifecycle(
     )
 
 
+
+# =============================================================================
+# STAGE 1-E.4.7 — DETERMINISTIC CHANGE / EVENT ENGINE v1.0 (LOCKED)
+# Embedded with E4-prefixed symbols for Stage 1-E.4.8 persistence integration.
+# No Streamlit or database side effects exist in this engine section.
+# =============================================================================
+
+from dataclasses import asdict, dataclass, field
+from datetime import date
+from enum import Enum
+from hashlib import sha256
+import json
+from typing import Optional
+
+
+E4_RULE_VERSION = "1.0"
+
+
+class E4ObjectKind(str, Enum):
+    CHANGE = "CHANGE"
+    EVENT = "EVENT"
+
+
+class E4ChangeType(str, Enum):
+    WALLET_SIZE_CHANGE = "WALLET_SIZE_CHANGE"
+    WALLET_GAP_CHANGE = "WALLET_GAP_CHANGE"
+    PENETRATION_CHANGE = "PENETRATION_CHANGE"
+    CAPTURE_CHANGE = "CAPTURE_CHANGE"
+
+
+class E4EventType(str, Enum):
+    DEBT_MATURITY = "DEBT_MATURITY"
+    FACILITY_MATURITY = "FACILITY_MATURITY"
+    CAPEX_ANNOUNCEMENT = "CAPEX_ANNOUNCEMENT"
+    ACQUISITION_EVENT = "ACQUISITION_EVENT"
+    FINANCING_EVENT = "FINANCING_EVENT"
+    ASSET_DISPOSAL_EVENT = "ASSET_DISPOSAL_EVENT"
+    LIQUIDITY_INFLOW_EVENT = "LIQUIDITY_INFLOW_EVENT"
+    LIQUIDITY_OUTFLOW_EVENT = "LIQUIDITY_OUTFLOW_EVENT"
+    TREASURY_EVENT = "TREASURY_EVENT"
+
+
+class E4ChangeStatus(str, Enum):
+    RECORDED = "RECORDED"
+    SUPERSEDED = "SUPERSEDED"
+    INVALIDATED = "INVALIDATED"
+
+
+class E4EventStatus(str, Enum):
+    ANNOUNCED = "ANNOUNCED"
+    SCHEDULED = "SCHEDULED"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class E4MaterialityResult(str, Enum):
+    MATERIAL = "MATERIAL"
+    NOT_MATERIAL = "NOT_MATERIAL"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class E4TemporalState(str, Enum):
+    IMMEDIATE = "IMMEDIATE"
+    NEAR_TERM = "NEAR_TERM"
+    FORWARD = "FORWARD"
+    LONG_DATED = "LONG_DATED"
+    RECENTLY_OCCURRED = "RECENTLY_OCCURRED"
+    HISTORICAL = "HISTORICAL"
+    INACTIVE = "INACTIVE"
+    UNKNOWN = "UNKNOWN"
+
+
+class E4Direction(str, Enum):
+    INCREASE = "INCREASE"
+    DECREASE = "DECREASE"
+    UNCHANGED = "UNCHANGED"
+    MIXED = "MIXED"
+    UNKNOWN = "UNKNOWN"
+
+
+class E4ConfidenceLevel(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class E4ComparabilityStatus(str, Enum):
+    COMPARABLE = "COMPARABLE"
+    NOT_COMPARABLE = "NOT_COMPARABLE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class E4AmountStatus(str, Enum):
+    DISCLOSED = "DISCLOSED"
+    ESTIMATED = "ESTIMATED"
+    RANGE = "RANGE"
+    UNKNOWN = "UNKNOWN"
+
+
+class E4DatePrecision(str, Enum):
+    DAY = "DAY"
+    MONTH = "MONTH"
+    QUARTER = "QUARTER"
+    YEAR = "YEAR"
+    RANGE = "RANGE"
+    UNKNOWN = "UNKNOWN"
+
+
+class E4LifecycleAction(str, Enum):
+    CREATE = "CREATE"
+    KEEP_EXISTING = "KEEP_EXISTING"
+    UPDATE_LIFECYCLE = "UPDATE_LIFECYCLE"
+    SUPERSEDE_AND_CREATE = "SUPERSEDE_AND_CREATE"
+    NO_ACTION = "NO_ACTION"
+
+
+E4_CONFIDENCE_RANK = {
+    E4ConfidenceLevel.LOW: 1,
+    E4ConfidenceLevel.MEDIUM: 2,
+    E4ConfidenceLevel.HIGH: 3,
+}
+
+
+@dataclass(frozen=True)
+class E4GovernedFXBasis:
+    base_currency: str
+    fx_method: str
+    fx_effective_date: str
+    rates_to_base: dict[str, float]
+
+    def rate_for(self, source_currency: Optional[str]) -> Optional[float]:
+        if not source_currency:
+            return None
+        if source_currency.casefold() == self.base_currency.casefold():
+            return 1.0
+        for ccy, rate in self.rates_to_base.items():
+            if ccy.casefold() == source_currency.casefold():
+                return float(rate)
+        return None
+
+
+@dataclass(frozen=True)
+class E4WalletStateInput:
+    assessment_id: str
+    relationship_id: str
+    methodology_code: str
+    methodology_version: str
+    assessment_status: str
+    publication_result: str
+    test_only: bool
+    invalidated: bool
+    confidence: E4ConfidenceLevel
+    evidence_ids: tuple[str, ...]
+    calculation_ids: tuple[str, ...]
+    blocking_quality_issues: tuple[str, ...] = ()
+    currency: Optional[str] = None
+    economic_perimeter: Optional[str] = None
+    geographic_scope: Optional[str] = None
+    time_horizon: Optional[str] = None
+    time_basis: Optional[str] = None
+    wallet_coverage: Optional[str] = None
+    addressable_wallet: Optional[float] = None
+    positive_gap: Optional[float] = None
+    penetration: Optional[float] = None
+    our_capture: Optional[float] = None
+    capture_component_complete: bool = False
+    capture_comparability_status: E4ComparabilityStatus = E4ComparabilityStatus.NOT_ASSESSED
+    capex_addressable_notional: Optional[float] = None
+    refinancing_addressable_notional: Optional[float] = None
+    source_as_of: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class E4ChangeMaterialityConfig:
+    config_version: str
+    base_currency: str
+    absolute_thresholds: dict[str, float]
+    relative_thresholds: dict[str, float]
+    penetration_pp_threshold: Optional[float] = None
+
+    def validate(self) -> tuple[bool, tuple[str, ...]]:
+        issues: list[str] = []
+        if not self.config_version:
+            issues.append("CHANGE_CONFIG_VERSION_MISSING")
+        if not self.base_currency:
+            issues.append("CHANGE_BASE_CURRENCY_MISSING")
+        for key, value in self.absolute_thresholds.items():
+            if value < 0:
+                issues.append(f"CHANGE_ABSOLUTE_THRESHOLD_INVALID:{key}")
+        for key, value in self.relative_thresholds.items():
+            if value < 0:
+                issues.append(f"CHANGE_RELATIVE_THRESHOLD_INVALID:{key}")
+        if self.penetration_pp_threshold is not None and self.penetration_pp_threshold < 0:
+            issues.append("CHANGE_PP_THRESHOLD_INVALID")
+        return (not issues, tuple(issues))
+
+
+@dataclass
+class E4ChangeCandidate:
+    relationship_id: str
+    change_type: E4ChangeType
+    metric_code: str
+    metric_scope: str
+    previous_assessment_id: str
+    current_assessment_id: str
+    previous_value: float
+    current_value: float
+    absolute_change: Optional[float]
+    relative_change: Optional[float]
+    percentage_point_change: Optional[float]
+    direction: E4Direction
+    currency: Optional[str]
+    wallet_coverage: Optional[str]
+    materiality_result: E4MaterialityResult
+    confidence: E4ConfidenceLevel
+    reason_codes: tuple[str, ...]
+    rule_code: str
+    rule_version: str
+    threshold_config_version: str
+    threshold_snapshot: dict
+    fx_rate_to_base: Optional[float]
+    fx_effective_date: Optional[str]
+    fx_method: Optional[str]
+    current_source_as_of: Optional[str]
+    idempotency_key: str
+
+    def to_dict(self) -> dict:
+        out = asdict(self)
+        out["change_type"] = self.change_type.value
+        out["direction"] = self.direction.value
+        out["materiality_result"] = self.materiality_result.value
+        out["confidence"] = self.confidence.value
+        return out
+
+
+@dataclass
+class E4ChangeEvaluation:
+    change_type: E4ChangeType
+    metric_scope: str
+    comparability_status: E4ComparabilityStatus
+    detected: bool
+    materiality_result: E4MaterialityResult
+    reason_codes: tuple[str, ...] = ()
+    candidate: Optional[E4ChangeCandidate] = None
+
+
+@dataclass(frozen=True)
+class E4EventMaterialityConfig:
+    config_version: str
+    base_currency: str
+    absolute_thresholds: dict[str, float]
+    qualitative_material_types: tuple[E4EventType, ...] = ()
+
+    def validate(self) -> tuple[bool, tuple[str, ...]]:
+        issues: list[str] = []
+        if not self.config_version:
+            issues.append("EVENT_CONFIG_VERSION_MISSING")
+        if not self.base_currency:
+            issues.append("EVENT_BASE_CURRENCY_MISSING")
+        for key, value in self.absolute_thresholds.items():
+            if value < 0:
+                issues.append(f"EVENT_ABSOLUTE_THRESHOLD_INVALID:{key}")
+        return (not issues, tuple(issues))
+
+
+@dataclass(frozen=True)
+class E4TemporalRuleConfig:
+    config_version: str
+    timezone_basis: str
+    immediate_days: int
+    near_term_days: int
+    forward_days: int
+    post_event_relevance_days: int
+    recent_change_days: int
+
+    def validate(self) -> tuple[bool, tuple[str, ...]]:
+        issues: list[str] = []
+        if not self.config_version:
+            issues.append("TEMPORAL_CONFIG_VERSION_MISSING")
+        if not self.timezone_basis:
+            issues.append("TEMPORAL_TIMEZONE_BASIS_MISSING")
+        values = (
+            self.immediate_days,
+            self.near_term_days,
+            self.forward_days,
+            self.post_event_relevance_days,
+            self.recent_change_days,
+        )
+        if any(v < 0 for v in values):
+            issues.append("TEMPORAL_WINDOW_NEGATIVE")
+        if not (self.immediate_days <= self.near_term_days <= self.forward_days):
+            issues.append("TEMPORAL_WINDOWS_NOT_ORDERED")
+        return (not issues, tuple(issues))
+
+
+@dataclass(frozen=True)
+class E4CorporateEventInput:
+    relationship_id: str
+    economic_episode_key: str
+    event_type: E4EventType
+    event_status: E4EventStatus
+    authoritative: bool
+    test_only: bool
+    confidence: E4ConfidenceLevel
+    evidence_ids: tuple[str, ...]
+    blocking_quality_issues: tuple[str, ...] = ()
+    event_amount: Optional[float] = None
+    amount_min: Optional[float] = None
+    amount_max: Optional[float] = None
+    currency: Optional[str] = None
+    amount_status: E4AmountStatus = E4AmountStatus.UNKNOWN
+    observed_at: Optional[str] = None
+    announced_date: Optional[str] = None
+    expected_date_start: Optional[str] = None
+    expected_date_end: Optional[str] = None
+    effective_date: Optional[str] = None
+    date_precision: E4DatePrecision = E4DatePrecision.UNKNOWN
+    economic_perimeter: Optional[str] = None
+    legal_entity: Optional[str] = None
+    geographic_scope: Optional[str] = None
+    impact_domains: tuple[str, ...] = ()
+    impact_direction: E4Direction = E4Direction.UNKNOWN
+    event_group_id: Optional[str] = None
+    source_as_of: Optional[str] = None
+
+
+@dataclass
+class E4TemporalEvaluation:
+    evaluation_as_of: str
+    temporal_state: E4TemporalState
+    reference_date_start: Optional[str]
+    reference_date_end: Optional[str]
+    days_to_event_min: Optional[int]
+    days_to_event_max: Optional[int]
+    days_since_event: Optional[int]
+    rule_version: str
+    config_version: str
+    timezone_basis: str
+    reason_codes: tuple[str, ...] = ()
+
+
+@dataclass
+class E4EventPersistenceCandidate:
+    relationship_id: str
+    economic_episode_key: str
+    event_type: E4EventType
+    event_status: E4EventStatus
+    confidence: E4ConfidenceLevel
+    event_amount: Optional[float]
+    amount_min: Optional[float]
+    amount_max: Optional[float]
+    currency: Optional[str]
+    amount_status: E4AmountStatus
+    materiality_result: E4MaterialityResult
+    materiality_basis: str
+    impact_domains: tuple[str, ...]
+    impact_direction: E4Direction
+    economic_perimeter: Optional[str]
+    legal_entity: Optional[str]
+    geographic_scope: Optional[str]
+    event_group_id: Optional[str]
+    announced_date: Optional[str]
+    expected_date_start: Optional[str]
+    expected_date_end: Optional[str]
+    effective_date: Optional[str]
+    date_precision: E4DatePrecision
+    observed_at: Optional[str]
+    source_as_of: Optional[str]
+    reason_codes: tuple[str, ...]
+    materiality_rule_code: str
+    rule_version: str
+    threshold_config_version: str
+    threshold_snapshot: dict
+    fx_rate_to_base: Optional[float]
+    fx_effective_date: Optional[str]
+    fx_method: Optional[str]
+    economic_identity_key: str
+    economic_fingerprint: str
+    lifecycle_fingerprint: str
+    idempotency_key: str
+
+    def to_dict(self) -> dict:
+        out = asdict(self)
+        for key in (
+            "event_type",
+            "event_status",
+            "confidence",
+            "amount_status",
+            "materiality_result",
+            "impact_direction",
+            "date_precision",
+        ):
+            value = out[key]
+            out[key] = value.value if isinstance(value, Enum) else value
+        return out
+
+
+@dataclass
+class E4EventEvaluation:
+    authoritative_eligible: bool
+    materiality_result: E4MaterialityResult
+    materiality_basis: str
+    eligibility_reason_codes: tuple[str, ...]
+    materiality_reason_codes: tuple[str, ...]
+    temporal: E4TemporalEvaluation
+    candidate: Optional[E4EventPersistenceCandidate] = None
+
+
+@dataclass(frozen=True)
+class E4ExistingEventState:
+    event_id: str
+    relationship_id: str
+    economic_identity_key: str
+    economic_fingerprint: str
+    lifecycle_fingerprint: str
+    idempotency_key: str
+    event_status: E4EventStatus
+
+
+@dataclass
+class E4LifecycleDecision:
+    action: E4LifecycleAction
+    existing_event_id: Optional[str] = None
+    reason_codes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class E4ExistingChangeState:
+    change_event_id: str
+    idempotency_key: str
+    status: E4ChangeStatus = E4ChangeStatus.RECORDED
+
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+
+
+def _stage1e4_stable_hash(payload: object) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _stage1e4_parse_date(value: Optional[str]) -> Optional[date]:
+    if value is None or value == "":
+        return None
+    return date.fromisoformat(value)
+
+
+def _stage1e4_minimum_confidence(a: E4ConfidenceLevel, b: E4ConfidenceLevel) -> E4ConfidenceLevel:
+    return a if E4_CONFIDENCE_RANK[a] <= E4_CONFIDENCE_RANK[b] else b
+
+
+def _stage1e4_direction(delta: float) -> E4Direction:
+    if delta > 0:
+        return E4Direction.INCREASE
+    if delta < 0:
+        return E4Direction.DECREASE
+    return E4Direction.UNCHANGED
+
+
+def _stage1e4_authoritative_wallet_reasons(state: E4WalletStateInput, prefix: str) -> list[str]:
+    reasons: list[str] = []
+    if state.assessment_status != "PUBLISHED":
+        reasons.append(f"{prefix}_ASSESSMENT_NOT_PUBLISHED")
+    if state.publication_result != "PUBLISH":
+        reasons.append(f"{prefix}_PUBLICATION_NOT_APPROVED")
+    if state.test_only:
+        reasons.append(f"{prefix}_TEST_ONLY_ASSESSMENT")
+    if state.invalidated:
+        reasons.append(f"{prefix}_SOURCE_STATE_INVALIDATED")
+    if not state.evidence_ids or not state.calculation_ids:
+        reasons.append(f"{prefix}_MISSING_LINEAGE")
+    if state.blocking_quality_issues:
+        reasons.append(f"{prefix}_BLOCKING_QUALITY_ISSUE")
+    if state.confidence == E4ConfidenceLevel.LOW:
+        reasons.append(f"{prefix}_LOW_CONFIDENCE")
+    return reasons
+
+
+def _stage1e4_common_comparability_reasons(previous: E4WalletStateInput, current: E4WalletStateInput) -> list[str]:
+    reasons = _stage1e4_authoritative_wallet_reasons(previous, "PREVIOUS")
+    reasons.extend(_stage1e4_authoritative_wallet_reasons(current, "CURRENT"))
+    if previous.relationship_id != current.relationship_id:
+        reasons.append("RELATIONSHIP_MISMATCH")
+    if previous.methodology_code != current.methodology_code:
+        reasons.append("METHODOLOGY_MISMATCH")
+    if previous.methodology_version != current.methodology_version:
+        reasons.append("METHODOLOGY_VERSION_MISMATCH")
+    if previous.economic_perimeter != current.economic_perimeter:
+        reasons.append("ECONOMIC_PERIMETER_MISMATCH")
+    if previous.geographic_scope != current.geographic_scope:
+        reasons.append("GEOGRAPHIC_SCOPE_MISMATCH")
+    if previous.time_horizon != current.time_horizon:
+        reasons.append("HORIZON_MISMATCH")
+    if previous.time_basis != current.time_basis:
+        reasons.append("TIME_BASIS_MISMATCH")
+    return reasons
+
+
+def _stage1e4_amount_threshold(config: E4ChangeMaterialityConfig, change_type: E4ChangeType, metric_scope: str) -> tuple[Optional[float], Optional[float]]:
+    scoped = f"{change_type.value}:{metric_scope}"
+    abs_threshold = config.absolute_thresholds.get(scoped)
+    if abs_threshold is None:
+        abs_threshold = config.absolute_thresholds.get(change_type.value)
+    rel_threshold = config.relative_thresholds.get(scoped)
+    if rel_threshold is None:
+        rel_threshold = config.relative_thresholds.get(change_type.value)
+    return abs_threshold, rel_threshold
+
+
+def _stage1e4_change_idempotency_key(
+    previous: E4WalletStateInput,
+    current: E4WalletStateInput,
+    change_type: E4ChangeType,
+    metric_scope: str,
+    config: E4ChangeMaterialityConfig,
+) -> str:
+    return _stage1e4_stable_hash({
+        "relationship_id": current.relationship_id,
+        "change_type": change_type.value,
+        "metric_scope": metric_scope,
+        "previous_assessment_id": previous.assessment_id,
+        "current_assessment_id": current.assessment_id,
+        "rule_version": E4_RULE_VERSION,
+        "threshold_config_version": config.config_version,
+    })
+
+
+def _stage1e4_change_threshold_snapshot(
+    config: E4ChangeMaterialityConfig,
+    change_type: E4ChangeType,
+    metric_scope: str,
+) -> dict:
+    abs_threshold, rel_threshold = _stage1e4_amount_threshold(config, change_type, metric_scope)
+    return {
+        "base_currency": config.base_currency,
+        "absolute_threshold": abs_threshold,
+        "relative_threshold": rel_threshold,
+        "penetration_pp_threshold": config.penetration_pp_threshold,
+        "metric_scope": metric_scope,
+    }
+
+
+def _stage1e4_evaluate_amount_change(
+    previous: E4WalletStateInput,
+    current: E4WalletStateInput,
+    *,
+    change_type: E4ChangeType,
+    metric_code: str,
+    metric_scope: str,
+    previous_value: Optional[float],
+    current_value: Optional[float],
+    config: E4ChangeMaterialityConfig,
+    fx_basis: Optional[E4GovernedFXBasis],
+    extra_comparability_reasons: tuple[str, ...] = (),
+    wallet_coverage: Optional[str] = None,
+) -> E4ChangeEvaluation:
+    reasons = _stage1e4_common_comparability_reasons(previous, current)
+    reasons.extend(extra_comparability_reasons)
+
+    if previous.currency != current.currency:
+        reasons.append("CURRENCY_MISMATCH")
+    if previous_value is None or current_value is None:
+        reasons.append("REQUIRED_METRIC_MISSING")
+    if previous_value is not None and previous_value < 0:
+        reasons.append("PREVIOUS_METRIC_INVALID_NEGATIVE")
+    if current_value is not None and current_value < 0:
+        reasons.append("CURRENT_METRIC_INVALID_NEGATIVE")
+
+    if reasons:
+        return E4ChangeEvaluation(
+            change_type=change_type,
+            metric_scope=metric_scope,
+            comparability_status=E4ComparabilityStatus.NOT_COMPARABLE,
+            detected=False,
+            materiality_result=E4MaterialityResult.NOT_ASSESSED,
+            reason_codes=tuple(dict.fromkeys(reasons)),
+        )
+
+    assert previous_value is not None and current_value is not None
+    absolute_change = current_value - previous_value
+    detected = absolute_change != 0
+    relative_change: Optional[float]
+    local_reasons: list[str] = []
+    if previous_value == 0:
+        relative_change = None
+        local_reasons.append("PREVIOUS_VALUE_ZERO")
+    else:
+        relative_change = absolute_change / previous_value
+
+    if not detected:
+        local_reasons.append("NO_CHANGE")
+        return E4ChangeEvaluation(
+            change_type=change_type,
+            metric_scope=metric_scope,
+            comparability_status=E4ComparabilityStatus.COMPARABLE,
+            detected=False,
+            materiality_result=E4MaterialityResult.NOT_MATERIAL,
+            reason_codes=tuple(local_reasons),
+        )
+
+    valid_cfg, cfg_issues = config.validate()
+    if not valid_cfg:
+        return E4ChangeEvaluation(
+            change_type=change_type,
+            metric_scope=metric_scope,
+            comparability_status=E4ComparabilityStatus.COMPARABLE,
+            detected=True,
+            materiality_result=E4MaterialityResult.NOT_ASSESSED,
+            reason_codes=cfg_issues,
+        )
+
+    abs_threshold, rel_threshold = _stage1e4_amount_threshold(config, change_type, metric_scope)
+    if abs_threshold is None and rel_threshold is None:
+        return E4ChangeEvaluation(
+            change_type=change_type,
+            metric_scope=metric_scope,
+            comparability_status=E4ComparabilityStatus.COMPARABLE,
+            detected=True,
+            materiality_result=E4MaterialityResult.NOT_ASSESSED,
+            reason_codes=tuple(local_reasons + ["CHANGE_MATERIALITY_THRESHOLD_NOT_CONFIGURED"]),
+        )
+
+    rate = 1.0
+    fx_effective_date = None
+    fx_method = None
+    if current.currency and current.currency.casefold() != config.base_currency.casefold():
+        if fx_basis is None or fx_basis.base_currency.casefold() != config.base_currency.casefold():
+            return E4ChangeEvaluation(
+                change_type=change_type,
+                metric_scope=metric_scope,
+                comparability_status=E4ComparabilityStatus.COMPARABLE,
+                detected=True,
+                materiality_result=E4MaterialityResult.NOT_ASSESSED,
+                reason_codes=tuple(local_reasons + ["GOVERNED_FX_NOT_AVAILABLE"]),
+            )
+        rate = fx_basis.rate_for(current.currency)  # type: ignore[assignment]
+        if rate is None or rate <= 0:
+            return E4ChangeEvaluation(
+                change_type=change_type,
+                metric_scope=metric_scope,
+                comparability_status=E4ComparabilityStatus.COMPARABLE,
+                detected=True,
+                materiality_result=E4MaterialityResult.NOT_ASSESSED,
+                reason_codes=tuple(local_reasons + ["GOVERNED_FX_RATE_MISSING"]),
+            )
+        fx_effective_date = fx_basis.fx_effective_date
+        fx_method = fx_basis.fx_method
+
+    absolute_change_base = abs(absolute_change * rate)
+    material_abs = abs_threshold is not None and absolute_change_base >= abs_threshold
+    material_rel = rel_threshold is not None and relative_change is not None and abs(relative_change) >= rel_threshold
+    material = material_abs or material_rel
+
+    if material_abs:
+        local_reasons.append("MATERIAL_ABSOLUTE_CHANGE")
+    if material_rel:
+        local_reasons.append("MATERIAL_RELATIVE_CHANGE")
+    if not material:
+        local_reasons.append("CHANGE_BELOW_MATERIALITY_THRESHOLD")
+        return E4ChangeEvaluation(
+            change_type=change_type,
+            metric_scope=metric_scope,
+            comparability_status=E4ComparabilityStatus.COMPARABLE,
+            detected=True,
+            materiality_result=E4MaterialityResult.NOT_MATERIAL,
+            reason_codes=tuple(local_reasons),
+        )
+
+    candidate = E4ChangeCandidate(
+        relationship_id=current.relationship_id,
+        change_type=change_type,
+        metric_code=metric_code,
+        metric_scope=metric_scope,
+        previous_assessment_id=previous.assessment_id,
+        current_assessment_id=current.assessment_id,
+        previous_value=float(previous_value),
+        current_value=float(current_value),
+        absolute_change=float(absolute_change),
+        relative_change=relative_change,
+        percentage_point_change=None,
+        direction=_stage1e4_direction(absolute_change),
+        currency=current.currency,
+        wallet_coverage=wallet_coverage,
+        materiality_result=E4MaterialityResult.MATERIAL,
+        confidence=_stage1e4_minimum_confidence(previous.confidence, current.confidence),
+        reason_codes=tuple(local_reasons),
+        rule_code=f"{change_type.value}_001",
+        rule_version=E4_RULE_VERSION,
+        threshold_config_version=config.config_version,
+        threshold_snapshot=_stage1e4_change_threshold_snapshot(config, change_type, metric_scope),
+        fx_rate_to_base=rate,
+        fx_effective_date=fx_effective_date,
+        fx_method=fx_method,
+        current_source_as_of=current.source_as_of,
+        idempotency_key=_stage1e4_change_idempotency_key(previous, current, change_type, metric_scope, config),
+    )
+    return E4ChangeEvaluation(
+        change_type=change_type,
+        metric_scope=metric_scope,
+        comparability_status=E4ComparabilityStatus.COMPARABLE,
+        detected=True,
+        materiality_result=E4MaterialityResult.MATERIAL,
+        reason_codes=tuple(local_reasons),
+        candidate=candidate,
+    )
+
+
+def _stage1e4_evaluate_penetration_change(
+    previous: E4WalletStateInput,
+    current: E4WalletStateInput,
+    config: E4ChangeMaterialityConfig,
+) -> E4ChangeEvaluation:
+    reasons = _stage1e4_common_comparability_reasons(previous, current)
+    if previous.wallet_coverage != current.wallet_coverage:
+        reasons.append("WALLET_COVERAGE_MISMATCH")
+    if not previous.capture_component_complete or not current.capture_component_complete:
+        reasons.append("CAPTURE_COMPONENT_INCOMPLETE")
+    if (
+        previous.capture_comparability_status != E4ComparabilityStatus.COMPARABLE
+        or current.capture_comparability_status != E4ComparabilityStatus.COMPARABLE
+    ):
+        reasons.append("CAPTURE_NOT_COMPARABLE")
+    if previous.penetration is None or current.penetration is None:
+        reasons.append("REQUIRED_METRIC_MISSING")
+    if previous.penetration is not None and previous.penetration < 0:
+        reasons.append("PREVIOUS_METRIC_INVALID_NEGATIVE")
+    if current.penetration is not None and current.penetration < 0:
+        reasons.append("CURRENT_METRIC_INVALID_NEGATIVE")
+
+    if reasons:
+        return E4ChangeEvaluation(
+            change_type=E4ChangeType.PENETRATION_CHANGE,
+            metric_scope="TOTAL_WALLET",
+            comparability_status=E4ComparabilityStatus.NOT_COMPARABLE,
+            detected=False,
+            materiality_result=E4MaterialityResult.NOT_ASSESSED,
+            reason_codes=tuple(dict.fromkeys(reasons)),
+        )
+
+    assert previous.penetration is not None and current.penetration is not None
+    delta = current.penetration - previous.penetration
+    pp_change = delta * 100.0
+    if delta == 0:
+        return E4ChangeEvaluation(
+            change_type=E4ChangeType.PENETRATION_CHANGE,
+            metric_scope="TOTAL_WALLET",
+            comparability_status=E4ComparabilityStatus.COMPARABLE,
+            detected=False,
+            materiality_result=E4MaterialityResult.NOT_MATERIAL,
+            reason_codes=("NO_CHANGE",),
+        )
+
+    valid_cfg, cfg_issues = config.validate()
+    if not valid_cfg:
+        return E4ChangeEvaluation(
+            change_type=E4ChangeType.PENETRATION_CHANGE,
+            metric_scope="TOTAL_WALLET",
+            comparability_status=E4ComparabilityStatus.COMPARABLE,
+            detected=True,
+            materiality_result=E4MaterialityResult.NOT_ASSESSED,
+            reason_codes=cfg_issues,
+        )
+    if config.penetration_pp_threshold is None:
+        return E4ChangeEvaluation(
+            change_type=E4ChangeType.PENETRATION_CHANGE,
+            metric_scope="TOTAL_WALLET",
+            comparability_status=E4ComparabilityStatus.COMPARABLE,
+            detected=True,
+            materiality_result=E4MaterialityResult.NOT_ASSESSED,
+            reason_codes=("CHANGE_PP_THRESHOLD_NOT_CONFIGURED",),
+        )
+
+    material = abs(pp_change) + 1e-12 >= config.penetration_pp_threshold
+    reasons2 = ("MATERIAL_PERCENTAGE_POINT_CHANGE",) if material else ("CHANGE_BELOW_MATERIALITY_THRESHOLD",)
+    if not material:
+        return E4ChangeEvaluation(
+            change_type=E4ChangeType.PENETRATION_CHANGE,
+            metric_scope="TOTAL_WALLET",
+            comparability_status=E4ComparabilityStatus.COMPARABLE,
+            detected=True,
+            materiality_result=E4MaterialityResult.NOT_MATERIAL,
+            reason_codes=reasons2,
+        )
+
+    candidate = E4ChangeCandidate(
+        relationship_id=current.relationship_id,
+        change_type=E4ChangeType.PENETRATION_CHANGE,
+        metric_code="PENETRATION",
+        metric_scope="TOTAL_WALLET",
+        previous_assessment_id=previous.assessment_id,
+        current_assessment_id=current.assessment_id,
+        previous_value=float(previous.penetration),
+        current_value=float(current.penetration),
+        absolute_change=None,
+        relative_change=None,
+        percentage_point_change=pp_change,
+        direction=_stage1e4_direction(delta),
+        currency=None,
+        wallet_coverage=current.wallet_coverage,
+        materiality_result=E4MaterialityResult.MATERIAL,
+        confidence=_stage1e4_minimum_confidence(previous.confidence, current.confidence),
+        reason_codes=reasons2,
+        rule_code="PENETRATION_CHANGE_001",
+        rule_version=E4_RULE_VERSION,
+        threshold_config_version=config.config_version,
+        threshold_snapshot=_stage1e4_change_threshold_snapshot(config, E4ChangeType.PENETRATION_CHANGE, "TOTAL_WALLET"),
+        fx_rate_to_base=None,
+        fx_effective_date=None,
+        fx_method=None,
+        current_source_as_of=current.source_as_of,
+        idempotency_key=_stage1e4_change_idempotency_key(previous, current, E4ChangeType.PENETRATION_CHANGE, "TOTAL_WALLET", config),
+    )
+    return E4ChangeEvaluation(
+        change_type=E4ChangeType.PENETRATION_CHANGE,
+        metric_scope="TOTAL_WALLET",
+        comparability_status=E4ComparabilityStatus.COMPARABLE,
+        detected=True,
+        materiality_result=E4MaterialityResult.MATERIAL,
+        reason_codes=reasons2,
+        candidate=candidate,
+    )
+
+
+def _stage1e4_evaluate_wallet_changes(
+    previous: E4WalletStateInput,
+    current: E4WalletStateInput,
+    config: E4ChangeMaterialityConfig,
+    *,
+    fx_basis: Optional[E4GovernedFXBasis] = None,
+) -> tuple[E4ChangeEvaluation, ...]:
+    """Evaluate the four governed change metrics plus like-for-like structural components.
+
+    Only MATERIAL evaluations produce ChangeCandidate objects. Non-material mathematical
+    movements remain evaluation results and do not become management-facing CHG records.
+    """
+    coverage_reasons = () if previous.wallet_coverage == current.wallet_coverage else ("WALLET_COVERAGE_MISMATCH",)
+    capture_reasons: list[str] = list(coverage_reasons)
+    if not previous.capture_component_complete or not current.capture_component_complete:
+        capture_reasons.append("CAPTURE_COMPONENT_INCOMPLETE")
+    if (
+        previous.capture_comparability_status != E4ComparabilityStatus.COMPARABLE
+        or current.capture_comparability_status != E4ComparabilityStatus.COMPARABLE
+    ):
+        capture_reasons.append("CAPTURE_NOT_COMPARABLE")
+
+    out = [
+        _stage1e4_evaluate_amount_change(
+            previous,
+            current,
+            change_type=E4ChangeType.WALLET_SIZE_CHANGE,
+            metric_code="ADDRESSABLE_WALLET",
+            metric_scope="TOTAL_WALLET",
+            previous_value=previous.addressable_wallet,
+            current_value=current.addressable_wallet,
+            config=config,
+            fx_basis=fx_basis,
+            extra_comparability_reasons=coverage_reasons,
+            wallet_coverage=current.wallet_coverage,
+        ),
+        _stage1e4_evaluate_amount_change(
+            previous,
+            current,
+            change_type=E4ChangeType.WALLET_GAP_CHANGE,
+            metric_code="POSITIVE_WALLET_GAP",
+            metric_scope="TOTAL_WALLET",
+            previous_value=previous.positive_gap,
+            current_value=current.positive_gap,
+            config=config,
+            fx_basis=fx_basis,
+            extra_comparability_reasons=tuple(capture_reasons),
+            wallet_coverage=current.wallet_coverage,
+        ),
+        _stage1e4_evaluate_penetration_change(previous, current, config),
+        _stage1e4_evaluate_amount_change(
+            previous,
+            current,
+            change_type=E4ChangeType.CAPTURE_CHANGE,
+            metric_code="OUR_COMPARABLE_CAPTURE",
+            metric_scope="TOTAL_WALLET",
+            previous_value=previous.our_capture,
+            current_value=current.our_capture,
+            config=config,
+            fx_basis=fx_basis,
+            extra_comparability_reasons=tuple(capture_reasons),
+            wallet_coverage=current.wallet_coverage,
+        ),
+    ]
+
+    # Coverage expansion must not masquerade as total-wallet growth. However,
+    # like-for-like structural components may still be compared independently.
+    if previous.capex_addressable_notional is not None and current.capex_addressable_notional is not None:
+        out.append(
+            _stage1e4_evaluate_amount_change(
+                previous,
+                current,
+                change_type=E4ChangeType.WALLET_SIZE_CHANGE,
+                metric_code="CAPEX_ADDRESSABLE_NOTIONAL",
+                metric_scope="CAPEX_COMPONENT",
+                previous_value=previous.capex_addressable_notional,
+                current_value=current.capex_addressable_notional,
+                config=config,
+                fx_basis=fx_basis,
+                wallet_coverage="CAPEX_COMPONENT",
+            )
+        )
+    if previous.refinancing_addressable_notional is not None and current.refinancing_addressable_notional is not None:
+        out.append(
+            _stage1e4_evaluate_amount_change(
+                previous,
+                current,
+                change_type=E4ChangeType.WALLET_SIZE_CHANGE,
+                metric_code="REFINANCING_ADDRESSABLE_NOTIONAL",
+                metric_scope="REFINANCING_COMPONENT",
+                previous_value=previous.refinancing_addressable_notional,
+                current_value=current.refinancing_addressable_notional,
+                config=config,
+                fx_basis=fx_basis,
+                wallet_coverage="REFINANCING_COMPONENT",
+            )
+        )
+    return tuple(out)
+
+
+# -----------------------------------------------------------------------------
+# Temporal evaluation
+# -----------------------------------------------------------------------------
+
+
+def _stage1e4_future_temporal_state(days_to_event: int, config: E4TemporalRuleConfig) -> E4TemporalState:
+    if 0 <= days_to_event <= config.immediate_days:
+        return E4TemporalState.IMMEDIATE
+    if days_to_event <= config.near_term_days:
+        return E4TemporalState.NEAR_TERM
+    if days_to_event <= config.forward_days:
+        return E4TemporalState.FORWARD
+    return E4TemporalState.LONG_DATED
+
+
+def _stage1e4_evaluate_change_temporal_relevance(
+    change: E4ChangeCandidate,
+    evaluation_as_of: str,
+    config: E4TemporalRuleConfig,
+) -> E4TemporalEvaluation:
+    valid, issues = config.validate()
+    if not valid:
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=E4TemporalState.UNKNOWN,
+            reference_date_start=change.current_source_as_of,
+            reference_date_end=change.current_source_as_of,
+            days_to_event_min=None,
+            days_to_event_max=None,
+            days_since_event=None,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=issues,
+        )
+    change_date = _stage1e4_parse_date(change.current_source_as_of)
+    as_of = _stage1e4_parse_date(evaluation_as_of)
+    if change_date is None or as_of is None:
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=E4TemporalState.UNKNOWN,
+            reference_date_start=change.current_source_as_of,
+            reference_date_end=change.current_source_as_of,
+            days_to_event_min=None,
+            days_to_event_max=None,
+            days_since_event=None,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=("CHANGE_DATE_UNKNOWN",),
+        )
+    age = (as_of - change_date).days
+    if age < 0:
+        state = E4TemporalState.UNKNOWN
+        reasons = ("CHANGE_AFTER_EVALUATION_DATE",)
+    elif age <= config.recent_change_days:
+        state = E4TemporalState.RECENTLY_OCCURRED
+        reasons = ("RECENT_MATERIAL_CHANGE",)
+    else:
+        state = E4TemporalState.HISTORICAL
+        reasons = ("HISTORICAL_CHANGE",)
+    return E4TemporalEvaluation(
+        evaluation_as_of=evaluation_as_of,
+        temporal_state=state,
+        reference_date_start=change.current_source_as_of,
+        reference_date_end=change.current_source_as_of,
+        days_to_event_min=None,
+        days_to_event_max=None,
+        days_since_event=age if age >= 0 else None,
+        rule_version=E4_RULE_VERSION,
+        config_version=config.config_version,
+        timezone_basis=config.timezone_basis,
+        reason_codes=reasons,
+    )
+
+
+def _stage1e4_evaluate_event_temporal_relevance(
+    event: E4CorporateEventInput,
+    evaluation_as_of: str,
+    config: E4TemporalRuleConfig,
+) -> E4TemporalEvaluation:
+    valid, issues = config.validate()
+    as_of = _stage1e4_parse_date(evaluation_as_of)
+    if not valid or as_of is None:
+        reasons = list(issues)
+        if as_of is None:
+            reasons.append("EVALUATION_AS_OF_INVALID")
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=E4TemporalState.UNKNOWN,
+            reference_date_start=event.expected_date_start,
+            reference_date_end=event.expected_date_end,
+            days_to_event_min=None,
+            days_to_event_max=None,
+            days_since_event=None,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=tuple(reasons),
+        )
+
+    if event.event_status in (E4EventStatus.CANCELLED, E4EventStatus.SUPERSEDED):
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=E4TemporalState.INACTIVE,
+            reference_date_start=event.expected_date_start,
+            reference_date_end=event.expected_date_end,
+            days_to_event_min=None,
+            days_to_event_max=None,
+            days_since_event=None,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=("EVENT_INACTIVE",),
+        )
+
+    if event.event_status == E4EventStatus.COMPLETED:
+        effective = _stage1e4_parse_date(event.effective_date)
+        if effective is None:
+            return E4TemporalEvaluation(
+                evaluation_as_of=evaluation_as_of,
+                temporal_state=E4TemporalState.UNKNOWN,
+                reference_date_start=event.effective_date,
+                reference_date_end=event.effective_date,
+                days_to_event_min=None,
+                days_to_event_max=None,
+                days_since_event=None,
+                rule_version=E4_RULE_VERSION,
+                config_version=config.config_version,
+                timezone_basis=config.timezone_basis,
+                reason_codes=("COMPLETED_EVENT_EFFECTIVE_DATE_UNKNOWN",),
+            )
+        age = (as_of - effective).days
+        if age < 0:
+            state = E4TemporalState.UNKNOWN
+            reasons = ("DATE_STATUS_CONFLICT",)
+            age_out = None
+        elif age <= config.post_event_relevance_days:
+            state = E4TemporalState.RECENTLY_OCCURRED
+            reasons = ("WITHIN_POST_EVENT_RELEVANCE_WINDOW",)
+            age_out = age
+        else:
+            state = E4TemporalState.HISTORICAL
+            reasons = ("OUTSIDE_POST_EVENT_RELEVANCE_WINDOW",)
+            age_out = age
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=state,
+            reference_date_start=event.effective_date,
+            reference_date_end=event.effective_date,
+            days_to_event_min=None,
+            days_to_event_max=None,
+            days_since_event=age_out,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=reasons,
+        )
+
+    start = _stage1e4_parse_date(event.expected_date_start)
+    end = _stage1e4_parse_date(event.expected_date_end) or start
+    if start is None or end is None or event.date_precision == E4DatePrecision.UNKNOWN:
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=E4TemporalState.UNKNOWN,
+            reference_date_start=event.expected_date_start,
+            reference_date_end=event.expected_date_end,
+            days_to_event_min=None,
+            days_to_event_max=None,
+            days_since_event=None,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=("EVENT_DATE_UNKNOWN",),
+        )
+    if end < start:
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=E4TemporalState.UNKNOWN,
+            reference_date_start=event.expected_date_start,
+            reference_date_end=event.expected_date_end,
+            days_to_event_min=None,
+            days_to_event_max=None,
+            days_since_event=None,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=("EVENT_DATE_RANGE_INVALID",),
+        )
+
+    d_start = (start - as_of).days
+    d_end = (end - as_of).days
+    if d_end < 0:
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=E4TemporalState.UNKNOWN,
+            reference_date_start=event.expected_date_start,
+            reference_date_end=event.expected_date_end,
+            days_to_event_min=d_start,
+            days_to_event_max=d_end,
+            days_since_event=None,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=("EVENT_DATE_PASSED_STATUS_NOT_UPDATED",),
+        )
+    if d_start < 0 <= d_end:
+        return E4TemporalEvaluation(
+            evaluation_as_of=evaluation_as_of,
+            temporal_state=E4TemporalState.UNKNOWN,
+            reference_date_start=event.expected_date_start,
+            reference_date_end=event.expected_date_end,
+            days_to_event_min=d_start,
+            days_to_event_max=d_end,
+            days_since_event=None,
+            rule_version=E4_RULE_VERSION,
+            config_version=config.config_version,
+            timezone_basis=config.timezone_basis,
+            reason_codes=("IMPRECISE_DATE_RANGE_SPANS_EVALUATION_DATE",),
+        )
+
+    state_start = _stage1e4_future_temporal_state(d_start, config)
+    state_end = _stage1e4_future_temporal_state(d_end, config)
+    if state_start != state_end:
+        state = E4TemporalState.UNKNOWN
+        reasons = ("IMPRECISE_DATE_SPANS_TEMPORAL_BANDS",)
+    else:
+        state = state_start
+        reasons = ("EXACT_TEMPORAL_BAND",) if start == end else ("IMPRECISE_DATE_WITHIN_SINGLE_TEMPORAL_BAND",)
+
+    return E4TemporalEvaluation(
+        evaluation_as_of=evaluation_as_of,
+        temporal_state=state,
+        reference_date_start=event.expected_date_start,
+        reference_date_end=event.expected_date_end or event.expected_date_start,
+        days_to_event_min=d_start,
+        days_to_event_max=d_end,
+        days_since_event=None,
+        rule_version=E4_RULE_VERSION,
+        config_version=config.config_version,
+        timezone_basis=config.timezone_basis,
+        reason_codes=reasons,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Corporate Event evaluation
+# -----------------------------------------------------------------------------
+
+
+def _stage1e4_event_eligibility_reasons(event: E4CorporateEventInput) -> list[str]:
+    reasons: list[str] = []
+    if not event.authoritative:
+        reasons.append("EVENT_NOT_AUTHORITATIVE")
+    if event.test_only:
+        reasons.append("TEST_ONLY_EVENT")
+    if not event.relationship_id:
+        reasons.append("RELATIONSHIP_ID_MISSING")
+    if not event.economic_episode_key:
+        reasons.append("ECONOMIC_EPISODE_KEY_MISSING")
+    if not event.evidence_ids:
+        reasons.append("MISSING_EVENT_EVIDENCE")
+    if event.confidence == E4ConfidenceLevel.LOW:
+        reasons.append("LOW_CONFIDENCE")
+    if event.blocking_quality_issues:
+        reasons.append("BLOCKING_QUALITY_ISSUE")
+
+    numeric_values = [event.event_amount, event.amount_min, event.amount_max]
+    if any(v is not None and v < 0 for v in numeric_values):
+        reasons.append("INVALID_NEGATIVE_EVENT_AMOUNT")
+    if event.amount_status in (E4AmountStatus.DISCLOSED, E4AmountStatus.ESTIMATED):
+        if event.event_amount is None:
+            reasons.append("EVENT_AMOUNT_MISSING")
+        if not event.currency:
+            reasons.append("EVENT_CURRENCY_MISSING")
+    if event.amount_status == E4AmountStatus.RANGE:
+        if event.amount_min is None or event.amount_max is None:
+            reasons.append("EVENT_AMOUNT_RANGE_INCOMPLETE")
+        elif event.amount_min > event.amount_max:
+            reasons.append("EVENT_AMOUNT_RANGE_INVALID")
+        if not event.currency:
+            reasons.append("EVENT_CURRENCY_MISSING")
+    return reasons
+
+
+def _stage1e4_evaluate_event_materiality(
+    event: E4CorporateEventInput,
+    config: E4EventMaterialityConfig,
+    fx_basis: Optional[E4GovernedFXBasis],
+) -> tuple[E4MaterialityResult, str, tuple[str, ...], dict, Optional[float], Optional[str], Optional[str]]:
+    valid, issues = config.validate()
+    if not valid:
+        return E4MaterialityResult.NOT_ASSESSED, "NOT_ASSESSED", issues, {}, None, None, None
+
+    threshold = config.absolute_thresholds.get(event.event_type.value)
+    snapshot = {
+        "base_currency": config.base_currency,
+        "absolute_threshold": threshold,
+        "qualitative_material_types": tuple(t.value for t in config.qualitative_material_types),
+    }
+
+    def fx_rate() -> tuple[Optional[float], Optional[str], Optional[str], Optional[str]]:
+        if event.currency is None:
+            return None, None, None, "EVENT_CURRENCY_MISSING"
+        if event.currency.casefold() == config.base_currency.casefold():
+            return 1.0, None, None, None
+        if fx_basis is None or fx_basis.base_currency.casefold() != config.base_currency.casefold():
+            return None, None, None, "GOVERNED_FX_NOT_AVAILABLE"
+        rate = fx_basis.rate_for(event.currency)
+        if rate is None or rate <= 0:
+            return None, None, None, "GOVERNED_FX_RATE_MISSING"
+        return rate, fx_basis.fx_effective_date, fx_basis.fx_method, None
+
+    if event.amount_status in (E4AmountStatus.DISCLOSED, E4AmountStatus.ESTIMATED) and event.event_amount is not None:
+        if threshold is None:
+            if event.event_type in config.qualitative_material_types:
+                return E4MaterialityResult.MATERIAL, "QUALITATIVE_EVENT_RULE", ("MATERIAL_QUALITATIVE_EVENT_TYPE",), snapshot, None, None, None
+            return E4MaterialityResult.NOT_ASSESSED, "NOT_ASSESSED", ("EVENT_MATERIALITY_THRESHOLD_NOT_CONFIGURED",), snapshot, None, None, None
+        rate, fx_date, fx_method, fx_issue = fx_rate()
+        if fx_issue:
+            return E4MaterialityResult.NOT_ASSESSED, "ABSOLUTE_AMOUNT", (fx_issue,), snapshot, None, None, None
+        assert rate is not None
+        amount_base = event.event_amount * rate
+        material = amount_base >= threshold
+        reasons = ["MATERIAL_ABSOLUTE_EVENT_AMOUNT" if material else "EVENT_BELOW_MATERIALITY_THRESHOLD"]
+        if event.amount_status == E4AmountStatus.ESTIMATED:
+            reasons.append("ESTIMATED_EVENT_AMOUNT")
+        return (
+            E4MaterialityResult.MATERIAL if material else E4MaterialityResult.NOT_MATERIAL,
+            "ABSOLUTE_AMOUNT",
+            tuple(reasons),
+            snapshot,
+            rate,
+            fx_date,
+            fx_method,
+        )
+
+    if event.amount_status == E4AmountStatus.RANGE and event.amount_min is not None and event.amount_max is not None:
+        if threshold is None:
+            if event.event_type in config.qualitative_material_types:
+                return E4MaterialityResult.MATERIAL, "QUALITATIVE_EVENT_RULE", ("MATERIAL_QUALITATIVE_EVENT_TYPE", "EVENT_AMOUNT_RANGE"), snapshot, None, None, None
+            return E4MaterialityResult.NOT_ASSESSED, "NOT_ASSESSED", ("EVENT_MATERIALITY_THRESHOLD_NOT_CONFIGURED", "EVENT_AMOUNT_RANGE"), snapshot, None, None, None
+        rate, fx_date, fx_method, fx_issue = fx_rate()
+        if fx_issue:
+            return E4MaterialityResult.NOT_ASSESSED, "ABSOLUTE_AMOUNT_RANGE", (fx_issue,), snapshot, None, None, None
+        assert rate is not None
+        low = event.amount_min * rate
+        high = event.amount_max * rate
+        if low >= threshold:
+            result = E4MaterialityResult.MATERIAL
+            reasons = ("MATERIAL_EVENT_AMOUNT_RANGE",)
+        elif high < threshold:
+            result = E4MaterialityResult.NOT_MATERIAL
+            reasons = ("EVENT_RANGE_BELOW_MATERIALITY_THRESHOLD",)
+        else:
+            result = E4MaterialityResult.NOT_ASSESSED
+            reasons = ("EVENT_RANGE_SPANS_MATERIALITY_THRESHOLD",)
+        return result, "ABSOLUTE_AMOUNT_RANGE", reasons, snapshot, rate, fx_date, fx_method
+
+    if event.event_type in config.qualitative_material_types:
+        return E4MaterialityResult.MATERIAL, "QUALITATIVE_EVENT_RULE", ("MATERIAL_QUALITATIVE_EVENT_TYPE",), snapshot, None, None, None
+
+    return E4MaterialityResult.NOT_ASSESSED, "NOT_ASSESSED", ("EVENT_AMOUNT_UNKNOWN",), snapshot, None, None, None
+
+
+def _stage1e4_economic_identity_key(event: E4CorporateEventInput) -> str:
+    return _stage1e4_stable_hash({
+        "relationship_id": event.relationship_id,
+        "event_type": event.event_type.value,
+        "economic_episode_key": event.economic_episode_key,
+        "economic_perimeter": event.economic_perimeter,
+        "legal_entity": event.legal_entity,
+    })
+
+
+def _stage1e4_economic_fingerprint(event: E4CorporateEventInput) -> str:
+    return _stage1e4_stable_hash({
+        "event_type": event.event_type.value,
+        "event_amount": event.event_amount,
+        "amount_min": event.amount_min,
+        "amount_max": event.amount_max,
+        "currency": event.currency,
+        "amount_status": event.amount_status.value,
+        "economic_perimeter": event.economic_perimeter,
+        "legal_entity": event.legal_entity,
+        "geographic_scope": event.geographic_scope,
+        "impact_domains": tuple(sorted(event.impact_domains)),
+        "impact_direction": event.impact_direction.value,
+    })
+
+
+def _stage1e4_lifecycle_fingerprint(event: E4CorporateEventInput) -> str:
+    return _stage1e4_stable_hash({
+        "event_status": event.event_status.value,
+        "confidence": event.confidence.value,
+        "announced_date": event.announced_date,
+        "expected_date_start": event.expected_date_start,
+        "expected_date_end": event.expected_date_end,
+        "effective_date": event.effective_date,
+        "date_precision": event.date_precision.value,
+        "event_group_id": event.event_group_id,
+    })
+
+
+def _stage1e4_evaluate_corporate_event(
+    event: E4CorporateEventInput,
+    materiality_config: E4EventMaterialityConfig,
+    temporal_config: E4TemporalRuleConfig,
+    *,
+    evaluation_as_of: str,
+    fx_basis: Optional[E4GovernedFXBasis] = None,
+) -> E4EventEvaluation:
+    eligibility_reasons = _stage1e4_event_eligibility_reasons(event)
+    temporal = _stage1e4_evaluate_event_temporal_relevance(event, evaluation_as_of, temporal_config)
+
+    if eligibility_reasons:
+        return E4EventEvaluation(
+            authoritative_eligible=False,
+            materiality_result=E4MaterialityResult.NOT_ASSESSED,
+            materiality_basis="NOT_ASSESSED",
+            eligibility_reason_codes=tuple(dict.fromkeys(eligibility_reasons)),
+            materiality_reason_codes=(),
+            temporal=temporal,
+            candidate=None,
+        )
+
+    result, basis, mat_reasons, snapshot, rate, fx_date, fx_method = _stage1e4_evaluate_event_materiality(
+        event, materiality_config, fx_basis
+    )
+    identity = _stage1e4_economic_identity_key(event)
+    econ_fp = _stage1e4_economic_fingerprint(event)
+    lifecycle_fp = _stage1e4_lifecycle_fingerprint(event)
+    idempotency_key = _stage1e4_stable_hash({
+        "economic_identity_key": identity,
+        "economic_fingerprint": econ_fp,
+        "rule_version": E4_RULE_VERSION,
+        "threshold_config_version": materiality_config.config_version,
+    })
+    candidate = E4EventPersistenceCandidate(
+        relationship_id=event.relationship_id,
+        economic_episode_key=event.economic_episode_key,
+        event_type=event.event_type,
+        event_status=event.event_status,
+        confidence=event.confidence,
+        event_amount=event.event_amount,
+        amount_min=event.amount_min,
+        amount_max=event.amount_max,
+        currency=event.currency,
+        amount_status=event.amount_status,
+        materiality_result=result,
+        materiality_basis=basis,
+        impact_domains=event.impact_domains,
+        impact_direction=event.impact_direction,
+        economic_perimeter=event.economic_perimeter,
+        legal_entity=event.legal_entity,
+        geographic_scope=event.geographic_scope,
+        event_group_id=event.event_group_id,
+        announced_date=event.announced_date,
+        expected_date_start=event.expected_date_start,
+        expected_date_end=event.expected_date_end,
+        effective_date=event.effective_date,
+        date_precision=event.date_precision,
+        observed_at=event.observed_at,
+        source_as_of=event.source_as_of,
+        reason_codes=mat_reasons,
+        materiality_rule_code=f"{event.event_type.value}_MATERIALITY_001",
+        rule_version=E4_RULE_VERSION,
+        threshold_config_version=materiality_config.config_version,
+        threshold_snapshot=snapshot,
+        fx_rate_to_base=rate,
+        fx_effective_date=fx_date,
+        fx_method=fx_method,
+        economic_identity_key=identity,
+        economic_fingerprint=econ_fp,
+        lifecycle_fingerprint=lifecycle_fp,
+        idempotency_key=idempotency_key,
+    )
+    return E4EventEvaluation(
+        authoritative_eligible=True,
+        materiality_result=result,
+        materiality_basis=basis,
+        eligibility_reason_codes=(),
+        materiality_reason_codes=mat_reasons,
+        temporal=temporal,
+        candidate=candidate,
+    )
+
+
+# -----------------------------------------------------------------------------
+# Persistence/lifecycle decisions (side-effect-free)
+# -----------------------------------------------------------------------------
+
+
+def _stage1e4_decide_change_persistence(
+    candidate: E4ChangeCandidate,
+    existing: Optional[E4ExistingChangeState],
+) -> E4LifecycleDecision:
+    if existing is None:
+        return E4LifecycleDecision(E4LifecycleAction.CREATE, reason_codes=("NEW_MATERIAL_CHANGE",))
+    if existing.idempotency_key == candidate.idempotency_key:
+        return E4LifecycleDecision(
+            E4LifecycleAction.KEEP_EXISTING,
+            existing_event_id=existing.change_event_id,
+            reason_codes=("IDEMPOTENT_CHANGE_REEVALUATION",),
+        )
+    return E4LifecycleDecision(E4LifecycleAction.CREATE, reason_codes=("DISTINCT_CHANGE_OBSERVATION",))
+
+
+E4__ALLOWED_EVENT_TRANSITIONS = {
+    E4EventStatus.ANNOUNCED: {E4EventStatus.ANNOUNCED, E4EventStatus.SCHEDULED, E4EventStatus.COMPLETED, E4EventStatus.CANCELLED, E4EventStatus.SUPERSEDED},
+    E4EventStatus.SCHEDULED: {E4EventStatus.SCHEDULED, E4EventStatus.COMPLETED, E4EventStatus.CANCELLED, E4EventStatus.SUPERSEDED},
+    E4EventStatus.COMPLETED: {E4EventStatus.COMPLETED, E4EventStatus.SUPERSEDED},
+    E4EventStatus.CANCELLED: {E4EventStatus.CANCELLED, E4EventStatus.SUPERSEDED},
+    E4EventStatus.SUPERSEDED: {E4EventStatus.SUPERSEDED},
+}
+
+
+def _stage1e4_decide_event_lifecycle(
+    candidate: E4EventPersistenceCandidate,
+    existing: Optional[E4ExistingEventState],
+    *,
+    material_economic_revision: bool = False,
+) -> E4LifecycleDecision:
+    if existing is None:
+        return E4LifecycleDecision(E4LifecycleAction.CREATE, reason_codes=("NEW_AUTHORITATIVE_EVENT",))
+    if existing.economic_identity_key != candidate.economic_identity_key:
+        return E4LifecycleDecision(E4LifecycleAction.CREATE, reason_codes=("DISTINCT_ECONOMIC_EVENT",))
+
+    if candidate.event_status not in E4__ALLOWED_EVENT_TRANSITIONS.get(existing.event_status, set()):
+        return E4LifecycleDecision(
+            E4LifecycleAction.SUPERSEDE_AND_CREATE,
+            existing_event_id=existing.event_id,
+            reason_codes=("EVENT_LIFECYCLE_REACTIVATION_REQUIRES_NEW_STATE",),
+        )
+
+    economics_changed = existing.economic_fingerprint != candidate.economic_fingerprint
+    lifecycle_changed = existing.lifecycle_fingerprint != candidate.lifecycle_fingerprint
+
+    if economics_changed and material_economic_revision:
+        return E4LifecycleDecision(
+            E4LifecycleAction.SUPERSEDE_AND_CREATE,
+            existing_event_id=existing.event_id,
+            reason_codes=("MATERIAL_ECONOMIC_REINTERPRETATION",),
+        )
+
+    if economics_changed or lifecycle_changed or existing.event_status != candidate.event_status:
+        reasons: list[str] = []
+        if economics_changed:
+            reasons.append("NON_MATERIAL_ECONOMIC_UPDATE")
+        if lifecycle_changed or existing.event_status != candidate.event_status:
+            reasons.append("EVENT_LIFECYCLE_UPDATE")
+        return E4LifecycleDecision(
+            E4LifecycleAction.UPDATE_LIFECYCLE,
+            existing_event_id=existing.event_id,
+            reason_codes=tuple(reasons),
+        )
+
+    return E4LifecycleDecision(
+        E4LifecycleAction.KEEP_EXISTING,
+        existing_event_id=existing.event_id,
+        reason_codes=("IDEMPOTENT_EVENT_REEVALUATION",),
+    )
+
+# END STAGE 1-E.4.7 — DETERMINISTIC CHANGE / EVENT ENGINE
+
 # =============================================================================
 # STAGE 1-E.3.7 — OPPORTUNITYSIGNAL PERSISTENCE & WALLET LINEAGE
 # =============================================================================
@@ -6469,6 +7961,982 @@ def _db_stage1e3_8_validation_summary() -> dict:
 
 # END STAGE 1-E.3.8 — FINAL LIVE VALIDATION HARNESS
 
+
+# =============================================================================
+# STAGE 1-E.4.8 — CHANGEEVENT PERSISTENCE & APP INTEGRATION
+# =============================================================================
+
+E4_TEST_CHANGE_CONFIG_VERSION = "E4_TEST_CHANGE_2026_10"
+E4_TEST_EVENT_CONFIG_VERSION = "E4_TEST_EVENT_2026_10"
+E4_TEST_TEMPORAL_CONFIG_VERSION = "E4_TEST_TEMPORAL_2026_10"
+E4_VALIDATION_COMPANY = "EC-AI E4 Validation Co"
+E4_VALIDATION_RELATIONSHIP_ID = "REL-EC-AI-E4-VALIDATION-CO"
+
+
+def _db_stage1e4_migrate_schema(conn: _DBConnection):
+    """Add E.4 ChangeEvent persistence additively; never rewrite Wallet/Signal history."""
+    id_type = "INTEGER PRIMARY KEY AUTOINCREMENT" if conn.backend == "sqlite" else "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+    fk_type = "INTEGER" if conn.backend == "sqlite" else "BIGINT"
+    real_type = "REAL" if conn.backend == "sqlite" else "DOUBLE PRECISION"
+    bool_type = "INTEGER NOT NULL DEFAULT 0" if conn.backend == "sqlite" else "SMALLINT NOT NULL DEFAULT 0"
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS change_event_rule_config (
+        id {id_type},
+        config_version TEXT NOT NULL,
+        config_type TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        test_only {bool_type},
+        effective_from TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(config_type, config_version)
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS change_event (
+        id {id_type},
+        change_event_id TEXT NOT NULL UNIQUE,
+        relationship_id {fk_type} NOT NULL REFERENCES relationship(id),
+        object_kind TEXT NOT NULL,
+        change_event_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        materiality TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+
+        previous_assessment_db_id {fk_type} REFERENCES wallet_assessment(id),
+        current_assessment_db_id {fk_type} REFERENCES wallet_assessment(id),
+        previous_assessment_id TEXT,
+        current_assessment_id TEXT,
+        source_assessment_id TEXT,
+        source_signal_id TEXT,
+        related_event_id TEXT,
+        event_group_id TEXT,
+
+        metric_code TEXT,
+        metric_scope TEXT,
+        previous_value {real_type},
+        current_value {real_type},
+        absolute_change {real_type},
+        relative_change {real_type},
+        percentage_point_change {real_type},
+        direction TEXT,
+        wallet_coverage TEXT,
+
+        economic_episode_key TEXT,
+        event_amount {real_type},
+        amount_min {real_type},
+        amount_max {real_type},
+        currency TEXT,
+        amount_status TEXT,
+        impact_domains_json TEXT NOT NULL DEFAULT '[]',
+        impact_direction TEXT,
+        materiality_basis TEXT,
+        economic_identity_key TEXT,
+        economic_fingerprint TEXT,
+        lifecycle_fingerprint TEXT,
+
+        observed_at TEXT,
+        announced_date TEXT,
+        expected_date_start TEXT,
+        expected_date_end TEXT,
+        effective_date TEXT,
+        date_precision TEXT,
+        source_as_of TEXT,
+
+        economic_perimeter TEXT,
+        legal_entity TEXT,
+        geographic_scope TEXT,
+        time_horizon TEXT,
+        time_basis TEXT,
+
+        evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+        reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        quality_flags_json TEXT NOT NULL DEFAULT '[]',
+
+        rule_code TEXT NOT NULL,
+        rule_version TEXT NOT NULL,
+        threshold_config_version TEXT NOT NULL,
+        threshold_snapshot_json TEXT NOT NULL,
+        fx_rate_to_base {real_type},
+        fx_effective_date TEXT,
+        fx_method TEXT,
+
+        created_at TEXT NOT NULL,
+        activated_at TEXT,
+        completed_at TEXT,
+        cancelled_at TEXT,
+        superseded_at TEXT,
+        invalidated_at TEXT,
+        superseded_by_change_event_id TEXT,
+        last_evaluated_at TEXT,
+        lifecycle_reason_json TEXT NOT NULL DEFAULT '[]',
+
+        created_by TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        test_only {bool_type}
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS change_event_temporal_evaluation (
+        id {id_type},
+        temporal_evaluation_id TEXT NOT NULL UNIQUE,
+        change_event_db_id {fk_type} NOT NULL REFERENCES change_event(id),
+        change_event_id TEXT NOT NULL,
+        evaluation_as_of TEXT NOT NULL,
+        temporal_state TEXT NOT NULL,
+        reference_date_start TEXT,
+        reference_date_end TEXT,
+        days_to_event_min INTEGER,
+        days_to_event_max INTEGER,
+        days_since_event INTEGER,
+        rule_version TEXT NOT NULL,
+        config_version TEXT NOT NULL,
+        timezone_basis TEXT NOT NULL,
+        reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        test_only {bool_type}
+    )""")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_change_event_relationship ON change_event(relationship_id, object_kind, id DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_change_event_source_pair ON change_event(previous_assessment_id,current_assessment_id,change_event_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_change_event_event_identity ON change_event(relationship_id,economic_identity_key,id DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_change_event_temporal ON change_event_temporal_evaluation(change_event_db_id,evaluation_as_of,id DESC)")
+
+
+def _db_stage1e4_seed_test_configs(conn: _DBConnection):
+    """Seed explicit TEST-only E.4 configs; they never authorize production persistence."""
+    now = _db_now()
+    configs = [
+        (
+            E4_TEST_CHANGE_CONFIG_VERSION,
+            "CHANGE_MATERIALITY",
+            {
+                "base_currency": "JPY",
+                "absolute_thresholds": {
+                    "WALLET_SIZE_CHANGE": 50_000_000_000.0,
+                    "WALLET_GAP_CHANGE": 50_000_000_000.0,
+                    "CAPTURE_CHANGE": 25_000_000_000.0,
+                    "WALLET_SIZE_CHANGE:CAPEX_COMPONENT": 50_000_000_000.0,
+                    "WALLET_SIZE_CHANGE:REFINANCING_COMPONENT": 50_000_000_000.0,
+                },
+                "relative_thresholds": {
+                    "WALLET_SIZE_CHANGE": 0.20,
+                    "WALLET_GAP_CHANGE": 0.20,
+                    "CAPTURE_CHANGE": 0.20,
+                },
+                "penetration_pp_threshold": 5.0,
+            },
+        ),
+        (
+            E4_TEST_EVENT_CONFIG_VERSION,
+            "EVENT_MATERIALITY",
+            {
+                "base_currency": "JPY",
+                "absolute_thresholds": {
+                    "DEBT_MATURITY": 50_000_000_000.0,
+                    "FACILITY_MATURITY": 50_000_000_000.0,
+                    "CAPEX_ANNOUNCEMENT": 100_000_000_000.0,
+                    "ACQUISITION_EVENT": 100_000_000_000.0,
+                    "FINANCING_EVENT": 50_000_000_000.0,
+                    "ASSET_DISPOSAL_EVENT": 50_000_000_000.0,
+                    "LIQUIDITY_INFLOW_EVENT": 50_000_000_000.0,
+                    "LIQUIDITY_OUTFLOW_EVENT": 50_000_000_000.0,
+                },
+                "qualitative_material_types": ["TREASURY_EVENT"],
+            },
+        ),
+        (
+            E4_TEST_TEMPORAL_CONFIG_VERSION,
+            "TEMPORAL",
+            {
+                "timezone_basis": "Asia/Singapore",
+                "immediate_days": 30,
+                "near_term_days": 90,
+                "forward_days": 365,
+                "post_event_relevance_days": 60,
+                "recent_change_days": 30,
+            },
+        ),
+    ]
+    for version, config_type, payload in configs:
+        existing = conn.execute(
+            "SELECT id FROM change_event_rule_config WHERE config_type=? AND config_version=?",
+            (config_type, version),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """INSERT INTO change_event_rule_config(
+                       config_version,config_type,config_json,status,test_only,effective_from,created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?)""",
+                (version, config_type, json.dumps(payload, sort_keys=True), "ACTIVE", 1, "2026-10-12", now, now),
+            )
+
+
+def _db_stage1e4_load_config(conn: _DBConnection, config_type: str, config_version: str):
+    row = conn.execute(
+        """SELECT * FROM change_event_rule_config
+           WHERE config_type=? AND config_version=? AND status='ACTIVE'""",
+        (config_type, config_version),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"E.4 configuration not found: {config_type} / {config_version}")
+    payload = json.loads(row["config_json"] or "{}")
+    if config_type == "CHANGE_MATERIALITY":
+        cfg = E4ChangeMaterialityConfig(
+            config_version=row["config_version"],
+            base_currency=payload["base_currency"],
+            absolute_thresholds={str(k): float(v) for k, v in payload.get("absolute_thresholds", {}).items()},
+            relative_thresholds={str(k): float(v) for k, v in payload.get("relative_thresholds", {}).items()},
+            penetration_pp_threshold=(float(payload["penetration_pp_threshold"]) if payload.get("penetration_pp_threshold") is not None else None),
+        )
+    elif config_type == "EVENT_MATERIALITY":
+        cfg = E4EventMaterialityConfig(
+            config_version=row["config_version"],
+            base_currency=payload["base_currency"],
+            absolute_thresholds={str(k): float(v) for k, v in payload.get("absolute_thresholds", {}).items()},
+            qualitative_material_types=tuple(E4EventType(x) for x in payload.get("qualitative_material_types", [])),
+        )
+    elif config_type == "TEMPORAL":
+        cfg = E4TemporalRuleConfig(
+            config_version=row["config_version"],
+            timezone_basis=payload["timezone_basis"],
+            immediate_days=int(payload["immediate_days"]),
+            near_term_days=int(payload["near_term_days"]),
+            forward_days=int(payload["forward_days"]),
+            post_event_relevance_days=int(payload["post_event_relevance_days"]),
+            recent_change_days=int(payload["recent_change_days"]),
+        )
+    else:
+        raise ValueError(f"Unsupported E.4 configuration type: {config_type}")
+    return cfg, bool(row["test_only"])
+
+
+def _db_stage1e4_validation_relationship(conn: _DBConnection):
+    row = conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E4_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+    if row is not None:
+        return row
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO relationship(
+               relationship_id,name,country,sector,external_rating,outlook,score,
+               attention_rating,primary_driver,recommended_action,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            E4_VALIDATION_RELATIONSHIP_ID, E4_VALIDATION_COMPANY, "SYSTEM", "VALIDATION",
+            None, None, None, None, "E4.8 controlled persistence fixture",
+            "Hidden from business UI; test-only ChangeEvent validation.", now, now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E4_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+
+
+def _db_stage1e4_scope_from_evidence(conn: _DBConnection, evidence_ids: tuple[str, ...]):
+    perimeters, time_bases = set(), set()
+    for evidence_id in evidence_ids:
+        row = conn.execute(
+            "SELECT economic_perimeter,time_basis FROM intelligence_evidence WHERE evidence_id=?",
+            (evidence_id,),
+        ).fetchone()
+        if row is None:
+            continue
+        if row["economic_perimeter"]:
+            perimeters.add(str(row["economic_perimeter"]))
+        if row["time_basis"]:
+            time_bases.add(str(row["time_basis"]))
+    return (
+        next(iter(perimeters)) if len(perimeters) == 1 else None,
+        next(iter(time_bases)) if len(time_bases) == 1 else None,
+    )
+
+
+def _db_stage1e4_wallet_state(conn: _DBConnection, assessment_id: str) -> E4WalletStateInput:
+    row = conn.execute(
+        """SELECT wa.*, r.relationship_id AS relationship_public_id,
+                  im.methodology_code, im.version AS methodology_version
+           FROM wallet_assessment wa
+           JOIN relationship r ON r.id=wa.relationship_id
+           JOIN intelligence_methodology im ON im.id=wa.methodology_id
+           WHERE wa.assessment_id=?""",
+        (assessment_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"Wallet assessment {assessment_id} not found.")
+    evidence_ids = tuple(_stage1e2_parse_json_list(row["evidence_ids_json"]))
+    calculation_ids = tuple(_stage1e2_parse_json_list(row["calculation_ids_json"]))
+    try:
+        qg = json.loads(row["quality_gate_json"] or "{}")
+    except Exception:
+        qg = {}
+    blocking = tuple(str(x) for x in (qg.get("blocking_issues") or []))
+    perimeter, evidence_time_basis = _db_stage1e4_scope_from_evidence(conn, evidence_ids)
+    confidence_text = row["confidence"] or "LOW"
+    try:
+        confidence = E4ConfidenceLevel(confidence_text)
+    except Exception:
+        confidence = E4ConfidenceLevel.LOW
+    comparability_text = row["capture_comparability_status"] or "NOT_ASSESSED"
+    try:
+        comparability = E4ComparabilityStatus(comparability_text)
+    except Exception:
+        comparability = E4ComparabilityStatus.NOT_ASSESSED
+    capture_complete = (row["capture_component_status"] or "NOT_ASSESSED") == "COMPLETE"
+    time_basis = row["liquidity_time_basis"] or evidence_time_basis
+    return E4WalletStateInput(
+        assessment_id=row["assessment_id"],
+        relationship_id=row["relationship_public_id"],
+        methodology_code=row["methodology_code"],
+        methodology_version=row["methodology_version"],
+        assessment_status=row["status"],
+        publication_result=row["publication_result"] or "",
+        test_only=bool(row["test_only"]),
+        invalidated=(row["status"] == "INVALIDATED"),
+        confidence=confidence,
+        evidence_ids=evidence_ids,
+        calculation_ids=calculation_ids,
+        blocking_quality_issues=blocking,
+        currency=row["currency"],
+        economic_perimeter=perimeter,
+        geographic_scope=row["geographic_scope"],
+        time_horizon=row["time_horizon"],
+        time_basis=time_basis,
+        wallet_coverage=row["wallet_coverage"],
+        addressable_wallet=float(row["addressable_notional"]) if row["addressable_notional"] is not None else None,
+        positive_gap=float(row["positive_wallet_gap"]) if row["positive_wallet_gap"] is not None else None,
+        penetration=float(row["notional_penetration"]) if row["notional_penetration"] is not None else None,
+        our_capture=float(row["captured_notional"]) if row["captured_notional"] is not None else None,
+        capture_component_complete=capture_complete,
+        capture_comparability_status=comparability,
+        capex_addressable_notional=float(row["bank_capex_notional"]) if row["bank_capex_notional"] is not None else None,
+        refinancing_addressable_notional=float(row["bank_refinancing_notional"]) if row["bank_refinancing_notional"] is not None else None,
+        source_as_of=row["effective_date"],
+    )
+
+
+def _db_stage1e4_previous_wallet_id(conn: _DBConnection, current_assessment_id: str) -> str | None:
+    current = conn.execute(
+        "SELECT id,relationship_id,methodology_id FROM wallet_assessment WHERE assessment_id=?",
+        (current_assessment_id,),
+    ).fetchone()
+    if current is None:
+        raise ValueError(f"Wallet assessment {current_assessment_id} not found.")
+    row = conn.execute(
+        """SELECT assessment_id FROM wallet_assessment
+           WHERE relationship_id=? AND methodology_id=? AND id<?
+             AND status='PUBLISHED' AND publication_result='PUBLISH' AND test_only=0
+           ORDER BY id DESC LIMIT 1""",
+        (current["relationship_id"], current["methodology_id"], current["id"]),
+    ).fetchone()
+    return row["assessment_id"] if row is not None else None
+
+
+def _db_stage1e4_existing_change(conn: _DBConnection, idempotency_key: str, *, test_only: bool):
+    row = conn.execute(
+        "SELECT * FROM change_event WHERE object_kind='CHANGE' AND idempotency_key=? AND test_only=? LIMIT 1",
+        (idempotency_key, 1 if test_only else 0),
+    ).fetchone()
+    if row is None:
+        return None
+    return E4ExistingChangeState(
+        change_event_id=row["change_event_id"],
+        idempotency_key=row["idempotency_key"],
+        status=E4ChangeStatus(row["status"]),
+    )
+
+
+def _db_stage1e4_existing_event(conn: _DBConnection, relationship_db_id: int, economic_identity_key: str, *, test_only: bool):
+    row = conn.execute(
+        """SELECT * FROM change_event
+           WHERE relationship_id=? AND object_kind='EVENT' AND economic_identity_key=?
+             AND status<>'SUPERSEDED' AND test_only=?
+           ORDER BY id DESC LIMIT 1""",
+        (relationship_db_id, economic_identity_key, 1 if test_only else 0),
+    ).fetchone()
+    if row is None:
+        return None
+    return E4ExistingEventState(
+        event_id=row["change_event_id"],
+        relationship_id=str(row["relationship_id"]),
+        economic_identity_key=row["economic_identity_key"],
+        economic_fingerprint=row["economic_fingerprint"],
+        lifecycle_fingerprint=row["lifecycle_fingerprint"],
+        idempotency_key=row["idempotency_key"],
+        event_status=E4EventStatus(row["status"]),
+    )
+
+
+def _db_stage1e4_persistence_key(candidate_key: str, *, supersedes_event_id: str | None = None, lifecycle_fingerprint: str | None = None) -> str:
+    """DB uniqueness key. A reactivated/superseding event may share economic fingerprint with history."""
+    if not supersedes_event_id:
+        return candidate_key
+    payload = f"{candidate_key}|{supersedes_event_id}|{lifecycle_fingerprint or ''}|SUPERSEDING_STATE"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _db_stage1e4_insert_change(
+    conn: _DBConnection,
+    *,
+    candidate: E4ChangeCandidate,
+    relationship_db_id: int,
+    previous_assessment_db_id: int | None,
+    current_assessment_db_id: int | None,
+    created_by: str,
+    test_only: bool,
+) -> str:
+    change_id = _db_next_id(conn, "change_event", "change_event_id", "CHG")
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO change_event(
+               change_event_id,relationship_id,object_kind,change_event_type,status,materiality,confidence,
+               previous_assessment_db_id,current_assessment_db_id,previous_assessment_id,current_assessment_id,
+               metric_code,metric_scope,previous_value,current_value,absolute_change,relative_change,
+               percentage_point_change,direction,wallet_coverage,currency,source_as_of,
+               reason_codes_json,quality_flags_json,rule_code,rule_version,threshold_config_version,
+               threshold_snapshot_json,fx_rate_to_base,fx_effective_date,fx_method,
+               created_at,activated_at,last_evaluated_at,lifecycle_reason_json,created_by,idempotency_key,test_only
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            change_id, relationship_db_id, E4ObjectKind.CHANGE.value, candidate.change_type.value,
+            E4ChangeStatus.RECORDED.value, candidate.materiality_result.value, candidate.confidence.value,
+            previous_assessment_db_id, current_assessment_db_id, candidate.previous_assessment_id,
+            candidate.current_assessment_id, candidate.metric_code, candidate.metric_scope,
+            candidate.previous_value, candidate.current_value, candidate.absolute_change,
+            candidate.relative_change, candidate.percentage_point_change, candidate.direction.value,
+            candidate.wallet_coverage, candidate.currency, candidate.current_source_as_of,
+            json.dumps(list(candidate.reason_codes)), json.dumps([]), candidate.rule_code,
+            candidate.rule_version, candidate.threshold_config_version,
+            json.dumps(candidate.threshold_snapshot, sort_keys=True, default=str), candidate.fx_rate_to_base,
+            candidate.fx_effective_date, candidate.fx_method, now, now, now,
+            json.dumps(["NEW_MATERIAL_CHANGE"]), created_by, candidate.idempotency_key,
+            1 if test_only else 0,
+        ),
+    )
+    _db_append_audit(
+        conn, entity_type="ChangeEvent", entity_id=change_id, relationship_id=relationship_db_id,
+        event_type="CHANGE_EVENT_CREATED", actor=created_by,
+        payload={
+            "object_kind": "CHANGE", "change_type": candidate.change_type.value,
+            "previous_assessment_id": candidate.previous_assessment_id,
+            "current_assessment_id": candidate.current_assessment_id,
+            "metric_code": candidate.metric_code, "metric_scope": candidate.metric_scope,
+            "materiality": candidate.materiality_result.value,
+            "rule_code": candidate.rule_code, "rule_version": candidate.rule_version,
+            "threshold_config_version": candidate.threshold_config_version,
+            "test_only": bool(test_only),
+        },
+    )
+    return change_id
+
+
+def _db_stage1e4_insert_event(
+    conn: _DBConnection,
+    *,
+    candidate: E4EventPersistenceCandidate,
+    evidence_ids: tuple[str, ...],
+    relationship_db_id: int,
+    created_by: str,
+    test_only: bool,
+    persistence_key: str | None = None,
+) -> str:
+    event_id = _db_next_id(conn, "change_event", "change_event_id", "EVT")
+    now = _db_now()
+    completed_at = now if candidate.event_status == E4EventStatus.COMPLETED else None
+    cancelled_at = now if candidate.event_status == E4EventStatus.CANCELLED else None
+    conn.execute(
+        """INSERT INTO change_event(
+               change_event_id,relationship_id,object_kind,change_event_type,status,materiality,confidence,
+               event_group_id,economic_episode_key,event_amount,amount_min,amount_max,currency,amount_status,
+               impact_domains_json,impact_direction,materiality_basis,economic_identity_key,economic_fingerprint,
+               lifecycle_fingerprint,observed_at,announced_date,expected_date_start,expected_date_end,effective_date,
+               date_precision,source_as_of,economic_perimeter,legal_entity,geographic_scope,evidence_ids_json,
+               reason_codes_json,quality_flags_json,rule_code,rule_version,threshold_config_version,
+               threshold_snapshot_json,fx_rate_to_base,fx_effective_date,fx_method,created_at,activated_at,
+               completed_at,cancelled_at,last_evaluated_at,lifecycle_reason_json,created_by,idempotency_key,test_only
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            event_id, relationship_db_id, E4ObjectKind.EVENT.value, candidate.event_type.value,
+            candidate.event_status.value, candidate.materiality_result.value, candidate.confidence.value,
+            candidate.event_group_id, candidate.economic_episode_key, candidate.event_amount, candidate.amount_min,
+            candidate.amount_max, candidate.currency, candidate.amount_status.value,
+            json.dumps(list(candidate.impact_domains)), candidate.impact_direction.value, candidate.materiality_basis,
+            candidate.economic_identity_key, candidate.economic_fingerprint, candidate.lifecycle_fingerprint,
+            candidate.observed_at, candidate.announced_date, candidate.expected_date_start, candidate.expected_date_end,
+            candidate.effective_date, candidate.date_precision.value, candidate.source_as_of,
+            candidate.economic_perimeter, candidate.legal_entity, candidate.geographic_scope,
+            json.dumps(list(evidence_ids)), json.dumps(list(candidate.reason_codes)), json.dumps([]),
+            candidate.materiality_rule_code, candidate.rule_version, candidate.threshold_config_version,
+            json.dumps(candidate.threshold_snapshot, sort_keys=True, default=str), candidate.fx_rate_to_base,
+            candidate.fx_effective_date, candidate.fx_method, now, now, completed_at, cancelled_at, now,
+            json.dumps(["NEW_AUTHORITATIVE_EVENT"]), created_by, persistence_key or candidate.idempotency_key,
+            1 if test_only else 0,
+        ),
+    )
+    _db_append_audit(
+        conn, entity_type="ChangeEvent", entity_id=event_id, relationship_id=relationship_db_id,
+        event_type="CORPORATE_EVENT_CREATED", actor=created_by,
+        payload={
+            "object_kind": "EVENT", "event_type": candidate.event_type.value,
+            "event_status": candidate.event_status.value, "materiality": candidate.materiality_result.value,
+            "economic_episode_key": candidate.economic_episode_key,
+            "threshold_config_version": candidate.threshold_config_version,
+            "test_only": bool(test_only),
+        },
+    )
+    return event_id
+
+
+def _db_stage1e4_persist_temporal_evaluation(
+    conn: _DBConnection,
+    *,
+    change_event_id: str,
+    temporal: E4TemporalEvaluation,
+    created_by: str,
+    test_only: bool,
+) -> str:
+    row = conn.execute("SELECT id FROM change_event WHERE change_event_id=?", (change_event_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"ChangeEvent {change_event_id} not found.")
+    idem = hashlib.sha256(
+        f"{change_event_id}|{temporal.evaluation_as_of}|{temporal.rule_version}|{temporal.config_version}".encode("utf-8")
+    ).hexdigest()
+    existing = conn.execute(
+        "SELECT temporal_evaluation_id FROM change_event_temporal_evaluation WHERE idempotency_key=?",
+        (idem,),
+    ).fetchone()
+    if existing is not None:
+        return existing["temporal_evaluation_id"]
+    eval_id = _db_next_id(conn, "change_event_temporal_evaluation", "temporal_evaluation_id", "TMP")
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO change_event_temporal_evaluation(
+               temporal_evaluation_id,change_event_db_id,change_event_id,evaluation_as_of,temporal_state,
+               reference_date_start,reference_date_end,days_to_event_min,days_to_event_max,days_since_event,
+               rule_version,config_version,timezone_basis,reason_codes_json,created_at,created_by,idempotency_key,test_only
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            eval_id, row["id"], change_event_id, temporal.evaluation_as_of, temporal.temporal_state.value,
+            temporal.reference_date_start, temporal.reference_date_end, temporal.days_to_event_min,
+            temporal.days_to_event_max, temporal.days_since_event, temporal.rule_version,
+            temporal.config_version, temporal.timezone_basis, json.dumps(list(temporal.reason_codes)),
+            now, created_by, idem, 1 if test_only else 0,
+        ),
+    )
+    _db_append_audit(
+        conn, entity_type="ChangeEvent", entity_id=change_event_id, relationship_id=None,
+        event_type="CHANGE_EVENT_TEMPORAL_EVALUATED", actor=created_by,
+        payload={
+            "temporal_evaluation_id": eval_id, "evaluation_as_of": temporal.evaluation_as_of,
+            "temporal_state": temporal.temporal_state.value, "config_version": temporal.config_version,
+        },
+    )
+    return eval_id
+
+
+def _db_stage1e4_apply_wallet_change(
+    current_assessment_id: str,
+    config_version: str,
+    temporal_config_version: str,
+    *,
+    evaluation_as_of: str,
+    actor: str = "EC-AI Change Engine",
+    fx_basis: E4GovernedFXBasis | None = None,
+    persistence_test_only: bool = False,
+) -> dict:
+    with _db_transaction() as conn:
+        change_config, change_config_test = _db_stage1e4_load_config(conn, "CHANGE_MATERIALITY", config_version)
+        temporal_config, temporal_config_test = _db_stage1e4_load_config(conn, "TEMPORAL", temporal_config_version)
+        previous_id = _db_stage1e4_previous_wallet_id(conn, current_assessment_id)
+        if previous_id is None:
+            return {"Previous Assessment ID": None, "Current Assessment ID": current_assessment_id, "Evaluations": [], "Persisted IDs": [], "Persistence Blocked": "NO_PREVIOUS_AUTHORITATIVE_STATE"}
+        previous = _db_stage1e4_wallet_state(conn, previous_id)
+        current = _db_stage1e4_wallet_state(conn, current_assessment_id)
+        evaluations = _stage1e4_evaluate_wallet_changes(previous, current, change_config, fx_basis=fx_basis)
+        if change_config_test or temporal_config_test:
+            if not persistence_test_only:
+                return {
+                    "Previous Assessment ID": previous_id, "Current Assessment ID": current_assessment_id,
+                    "Evaluations": evaluations, "Persisted IDs": [], "Persistence Blocked": "TEST_CONFIG",
+                }
+        source_rows = conn.execute(
+            "SELECT id,assessment_id FROM wallet_assessment WHERE assessment_id IN (?,?)",
+            (previous_id, current_assessment_id),
+        ).fetchall()
+        source_ids = {r["assessment_id"]: int(r["id"]) for r in source_rows}
+        rel_row = conn.execute("SELECT id FROM relationship WHERE relationship_id=?", (current.relationship_id,)).fetchone()
+        relationship_db_id = int(rel_row["id"])
+        if conn.backend == "postgresql":
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (f"ecai-change:{relationship_db_id}:{previous_id}:{current_assessment_id}",))
+        persisted = []
+        for ev in evaluations:
+            if ev.candidate is None:
+                continue
+            existing = _db_stage1e4_existing_change(conn, ev.candidate.idempotency_key, test_only=persistence_test_only)
+            decision = _stage1e4_decide_change_persistence(ev.candidate, existing)
+            if decision.action == E4LifecycleAction.CREATE:
+                change_id = _db_stage1e4_insert_change(
+                    conn, candidate=ev.candidate, relationship_db_id=relationship_db_id,
+                    previous_assessment_db_id=source_ids.get(previous_id),
+                    current_assessment_db_id=source_ids.get(current_assessment_id),
+                    created_by=actor, test_only=persistence_test_only,
+                )
+            else:
+                change_id = decision.existing_event_id
+            if change_id:
+                temporal = _stage1e4_evaluate_change_temporal_relevance(ev.candidate, evaluation_as_of, temporal_config)
+                temporal_id = _db_stage1e4_persist_temporal_evaluation(
+                    conn, change_event_id=change_id, temporal=temporal,
+                    created_by=actor, test_only=persistence_test_only,
+                )
+                persisted.append({"ChangeEvent ID": change_id, "Temporal Evaluation ID": temporal_id, "Decision": decision.action.value})
+        return {
+            "Previous Assessment ID": previous_id, "Current Assessment ID": current_assessment_id,
+            "Evaluations": evaluations, "Persisted IDs": persisted, "Persistence Blocked": None,
+        }
+
+
+def _db_stage1e4_apply_event(
+    event: E4CorporateEventInput,
+    event_config_version: str,
+    temporal_config_version: str,
+    *,
+    evaluation_as_of: str,
+    actor: str = "EC-AI Event Engine",
+    fx_basis: E4GovernedFXBasis | None = None,
+    persistence_test_only: bool = False,
+    material_economic_revision: bool = False,
+) -> dict:
+    with _db_transaction() as conn:
+        event_config, event_config_test = _db_stage1e4_load_config(conn, "EVENT_MATERIALITY", event_config_version)
+        temporal_config, temporal_config_test = _db_stage1e4_load_config(conn, "TEMPORAL", temporal_config_version)
+        evaluation = _stage1e4_evaluate_corporate_event(
+            event, event_config, temporal_config, evaluation_as_of=evaluation_as_of, fx_basis=fx_basis
+        )
+        if evaluation.candidate is None:
+            return {"Evaluation": evaluation, "Decision": None, "ChangeEvent ID": None, "Persistence Blocked": "EVENT_NOT_AUTHORITATIVE"}
+        if (event_config_test or temporal_config_test) and not persistence_test_only:
+            return {"Evaluation": evaluation, "Decision": None, "ChangeEvent ID": None, "Persistence Blocked": "TEST_CONFIG"}
+        rel = conn.execute("SELECT * FROM relationship WHERE relationship_id=?", (event.relationship_id,)).fetchone()
+        if rel is None:
+            raise ValueError(f"Relationship {event.relationship_id} is not registered.")
+        relationship_db_id = int(rel["id"])
+        candidate = evaluation.candidate
+        if conn.backend == "postgresql":
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (f"ecai-event:{relationship_db_id}:{candidate.economic_identity_key}",))
+        existing = _db_stage1e4_existing_event(
+            conn, relationship_db_id, candidate.economic_identity_key, test_only=persistence_test_only
+        )
+        decision = _stage1e4_decide_event_lifecycle(
+            candidate, existing, material_economic_revision=material_economic_revision
+        )
+        now = _db_now()
+        change_event_id = None
+        if decision.action == E4LifecycleAction.CREATE:
+            change_event_id = _db_stage1e4_insert_event(
+                conn, candidate=candidate, evidence_ids=event.evidence_ids,
+                relationship_db_id=relationship_db_id, created_by=actor,
+                test_only=persistence_test_only,
+            )
+        elif decision.action == E4LifecycleAction.KEEP_EXISTING and existing is not None:
+            change_event_id = existing.event_id
+        elif decision.action == E4LifecycleAction.UPDATE_LIFECYCLE and existing is not None:
+            change_event_id = existing.event_id
+            completed_at = now if candidate.event_status == E4EventStatus.COMPLETED else None
+            cancelled_at = now if candidate.event_status == E4EventStatus.CANCELLED else None
+            conn.execute(
+                """UPDATE change_event SET status=?,materiality=?,confidence=?,event_amount=?,amount_min=?,amount_max=?,
+                   currency=?,amount_status=?,impact_domains_json=?,impact_direction=?,materiality_basis=?,
+                   economic_fingerprint=?,lifecycle_fingerprint=?,observed_at=?,announced_date=?,expected_date_start=?,
+                   expected_date_end=?,effective_date=?,date_precision=?,source_as_of=?,economic_perimeter=?,legal_entity=?,
+                   geographic_scope=?,evidence_ids_json=?,reason_codes_json=?,threshold_snapshot_json=?,fx_rate_to_base=?,
+                   fx_effective_date=?,fx_method=?,completed_at=COALESCE(?,completed_at),cancelled_at=COALESCE(?,cancelled_at),
+                   last_evaluated_at=?,lifecycle_reason_json=? WHERE change_event_id=?""",
+                (
+                    candidate.event_status.value, candidate.materiality_result.value, candidate.confidence.value,
+                    candidate.event_amount, candidate.amount_min, candidate.amount_max, candidate.currency,
+                    candidate.amount_status.value, json.dumps(list(candidate.impact_domains)), candidate.impact_direction.value,
+                    candidate.materiality_basis, candidate.economic_fingerprint, candidate.lifecycle_fingerprint,
+                    candidate.observed_at, candidate.announced_date, candidate.expected_date_start, candidate.expected_date_end,
+                    candidate.effective_date, candidate.date_precision.value, candidate.source_as_of,
+                    candidate.economic_perimeter, candidate.legal_entity, candidate.geographic_scope,
+                    json.dumps(list(event.evidence_ids)), json.dumps(list(candidate.reason_codes)),
+                    json.dumps(candidate.threshold_snapshot, sort_keys=True, default=str), candidate.fx_rate_to_base,
+                    candidate.fx_effective_date, candidate.fx_method, completed_at, cancelled_at, now,
+                    json.dumps(list(decision.reason_codes)), existing.event_id,
+                ),
+            )
+            _db_append_audit(
+                conn, entity_type="ChangeEvent", entity_id=existing.event_id, relationship_id=relationship_db_id,
+                event_type="CORPORATE_EVENT_LIFECYCLE_UPDATED", actor=actor,
+                payload={"status": candidate.event_status.value, "reason_codes": list(decision.reason_codes)},
+            )
+        elif decision.action == E4LifecycleAction.SUPERSEDE_AND_CREATE and existing is not None:
+            conn.execute(
+                "UPDATE change_event SET status='SUPERSEDED',superseded_at=?,last_evaluated_at=?,lifecycle_reason_json=? WHERE change_event_id=?",
+                (now, now, json.dumps(list(decision.reason_codes)), existing.event_id),
+            )
+            persistence_key = _db_stage1e4_persistence_key(
+                candidate.idempotency_key, supersedes_event_id=existing.event_id,
+                lifecycle_fingerprint=candidate.lifecycle_fingerprint,
+            )
+            change_event_id = _db_stage1e4_insert_event(
+                conn, candidate=candidate, evidence_ids=event.evidence_ids,
+                relationship_db_id=relationship_db_id, created_by=actor,
+                test_only=persistence_test_only, persistence_key=persistence_key,
+            )
+            conn.execute(
+                "UPDATE change_event SET superseded_by_change_event_id=? WHERE change_event_id=?",
+                (change_event_id, existing.event_id),
+            )
+            _db_append_audit(
+                conn, entity_type="ChangeEvent", entity_id=existing.event_id, relationship_id=relationship_db_id,
+                event_type="CORPORATE_EVENT_SUPERSEDED", actor=actor,
+                payload={"superseded_by_change_event_id": change_event_id, "reason_codes": list(decision.reason_codes)},
+            )
+        if change_event_id:
+            temporal_id = _db_stage1e4_persist_temporal_evaluation(
+                conn, change_event_id=change_event_id, temporal=evaluation.temporal,
+                created_by=actor, test_only=persistence_test_only,
+            )
+        else:
+            temporal_id = None
+        return {
+            "Evaluation": evaluation, "Decision": decision,
+            "ChangeEvent ID": change_event_id, "Temporal Evaluation ID": temporal_id,
+            "Persistence Blocked": None,
+        }
+
+
+def _db_stage1e4_list_change_events(*, include_test_only: bool = False, company: str | None = None) -> list[dict]:
+    conn = _db_connect()
+    try:
+        clauses, params = [], []
+        if not include_test_only:
+            clauses.append("ce.test_only=0")
+        if company:
+            rel = _db_relationship_row(conn, company)
+            clauses.append("ce.relationship_id=?")
+            params.append(rel["id"])
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(
+            f"""SELECT ce.*,r.name AS relationship_name
+                FROM change_event ce JOIN relationship r ON r.id=ce.relationship_id
+                {where} ORDER BY ce.id DESC""",
+            tuple(params),
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "ChangeEvent ID": r["change_event_id"], "Relationship": r["relationship_name"],
+                "Kind": r["object_kind"], "Type": r["change_event_type"], "Status": r["status"],
+                "Materiality": r["materiality"], "Confidence": r["confidence"],
+                "Metric": r["metric_code"], "Scope": r["metric_scope"],
+                "Absolute Change": r["absolute_change"], "PP Change": r["percentage_point_change"],
+                "Event Amount": r["event_amount"], "Currency": r["currency"],
+                "Expected Start": r["expected_date_start"], "Expected End": r["expected_date_end"],
+                "Previous Assessment": r["previous_assessment_id"], "Current Assessment": r["current_assessment_id"],
+                "Config": r["threshold_config_version"], "Test Only": bool(r["test_only"]),
+                "Created": r["created_at"],
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def _db_stage1e4_temporal_evaluations(change_event_id: str) -> list[dict]:
+    conn = _db_connect()
+    try:
+        rows = conn.execute(
+            """SELECT * FROM change_event_temporal_evaluation
+               WHERE change_event_id=? ORDER BY id""",
+            (change_event_id,),
+        ).fetchall()
+        return [{
+            "Temporal Evaluation ID": r["temporal_evaluation_id"],
+            "As Of": r["evaluation_as_of"], "State": r["temporal_state"],
+            "Days To Event Min": r["days_to_event_min"], "Days To Event Max": r["days_to_event_max"],
+            "Days Since Event": r["days_since_event"], "Config": r["config_version"],
+            "Timezone": r["timezone_basis"], "Test Only": bool(r["test_only"]),
+        } for r in rows]
+    finally:
+        conn.close()
+
+
+def _db_stage1e4_change_event_lineage(change_event_id: str) -> dict:
+    conn = _db_connect()
+    try:
+        row = conn.execute(
+            """SELECT ce.*,r.name AS relationship_name FROM change_event ce
+               JOIN relationship r ON r.id=ce.relationship_id WHERE ce.change_event_id=?""",
+            (change_event_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"ChangeEvent {change_event_id} not found.")
+        event_summary = {
+            "ChangeEvent ID": row["change_event_id"], "Relationship": row["relationship_name"],
+            "Kind": row["object_kind"], "Type": row["change_event_type"], "Status": row["status"],
+            "Materiality": row["materiality"], "Confidence": row["confidence"],
+            "Previous Assessment": row["previous_assessment_id"], "Current Assessment": row["current_assessment_id"],
+            "Evidence IDs": _stage1e2_parse_json_list(row["evidence_ids_json"]),
+            "Rule": row["rule_code"], "Rule Version": row["rule_version"],
+            "Config": row["threshold_config_version"], "Test Only": bool(row["test_only"]),
+        }
+        audit_raw = conn.execute(
+            """SELECT audit_event_id,event_type,event_timestamp,actor,payload_json FROM audit_event
+               WHERE entity_type='ChangeEvent' AND entity_id=? ORDER BY id""",
+            (change_event_id,),
+        ).fetchall()
+        audits = []
+        for a in audit_raw:
+            try:
+                payload = json.loads(a["payload_json"] or "{}")
+            except Exception:
+                payload = {"raw": a["payload_json"]}
+            audits.append({"Audit ID": a["audit_event_id"], "Event": a["event_type"], "At": a["event_timestamp"], "Actor": a["actor"], "Payload": payload})
+    finally:
+        conn.close()
+    wallets = {}
+    for key in ("Previous Assessment", "Current Assessment"):
+        assessment_id = event_summary.get(key)
+        if assessment_id and str(assessment_id).startswith("WAL-"):
+            try:
+                wallets[key] = _db_stage1e2_get_lineage(assessment_id)
+            except Exception:
+                wallets[key] = {"Assessment ID": assessment_id, "Lineage": "Unavailable / synthetic fixture"}
+    return {
+        "ChangeEvent": event_summary,
+        "Wallet Lineage": wallets,
+        "Temporal Evaluations": _db_stage1e4_temporal_evaluations(change_event_id),
+        "Audit Events": audits,
+    }
+
+
+def _db_stage1e4_run_persistence_smoke_test() -> dict:
+    """Controlled E.4.8 smoke test: persist one test-only CHG + one test-only EVT, then re-run idempotently."""
+    with _db_transaction() as conn:
+        rel = _db_stage1e4_validation_relationship(conn)
+        change_cfg, _ = _db_stage1e4_load_config(conn, "CHANGE_MATERIALITY", E4_TEST_CHANGE_CONFIG_VERSION)
+        event_cfg, _ = _db_stage1e4_load_config(conn, "EVENT_MATERIALITY", E4_TEST_EVENT_CONFIG_VERSION)
+        temporal_cfg, _ = _db_stage1e4_load_config(conn, "TEMPORAL", E4_TEST_TEMPORAL_CONFIG_VERSION)
+        rel_public = rel["relationship_id"]
+
+        previous = E4WalletStateInput(
+            assessment_id="E4-SYN-WAL-PREV", relationship_id=rel_public,
+            methodology_code="STRUCTURAL_LENDING", methodology_version="1.0",
+            assessment_status="PUBLISHED", publication_result="PUBLISH", test_only=False, invalidated=False,
+            confidence=E4ConfidenceLevel.HIGH, evidence_ids=("E4-SYN-EVD-PREV",), calculation_ids=("E4-SYN-CAL-PREV",),
+            currency="JPY", economic_perimeter="E4_VALIDATION_GROUP", geographic_scope="Global",
+            time_horizon="1Y", time_basis="FORECAST_1Y", wallet_coverage="CAPEX_ONLY",
+            addressable_wallet=500_000_000_000.0, positive_gap=450_000_000_000.0, penetration=0.10,
+            our_capture=50_000_000_000.0, capture_component_complete=True,
+            capture_comparability_status=E4ComparabilityStatus.COMPARABLE,
+            capex_addressable_notional=500_000_000_000.0, source_as_of="2026-09-12",
+        )
+        current = E4WalletStateInput(
+            assessment_id="E4-SYN-WAL-CURR", relationship_id=rel_public,
+            methodology_code="STRUCTURAL_LENDING", methodology_version="1.0",
+            assessment_status="PUBLISHED", publication_result="PUBLISH", test_only=False, invalidated=False,
+            confidence=E4ConfidenceLevel.HIGH, evidence_ids=("E4-SYN-EVD-CURR",), calculation_ids=("E4-SYN-CAL-CURR",),
+            currency="JPY", economic_perimeter="E4_VALIDATION_GROUP", geographic_scope="Global",
+            time_horizon="1Y", time_basis="FORECAST_1Y", wallet_coverage="CAPEX_ONLY",
+            addressable_wallet=700_000_000_000.0, positive_gap=620_000_000_000.0, penetration=(80_000_000_000.0/700_000_000_000.0),
+            our_capture=80_000_000_000.0, capture_component_complete=True,
+            capture_comparability_status=E4ComparabilityStatus.COMPARABLE,
+            capex_addressable_notional=700_000_000_000.0, source_as_of="2026-10-12",
+        )
+        change_evals = _stage1e4_evaluate_wallet_changes(previous, current, change_cfg)
+        change_candidate = next(
+            e.candidate for e in change_evals
+            if e.candidate is not None and e.change_type == E4ChangeType.WALLET_SIZE_CHANGE and e.metric_scope == "TOTAL_WALLET"
+        )
+        existing_change = _db_stage1e4_existing_change(conn, change_candidate.idempotency_key, test_only=True)
+        change_decision = _stage1e4_decide_change_persistence(change_candidate, existing_change)
+        if change_decision.action == E4LifecycleAction.CREATE:
+            change_id = _db_stage1e4_insert_change(
+                conn, candidate=change_candidate, relationship_db_id=int(rel["id"]),
+                previous_assessment_db_id=None, current_assessment_db_id=None,
+                created_by="E4.8 Persistence Smoke Test", test_only=True,
+            )
+        else:
+            change_id = change_decision.existing_event_id
+        change_temporal = _stage1e4_evaluate_change_temporal_relevance(change_candidate, "2026-10-12", temporal_cfg)
+        change_tmp = _db_stage1e4_persist_temporal_evaluation(
+            conn, change_event_id=change_id, temporal=change_temporal,
+            created_by="E4.8 Persistence Smoke Test", test_only=True,
+        )
+
+        event_input = E4CorporateEventInput(
+            relationship_id=rel_public, economic_episode_key="E4-SYN-DEBT-MATURITY-2027-01-10",
+            event_type=E4EventType.DEBT_MATURITY, event_status=E4EventStatus.SCHEDULED,
+            authoritative=True, test_only=False, confidence=E4ConfidenceLevel.HIGH,
+            evidence_ids=("E4-SYN-EVENT-EVIDENCE",), event_amount=250_000_000_000.0,
+            currency="JPY", amount_status=E4AmountStatus.DISCLOSED, observed_at="2026-10-12",
+            announced_date="2026-10-12", expected_date_start="2027-01-10", expected_date_end="2027-01-10",
+            date_precision=E4DatePrecision.DAY, economic_perimeter="E4_VALIDATION_GROUP",
+            legal_entity="E4 Validation Co", geographic_scope="Global", impact_domains=("LENDING",),
+            impact_direction=E4Direction.UNKNOWN, source_as_of="2026-10-12",
+        )
+        event_eval = _stage1e4_evaluate_corporate_event(
+            event_input, event_cfg, temporal_cfg, evaluation_as_of="2026-10-12"
+        )
+        candidate = event_eval.candidate
+        existing_event = _db_stage1e4_existing_event(conn, int(rel["id"]), candidate.economic_identity_key, test_only=True)
+        event_decision = _stage1e4_decide_event_lifecycle(candidate, existing_event)
+        if event_decision.action == E4LifecycleAction.CREATE:
+            event_id = _db_stage1e4_insert_event(
+                conn, candidate=candidate, evidence_ids=event_input.evidence_ids,
+                relationship_db_id=int(rel["id"]), created_by="E4.8 Persistence Smoke Test", test_only=True,
+            )
+        else:
+            event_id = event_decision.existing_event_id
+        event_tmp = _db_stage1e4_persist_temporal_evaluation(
+            conn, change_event_id=event_id, temporal=event_eval.temporal,
+            created_by="E4.8 Persistence Smoke Test", test_only=True,
+        )
+
+        # Same inputs again must resolve to existing objects/evaluations.
+        change_again = _db_stage1e4_existing_change(conn, change_candidate.idempotency_key, test_only=True)
+        change_decision_again = _stage1e4_decide_change_persistence(change_candidate, change_again)
+        event_again = _db_stage1e4_existing_event(conn, int(rel["id"]), candidate.economic_identity_key, test_only=True)
+        event_decision_again = _stage1e4_decide_event_lifecycle(candidate, event_again)
+        change_tmp_again = _db_stage1e4_persist_temporal_evaluation(
+            conn, change_event_id=change_id, temporal=change_temporal,
+            created_by="E4.8 Persistence Smoke Test", test_only=True,
+        )
+        event_tmp_again = _db_stage1e4_persist_temporal_evaluation(
+            conn, change_event_id=event_id, temporal=event_eval.temporal,
+            created_by="E4.8 Persistence Smoke Test", test_only=True,
+        )
+        fixture_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM change_event WHERE relationship_id=? AND test_only=1",
+            (rel["id"],),
+        ).fetchone()["n"]
+        return {
+            "Persistence Smoke PASS": bool(
+                change_id and event_id and fixture_count == 2
+                and change_decision_again.action == E4LifecycleAction.KEEP_EXISTING
+                and event_decision_again.action == E4LifecycleAction.KEEP_EXISTING
+                and change_tmp_again == change_tmp and event_tmp_again == event_tmp
+            ),
+            "ChangeEvent ID": change_id,
+            "CorporateEvent ID": event_id,
+            "Change Temporal Evaluation": change_tmp,
+            "Event Temporal Evaluation": event_tmp,
+            "Change Re-evaluation": change_decision_again.action.value,
+            "Event Re-evaluation": event_decision_again.action.value,
+            "Fixture Record Count": int(fixture_count),
+            "All Records Test Only": True,
+        }
+
+
+# END STAGE 1-E.4.8 — CHANGEEVENT PERSISTENCE & APP INTEGRATION
+
+
 # END STAGE 1-E.3.7 — OPPORTUNITYSIGNAL PERSISTENCE & WALLET LINEAGE
 
 def _db_write_system_metadata():
@@ -6478,12 +8946,14 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.3.8 v0.1",
+        "intelligence_release": "Stage 1-E.4.8 v0.1",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
-        "opportunity_signal_release": "Stage 1-E.3.8 v0.1",
+        "opportunity_signal_release": "Stage 1-E.3.8 v1.0 LOCKED",
         "opportunity_signal_rule_version": "1.0",
+        "change_event_release": "Stage 1-E.4.8 v0.1",
+        "change_event_rule_version": "1.0",
     }
     with _db_transaction() as conn:
         now = _db_now()
@@ -6664,6 +9134,7 @@ def _db_bootstrap_reference_state_cached(backend: str, schema_version: int, runt
     with _db_transaction() as conn:
         _db_seed_stage1e_methodologies(conn)
         _db_seed_stage1e2_methodology(conn)
+        _db_stage1e4_seed_test_configs(conn)
     _db_sync_relationship_review_items()
     _db_sync_portfolio_signals(_portfolio_signal_definitions(_portfolio_analysis_df()))
     _db_migrate_legacy_execution_once()
@@ -7907,7 +10378,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.3.8 · Final Live Validation v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.4.8 · ChangeEvent Persistence v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -8425,6 +10896,69 @@ def render_stage_1c_sidebar():
                     st.error("Idempotency CHECK · inspect the re-evaluation result.")
                 st.write(idem)
 
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.4.8 · ChangeEvent Persistence**")
+            st.caption(
+                "Persistence integration smoke test only · one synthetic CHG + one synthetic EVT · "
+                "all E.4.8 fixture rows are TEST-only and excluded from production lists."
+            )
+            if st.button(
+                "Run E.4.8 ChangeEvent Persistence Smoke Test",
+                key="stage1e4_8_persistence_smoke",
+                use_container_width=True,
+            ):
+                try:
+                    smoke = _db_stage1e4_run_persistence_smoke_test()
+                    st.session_state["stage1e4_8_smoke_result"] = smoke
+                except Exception as exc:
+                    st.error(f"E.4.8 persistence smoke test failed: {exc}")
+
+            smoke = st.session_state.get("stage1e4_8_smoke_result")
+            if smoke:
+                if smoke.get("Persistence Smoke PASS"):
+                    st.success(
+                        "E.4.8 Persistence PASS · CHG/EVT + temporal evaluations persisted and reran idempotently."
+                    )
+                else:
+                    st.error("E.4.8 Persistence CHECK · inspect smoke-test output.")
+                st.write(smoke)
+
+            try:
+                e4_test_rows = _db_stage1e4_list_change_events(
+                    include_test_only=True,
+                    company=E4_VALIDATION_COMPANY,
+                )
+            except Exception as exc:
+                e4_test_rows = []
+                st.error(f"E.4.8 ChangeEvent reload failed: {exc}")
+
+            if e4_test_rows:
+                st.dataframe(pd.DataFrame(e4_test_rows), use_container_width=True, hide_index=True)
+                selected_e4_id = e4_test_rows[0]["ChangeEvent ID"]
+                e4_lineage_key = f"stage1e4_lineage::{selected_e4_id}"
+                if st.button(
+                    f"Load {selected_e4_id} ChangeEvent Lineage",
+                    key=f"stage1e4_load_lineage::{selected_e4_id}",
+                    use_container_width=True,
+                ):
+                    try:
+                        st.session_state[e4_lineage_key] = _db_stage1e4_change_event_lineage(selected_e4_id)
+                    except Exception as exc:
+                        st.error(f"E.4.8 lineage load failed: {exc}")
+                e4_lineage = st.session_state.get(e4_lineage_key)
+                if e4_lineage:
+                    with st.expander(f"Inspect {selected_e4_id} ChangeEvent lineage", expanded=False):
+                        st.json(e4_lineage)
+
+            try:
+                prod_e4_count = len(_db_stage1e4_list_change_events(include_test_only=False))
+            except Exception as exc:
+                prod_e4_count = None
+                st.error(f"E.4 production ChangeEvent count failed: {exc}")
+            if prod_e4_count is not None:
+                st.caption(f"Production ChangeEvents currently visible to E.4: {prod_e4_count}")
+
         if diagnostics_enabled:
             if st.button(
                 "Refresh Stage 1-E Diagnostics",
@@ -8439,6 +10973,7 @@ def render_stage_1c_sidebar():
                         or key.startswith("stage1e2_cash_lineage::")
                         or key.startswith("stage1e3_signal_lineage::")
                         or key.startswith("stage1e3_8_lineage::")
+                        or key.startswith("stage1e4_lineage::")
                     ):
                         del st.session_state[key]
                 st.rerun()
