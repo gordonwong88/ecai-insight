@@ -1470,7 +1470,7 @@ ECAI_DB_PATH = os.environ.get(
 )
 ECAI_SCHEMA_VERSION = 9
 ECAI_PERSISTENCE_RUNTIME_VERSION = 11  # E.4.9: ChangeEvent final live validation
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.4.9 ChangeEvent Final Live Validation Candidate v0.1"
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.4.9 ChangeEvent Final Live Validation Hotfix v0.2"
 
 
 def _db_now() -> str:
@@ -5913,8 +5913,9 @@ def _stage1e4_direction(delta: float) -> E4Direction:
 
 def _stage1e4_authoritative_wallet_reasons(state: E4WalletStateInput, prefix: str) -> list[str]:
     reasons: list[str] = []
-    if state.assessment_status != "PUBLISHED":
-        reasons.append(f"{prefix}_ASSESSMENT_NOT_PUBLISHED")
+    allowed_statuses = {"PUBLISHED"} if prefix == "CURRENT" else {"PUBLISHED", "SUPERSEDED"}
+    if state.assessment_status not in allowed_statuses:
+        reasons.append(f"{prefix}_ASSESSMENT_NOT_AUTHORITATIVE")
     if state.publication_result != "PUBLISH":
         reasons.append(f"{prefix}_PUBLICATION_NOT_APPROVED")
     if state.test_only:
@@ -8329,7 +8330,10 @@ def _db_stage1e4_previous_wallet_id(conn: _DBConnection, current_assessment_id: 
     row = conn.execute(
         """SELECT assessment_id FROM wallet_assessment
            WHERE relationship_id=? AND methodology_id=? AND id<?
-             AND status='PUBLISHED' AND publication_result='PUBLISH' AND test_only=0
+             AND status IN ('PUBLISHED','SUPERSEDED')
+             AND publication_result='PUBLISH'
+             AND published_at IS NOT NULL
+             AND test_only=0
            ORDER BY id DESC LIMIT 1""",
         (current["relationship_id"], current["methodology_id"], current["id"]),
     ).fetchone()
@@ -8984,9 +8988,16 @@ E4_9_EVENT_EPISODE_KEY = "E4.9-DEBT-MATURITY-2027-01-10"
 E4_9_EVALUATION_AS_OF = "2026-10-13"
 
 
-def _db_stage1e4_9_existing_validation_wallet(conn: _DBConnection, publication_mode: str):
+def _db_stage1e4_9_existing_validation_wallet(
+    conn: _DBConnection,
+    publication_mode: str,
+    *,
+    effective_date: str | None = None,
+):
     rel = _db_stage1e4_validation_relationship(conn)
-    return conn.execute(
+
+    # First prefer the canonical fixture identified by publication mode.
+    row = conn.execute(
         """SELECT wa.*
            FROM wallet_assessment wa
            JOIN intelligence_methodology im ON im.id=wa.methodology_id
@@ -8994,16 +9005,42 @@ def _db_stage1e4_9_existing_validation_wallet(conn: _DBConnection, publication_m
              AND im.methodology_code='STRUCTURAL_LENDING'
              AND im.version='1.0'
              AND wa.publication_mode=?
-             AND wa.status='PUBLISHED'
+             AND wa.status IN ('PUBLISHED','SUPERSEDED')
              AND wa.publication_result='PUBLISH'
              AND wa.test_only=0
            ORDER BY wa.id DESC LIMIT 1""",
         (rel["id"], publication_mode),
     ).fetchone()
+    if row is not None:
+        return row
+
+    # Recovery path for a partially completed E.4.9 v0.1 run:
+    # the current fixture may already exist as VALIDATED but have no
+    # publication_mode because the old direct publication collided with
+    # the one-current-published uniqueness constraint.
+    if effective_date:
+        row = conn.execute(
+            """SELECT wa.*
+               FROM wallet_assessment wa
+               JOIN intelligence_methodology im ON im.id=wa.methodology_id
+               WHERE wa.relationship_id=?
+                 AND im.methodology_code='STRUCTURAL_LENDING'
+                 AND im.version='1.0'
+                 AND wa.product='LENDING'
+                 AND wa.effective_date=?
+                 AND wa.status IN ('VALIDATED','PUBLISHED','SUPERSEDED')
+                 AND wa.publication_result='PUBLISH'
+                 AND wa.test_only=0
+               ORDER BY wa.id DESC LIMIT 1""",
+            (rel["id"], effective_date),
+        ).fetchone()
+    return row
 
 
 def _db_stage1e4_9_publish_wallet(assessment_id: str, publication_mode: str):
-    with _db_transaction() as conn:
+    # Validate the hidden-fixture boundary first.
+    conn = _db_connect()
+    try:
         row = conn.execute(
             """SELECT wa.*,r.relationship_id AS relationship_public_id
                FROM wallet_assessment wa
@@ -9011,42 +9048,53 @@ def _db_stage1e4_9_publish_wallet(assessment_id: str, publication_mode: str):
                WHERE wa.assessment_id=?""",
             (assessment_id,),
         ).fetchone()
-        if row is None:
-            raise ValueError(f"E.4.9 WalletAssessment {assessment_id} not found.")
-        if row["relationship_public_id"] != E4_VALIDATION_RELATIONSHIP_ID:
-            raise ValueError("E.4.9 publication refused outside hidden validation relationship.")
-        if bool(row["test_only"]):
-            raise ValueError("E.4.9 source WalletAssessment must be production-like non-test.")
-        if row["status"] == "PUBLISHED" and row["publication_mode"] == publication_mode:
-            return
-        if row["status"] != "VALIDATED" or row["publication_result"] != "PUBLISH":
-            raise ValueError(
-                f"E.4.9 WalletAssessment not publication-qualified: "
-                f"{row['status']} / {row['publication_result']}."
-            )
-        qg = json.loads(row["quality_gate_json"] or "{}")
-        if not bool(qg.get("production_publication_allowed")):
-            raise ValueError("E.4.9 source WalletAssessment failed publication gate.")
+    finally:
+        conn.close()
 
-        now = _db_now()
-        conn.execute(
-            """UPDATE wallet_assessment
-               SET status='PUBLISHED',published_at=?,published_by=?,publication_mode=?
-               WHERE assessment_id=?""",
-            (now, "E4.9 Validation Harness", publication_mode, assessment_id),
+    if row is None:
+        raise ValueError(f"E.4.9 WalletAssessment {assessment_id} not found.")
+    if row["relationship_public_id"] != E4_VALIDATION_RELATIONSHIP_ID:
+        raise ValueError("E.4.9 publication refused outside hidden validation relationship.")
+    if bool(row["test_only"]):
+        raise ValueError("E.4.9 source WalletAssessment must be production-like non-test.")
+
+    # A previous fixture may already be SUPERSEDED after the current state
+    # is published. That is the correct historical authoritative state.
+    if row["status"] == "SUPERSEDED":
+        return
+
+    if row["status"] == "PUBLISHED":
+        with _db_transaction() as conn:
+            conn.execute(
+                "UPDATE wallet_assessment SET publication_mode=? WHERE assessment_id=?",
+                (publication_mode, assessment_id),
+            )
+        return
+
+    if row["status"] != "VALIDATED" or row["publication_result"] != "PUBLISH":
+        raise ValueError(
+            f"E.4.9 WalletAssessment not publication-qualified: "
+            f"{row['status']} / {row['publication_result']}."
         )
-        _db_append_audit(
-            conn,
-            entity_type="WalletAssessment",
-            entity_id=assessment_id,
-            relationship_id=row["relationship_id"],
-            event_type="WALLET_ASSESSMENT_PUBLISHED",
-            actor="E4.9 Validation Harness",
-            payload={
-                "validation_fixture": True,
-                "publication_mode": publication_mode,
-                "methodology": "STRUCTURAL_LENDING 1.0",
-            },
+
+    qg = json.loads(row["quality_gate_json"] or "{}")
+    if not bool(qg.get("production_publication_allowed")):
+        raise ValueError("E.4.9 source WalletAssessment failed publication gate.")
+
+    # IMPORTANT: use the normal production publisher. It atomically
+    # supersedes the prior current assessment before publishing this one,
+    # preserving ux_wallet_one_current_published.
+    _db_stage1e_publish_assessment(
+        assessment_id,
+        actor="E4.9 Validation Harness",
+    )
+
+    # Preserve the validation-fixture identifier after the normal
+    # publication lifecycle has completed.
+    with _db_transaction() as conn:
+        conn.execute(
+            "UPDATE wallet_assessment SET publication_mode=? WHERE assessment_id=?",
+            (publication_mode, assessment_id),
         )
 
 
@@ -9060,9 +9108,25 @@ def _db_stage1e4_9_create_wallet(
 ) -> str:
     with _db_transaction() as conn:
         _db_stage1e4_validation_relationship(conn)
-        existing = _db_stage1e4_9_existing_validation_wallet(conn, publication_mode)
+        existing = _db_stage1e4_9_existing_validation_wallet(
+            conn,
+            publication_mode,
+            effective_date=effective_date,
+        )
         if existing is not None:
-            return existing["assessment_id"]
+            assessment_id = existing["assessment_id"]
+            existing_status = existing["status"]
+        else:
+            assessment_id = None
+            existing_status = None
+
+    if assessment_id is not None:
+        if existing_status == "VALIDATED":
+            _db_stage1e4_9_publish_wallet(assessment_id, publication_mode)
+        elif existing_status == "PUBLISHED":
+            _db_stage1e4_9_publish_wallet(assessment_id, publication_mode)
+        # SUPERSEDED is valid for the historical predecessor.
+        return assessment_id
 
     source_prefix = f"E4.9-{label}"
     evidence = [
@@ -9384,8 +9448,12 @@ def _db_stage1e4_9_run_final_validation() -> dict:
 
 def _db_stage1e4_9_validation_summary() -> dict:
     with _db_transaction() as conn:
-        previous = _db_stage1e4_9_existing_validation_wallet(conn, E4_9_PREVIOUS_PUBLICATION_MODE)
-        current = _db_stage1e4_9_existing_validation_wallet(conn, E4_9_CURRENT_PUBLICATION_MODE)
+        previous = _db_stage1e4_9_existing_validation_wallet(
+            conn, E4_9_PREVIOUS_PUBLICATION_MODE, effective_date="2026-09-13"
+        )
+        current = _db_stage1e4_9_existing_validation_wallet(
+            conn, E4_9_CURRENT_PUBLICATION_MODE, effective_date="2026-10-13"
+        )
         if previous is None or current is None:
             return {
                 "Wallet Pair Exists": False,
@@ -9417,13 +9485,13 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.4.9 v0.1",
+        "intelligence_release": "Stage 1-E.4.9 v0.2",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
         "opportunity_signal_release": "Stage 1-E.3.8 v1.0 LOCKED",
         "opportunity_signal_rule_version": "1.0",
-        "change_event_release": "Stage 1-E.4.9 v0.1",
+        "change_event_release": "Stage 1-E.4.9 v0.2",
         "change_event_rule_version": "1.0",
     }
     with _db_transaction() as conn:
@@ -10849,7 +10917,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.4.9 · Final Live Validation v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.4.9 · Final Live Validation Hotfix v0.2 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
