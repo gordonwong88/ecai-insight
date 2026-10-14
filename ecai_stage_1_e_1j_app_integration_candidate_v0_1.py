@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.4.8 ChangeEvent Persistence & App Integration Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.4.9 Final Live Validation Candidate v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1469,8 +1469,8 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 9
-ECAI_PERSISTENCE_RUNTIME_VERSION = 10  # E.4.8: ChangeEvent persistence integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.4.8 ChangeEvent Persistence & App Integration Candidate v0.1"
+ECAI_PERSISTENCE_RUNTIME_VERSION = 11  # E.4.9: ChangeEvent final live validation
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.4.9 ChangeEvent Final Live Validation Candidate v0.1"
 
 
 def _db_now() -> str:
@@ -8808,9 +8808,46 @@ def _db_stage1e4_change_event_lineage(change_event_id: str) -> dict:
                 wallets[key] = _db_stage1e2_get_lineage(assessment_id)
             except Exception:
                 wallets[key] = {"Assessment ID": assessment_id, "Lineage": "Unavailable / synthetic fixture"}
+    direct_evidence = []
+    evidence_ids = event_summary.get("Evidence IDs") or []
+    if evidence_ids:
+        conn = _db_connect()
+        try:
+            for evidence_id in evidence_ids:
+                erow = conn.execute(
+                    """SELECT evidence_id,metric_code,metric_name,value_numeric,value_text,unit,currency,
+                              evidence_type,source_type,source_name,source_reference,effective_date,as_of_date,
+                              confidence,economic_perimeter,geographic_scope,time_basis,rationale
+                       FROM intelligence_evidence WHERE evidence_id=?""",
+                    (evidence_id,),
+                ).fetchone()
+                if erow is not None:
+                    direct_evidence.append({
+                        "Evidence ID": erow["evidence_id"],
+                        "Metric Code": erow["metric_code"],
+                        "Metric Name": erow["metric_name"],
+                        "Value Numeric": erow["value_numeric"],
+                        "Value Text": erow["value_text"],
+                        "Unit": erow["unit"],
+                        "Currency": erow["currency"],
+                        "Evidence Type": erow["evidence_type"],
+                        "Source Type": erow["source_type"],
+                        "Source Name": erow["source_name"],
+                        "Source Reference": erow["source_reference"],
+                        "Effective Date": erow["effective_date"],
+                        "As Of Date": erow["as_of_date"],
+                        "Confidence": erow["confidence"],
+                        "Economic Perimeter": erow["economic_perimeter"],
+                        "Geographic Scope": erow["geographic_scope"],
+                        "Time Basis": erow["time_basis"],
+                        "Rationale": erow["rationale"],
+                    })
+        finally:
+            conn.close()
     return {
         "ChangeEvent": event_summary,
         "Wallet Lineage": wallets,
+        "Direct Evidence": direct_evidence,
         "Temporal Evaluations": _db_stage1e4_temporal_evaluations(change_event_id),
         "Audit Events": audits,
     }
@@ -8934,6 +8971,440 @@ def _db_stage1e4_run_persistence_smoke_test() -> dict:
         }
 
 
+
+
+# =============================================================================
+# STAGE 1-E.4.9 — FINAL LIVE VALIDATION
+# =============================================================================
+
+E4_9_PREVIOUS_PUBLICATION_MODE = "E4.9_VALIDATION_PREVIOUS"
+E4_9_CURRENT_PUBLICATION_MODE = "E4.9_VALIDATION_CURRENT"
+E4_9_EVENT_SOURCE_REFERENCE = "E4.9-DEBT-MATURITY-EVIDENCE"
+E4_9_EVENT_EPISODE_KEY = "E4.9-DEBT-MATURITY-2027-01-10"
+E4_9_EVALUATION_AS_OF = "2026-10-13"
+
+
+def _db_stage1e4_9_existing_validation_wallet(conn: _DBConnection, publication_mode: str):
+    rel = _db_stage1e4_validation_relationship(conn)
+    return conn.execute(
+        """SELECT wa.*
+           FROM wallet_assessment wa
+           JOIN intelligence_methodology im ON im.id=wa.methodology_id
+           WHERE wa.relationship_id=?
+             AND im.methodology_code='STRUCTURAL_LENDING'
+             AND im.version='1.0'
+             AND wa.publication_mode=?
+             AND wa.status='PUBLISHED'
+             AND wa.publication_result='PUBLISH'
+             AND wa.test_only=0
+           ORDER BY wa.id DESC LIMIT 1""",
+        (rel["id"], publication_mode),
+    ).fetchone()
+
+
+def _db_stage1e4_9_publish_wallet(assessment_id: str, publication_mode: str):
+    with _db_transaction() as conn:
+        row = conn.execute(
+            """SELECT wa.*,r.relationship_id AS relationship_public_id
+               FROM wallet_assessment wa
+               JOIN relationship r ON r.id=wa.relationship_id
+               WHERE wa.assessment_id=?""",
+            (assessment_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"E.4.9 WalletAssessment {assessment_id} not found.")
+        if row["relationship_public_id"] != E4_VALIDATION_RELATIONSHIP_ID:
+            raise ValueError("E.4.9 publication refused outside hidden validation relationship.")
+        if bool(row["test_only"]):
+            raise ValueError("E.4.9 source WalletAssessment must be production-like non-test.")
+        if row["status"] == "PUBLISHED" and row["publication_mode"] == publication_mode:
+            return
+        if row["status"] != "VALIDATED" or row["publication_result"] != "PUBLISH":
+            raise ValueError(
+                f"E.4.9 WalletAssessment not publication-qualified: "
+                f"{row['status']} / {row['publication_result']}."
+            )
+        qg = json.loads(row["quality_gate_json"] or "{}")
+        if not bool(qg.get("production_publication_allowed")):
+            raise ValueError("E.4.9 source WalletAssessment failed publication gate.")
+
+        now = _db_now()
+        conn.execute(
+            """UPDATE wallet_assessment
+               SET status='PUBLISHED',published_at=?,published_by=?,publication_mode=?
+               WHERE assessment_id=?""",
+            (now, "E4.9 Validation Harness", publication_mode, assessment_id),
+        )
+        _db_append_audit(
+            conn,
+            entity_type="WalletAssessment",
+            entity_id=assessment_id,
+            relationship_id=row["relationship_id"],
+            event_type="WALLET_ASSESSMENT_PUBLISHED",
+            actor="E4.9 Validation Harness",
+            payload={
+                "validation_fixture": True,
+                "publication_mode": publication_mode,
+                "methodology": "STRUCTURAL_LENDING 1.0",
+            },
+        )
+
+
+def _db_stage1e4_9_create_wallet(
+    *,
+    publication_mode: str,
+    effective_date: str,
+    forecast_capex: float,
+    comparable_capture: float,
+    label: str,
+) -> str:
+    with _db_transaction() as conn:
+        _db_stage1e4_validation_relationship(conn)
+        existing = _db_stage1e4_9_existing_validation_wallet(conn, publication_mode)
+        if existing is not None:
+            return existing["assessment_id"]
+
+    source_prefix = f"E4.9-{label}"
+    evidence = [
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX,
+            metric_name="Forecast Capex",
+            value_numeric=forecast_capex,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E4_VALIDATION_FIXTURE",
+            source_name="EC-AI E4.9 Controlled Validation",
+            source_reference=f"{source_prefix}-FORECAST-CAPEX",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E4_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic controlled source used only for Stage 1-E.4.9 final live validation.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX_DEBT_FUNDING_PCT,
+            metric_name="Forecast Capex Debt Funding %",
+            value_numeric=0.80,
+            unit="RATIO",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="E4_VALIDATION_FIXTURE",
+            source_name="EC-AI E4.9 Controlled Validation",
+            source_reference=f"{source_prefix}-DEBT-FUNDING",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="E4_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Controlled deterministic assumption for E.4.9 validation.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_BANK_CAPEX_SHARE,
+            metric_name="Forecast Bank Capex Share",
+            value_numeric=0.625,
+            unit="RATIO",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="E4_VALIDATION_FIXTURE",
+            source_name="EC-AI E4.9 Controlled Validation",
+            source_reference=f"{source_prefix}-BANK-SHARE",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="E4_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Controlled deterministic assumption for E.4.9 validation.",
+        ),
+        EvidenceItem(
+            metric_code=OUR_BANK_COMPARABLE_COMMITMENT,
+            metric_name="Our Bank Comparable Commitment",
+            value_numeric=comparable_capture,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E4_VALIDATION_FIXTURE",
+            source_name="EC-AI E4.9 Controlled Validation",
+            source_reference=f"{source_prefix}-CAPTURE",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E4_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic comparable capture for Stage 1-E.4.9 validation only.",
+        ),
+    ]
+
+    assessment_input = StructuralLendingAssessmentInput(
+        capex=StructuralLendingComponent(
+            base_amount=forecast_capex,
+            funding_rate=0.80,
+            bank_share=0.625,
+            economic_perimeter="E4_VALIDATION_GROUP",
+            time_horizon="1Y",
+            currency="JPY",
+            evidence_ids=(
+                f"{source_prefix}-FORECAST-CAPEX",
+                f"{source_prefix}-DEBT-FUNDING",
+                f"{source_prefix}-BANK-SHARE",
+            ),
+            estimation_method="Controlled E4.9 deterministic validation fixture",
+            rationale="Synthetic production-like Structural Lending wallet used only for final ChangeEvent validation.",
+            confidence="MEDIUM",
+            financing_need_ids=(f"{source_prefix}-CAPEX-NEED",),
+            assessed=True,
+        ),
+        refinancing=None,
+        capture=StructuralLendingCapture(
+            comparable_commitment=comparable_capture,
+            comparability_status=CaptureComparabilityStatus.COMPARABLE,
+            comparability_reason="Synthetic capture matches perimeter, currency and time horizon.",
+            evidence_ids=(f"{source_prefix}-CAPTURE",),
+            verified_zero=False,
+        ),
+        test_only=False,
+    )
+
+    created = _db_stage1e2_create_structural_assessment(
+        E4_VALIDATION_COMPANY,
+        assessment_input,
+        evidence,
+        effective_date=effective_date,
+        currency="JPY",
+        geographic_scope="Global",
+        time_horizon="1Y",
+        actor="E4.9 Validation Harness",
+    )
+    assessment_id = created["Assessment ID"]
+    _db_stage1e4_9_publish_wallet(assessment_id, publication_mode)
+    return assessment_id
+
+
+def _db_stage1e4_9_create_or_reuse_wallet_pair() -> tuple[str, str]:
+    previous_id = _db_stage1e4_9_create_wallet(
+        publication_mode=E4_9_PREVIOUS_PUBLICATION_MODE,
+        effective_date="2026-09-13",
+        forecast_capex=1_000_000_000_000.0,
+        comparable_capture=50_000_000_000.0,
+        label="PREVIOUS",
+    )
+    current_id = _db_stage1e4_9_create_wallet(
+        publication_mode=E4_9_CURRENT_PUBLICATION_MODE,
+        effective_date="2026-10-13",
+        forecast_capex=1_400_000_000_000.0,
+        comparable_capture=50_000_000_000.0,
+        label="CURRENT",
+    )
+    return previous_id, current_id
+
+
+def _db_stage1e4_9_event_evidence_id() -> str:
+    with _db_transaction() as conn:
+        rel = _db_stage1e4_validation_relationship(conn)
+        row = conn.execute(
+            """SELECT evidence_id FROM intelligence_evidence
+               WHERE relationship_id=? AND source_reference=?
+               ORDER BY id DESC LIMIT 1""",
+            (rel["id"], E4_9_EVENT_SOURCE_REFERENCE),
+        ).fetchone()
+        if row is not None:
+            return row["evidence_id"]
+
+        cycle = _db_active_review_cycle(conn)
+        item = EvidenceItem(
+            metric_code="DEBT_MATURITY_EVENT",
+            metric_name="Scheduled Debt Maturity",
+            value_numeric=250_000_000_000.0,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E4_VALIDATION_FIXTURE",
+            source_name="EC-AI E4.9 Controlled Validation",
+            source_reference=E4_9_EVENT_SOURCE_REFERENCE,
+            effective_date="2027-01-10",
+            as_of_date=E4_9_EVALUATION_AS_OF,
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E4_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="SCHEDULED",
+            rationale="Synthetic debt-maturity evidence for Stage 1-E.4.9 final live validation only.",
+        )
+        return _db_stage1e_persist_evidence(
+            conn,
+            relationship_db_id=rel["id"],
+            review_cycle_db_id=cycle["id"],
+            methodology_db_id=None,
+            item=item,
+        )
+
+
+def _db_stage1e4_9_build_event_input(evidence_id: str) -> E4CorporateEventInput:
+    return E4CorporateEventInput(
+        relationship_id=E4_VALIDATION_RELATIONSHIP_ID,
+        economic_episode_key=E4_9_EVENT_EPISODE_KEY,
+        event_type=E4EventType.DEBT_MATURITY,
+        event_status=E4EventStatus.SCHEDULED,
+        authoritative=True,
+        test_only=False,
+        confidence=E4ConfidenceLevel.HIGH,
+        evidence_ids=(evidence_id,),
+        event_amount=250_000_000_000.0,
+        currency="JPY",
+        amount_status=E4AmountStatus.DISCLOSED,
+        observed_at=E4_9_EVALUATION_AS_OF,
+        announced_date=E4_9_EVALUATION_AS_OF,
+        expected_date_start="2027-01-10",
+        expected_date_end="2027-01-10",
+        date_precision=E4DatePrecision.DAY,
+        economic_perimeter="E4_VALIDATION_GROUP",
+        legal_entity="E4 Validation Co",
+        geographic_scope="Global",
+        impact_domains=("LENDING",),
+        impact_direction=E4Direction.UNKNOWN,
+        source_as_of=E4_9_EVALUATION_AS_OF,
+    )
+
+
+def _db_stage1e4_9_validation_rows(previous_id: str, current_id: str) -> list[dict]:
+    conn = _db_connect()
+    try:
+        rel = _db_stage1e4_validation_relationship(conn)
+        rows = conn.execute(
+            """SELECT change_event_id,object_kind,change_event_type,status,materiality,confidence,
+                      previous_assessment_id,current_assessment_id,economic_episode_key,metric_scope,
+                      absolute_change,relative_change,event_amount,currency,test_only,created_at
+               FROM change_event
+               WHERE relationship_id=? AND test_only=1
+                 AND (
+                     (previous_assessment_id=? AND current_assessment_id=?)
+                     OR economic_episode_key=?
+                 )
+               ORDER BY id""",
+            (rel["id"], previous_id, current_id, E4_9_EVENT_EPISODE_KEY),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _db_stage1e4_9_run_final_validation() -> dict:
+    previous_id, current_id = _db_stage1e4_9_create_or_reuse_wallet_pair()
+    evidence_id = _db_stage1e4_9_event_evidence_id()
+
+    before = _db_stage1e4_9_validation_rows(previous_id, current_id)
+
+    change_result = _db_stage1e4_apply_wallet_change(
+        current_id,
+        E4_TEST_CHANGE_CONFIG_VERSION,
+        E4_TEST_TEMPORAL_CONFIG_VERSION,
+        evaluation_as_of=E4_9_EVALUATION_AS_OF,
+        actor="E4.9 Validation Harness",
+        persistence_test_only=True,
+    )
+    event_result = _db_stage1e4_apply_event(
+        _db_stage1e4_9_build_event_input(evidence_id),
+        E4_TEST_EVENT_CONFIG_VERSION,
+        E4_TEST_TEMPORAL_CONFIG_VERSION,
+        evaluation_as_of=E4_9_EVALUATION_AS_OF,
+        actor="E4.9 Validation Harness",
+        persistence_test_only=True,
+    )
+
+    after = _db_stage1e4_9_validation_rows(previous_id, current_id)
+
+    change_ids = [
+        x["ChangeEvent ID"] for x in change_result.get("Persisted IDs", [])
+        if x.get("ChangeEvent ID")
+    ]
+    event_id = event_result.get("ChangeEvent ID")
+
+    # Re-run the exact same governed context to prove idempotency.
+    change_result_2 = _db_stage1e4_apply_wallet_change(
+        current_id,
+        E4_TEST_CHANGE_CONFIG_VERSION,
+        E4_TEST_TEMPORAL_CONFIG_VERSION,
+        evaluation_as_of=E4_9_EVALUATION_AS_OF,
+        actor="E4.9 Validation Harness",
+        persistence_test_only=True,
+    )
+    event_result_2 = _db_stage1e4_apply_event(
+        _db_stage1e4_9_build_event_input(evidence_id),
+        E4_TEST_EVENT_CONFIG_VERSION,
+        E4_TEST_TEMPORAL_CONFIG_VERSION,
+        evaluation_as_of=E4_9_EVALUATION_AS_OF,
+        actor="E4.9 Validation Harness",
+        persistence_test_only=True,
+    )
+    final_rows = _db_stage1e4_9_validation_rows(previous_id, current_id)
+
+    change_ids_2 = [
+        x["ChangeEvent ID"] for x in change_result_2.get("Persisted IDs", [])
+        if x.get("ChangeEvent ID")
+    ]
+    event_id_2 = event_result_2.get("ChangeEvent ID")
+
+    total_wallet_change_id = None
+    for row in final_rows:
+        if (
+            row.get("object_kind") == "CHANGE"
+            and row.get("change_event_type") == "WALLET_SIZE_CHANGE"
+            and row.get("metric_scope") == "TOTAL_WALLET"
+        ):
+            total_wallet_change_id = row.get("change_event_id")
+            break
+
+    pass_result = bool(
+        previous_id
+        and current_id
+        and change_ids
+        and event_id
+        and total_wallet_change_id
+        and set(change_ids_2) == set(change_ids)
+        and event_id_2 == event_id
+        and len(final_rows) == len(after)
+        and all(bool(r.get("test_only")) for r in final_rows)
+    )
+
+    return {
+        "E.4.9 Final Validation PASS": pass_result,
+        "Previous WalletAssessment": previous_id,
+        "Current WalletAssessment": current_id,
+        "ChangeEvent IDs": change_ids,
+        "Primary Wallet Change ID": total_wallet_change_id,
+        "CorporateEvent ID": event_id,
+        "Event Evidence ID": evidence_id,
+        "Fixture Rows Before": len(before),
+        "Fixture Rows After First Evaluation": len(after),
+        "Fixture Rows After Re-evaluation": len(final_rows),
+        "Change Re-evaluation IDs": change_ids_2,
+        "Event Re-evaluation ID": event_id_2,
+        "All ChangeEvent Outputs Test Only": all(bool(r.get("test_only")) for r in final_rows),
+        "Rows": final_rows,
+    }
+
+
+def _db_stage1e4_9_validation_summary() -> dict:
+    with _db_transaction() as conn:
+        previous = _db_stage1e4_9_existing_validation_wallet(conn, E4_9_PREVIOUS_PUBLICATION_MODE)
+        current = _db_stage1e4_9_existing_validation_wallet(conn, E4_9_CURRENT_PUBLICATION_MODE)
+        if previous is None or current is None:
+            return {
+                "Wallet Pair Exists": False,
+                "Previous WalletAssessment": previous["assessment_id"] if previous else None,
+                "Current WalletAssessment": current["assessment_id"] if current else None,
+                "Rows": [],
+            }
+        previous_id = previous["assessment_id"]
+        current_id = current["assessment_id"]
+
+    return {
+        "Wallet Pair Exists": True,
+        "Previous WalletAssessment": previous_id,
+        "Current WalletAssessment": current_id,
+        "Rows": _db_stage1e4_9_validation_rows(previous_id, current_id),
+    }
+
+# END STAGE 1-E.4.9 — FINAL LIVE VALIDATION
+
 # END STAGE 1-E.4.8 — CHANGEEVENT PERSISTENCE & APP INTEGRATION
 
 
@@ -8946,13 +9417,13 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.4.8 v0.1",
+        "intelligence_release": "Stage 1-E.4.9 v0.1",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
         "opportunity_signal_release": "Stage 1-E.3.8 v1.0 LOCKED",
         "opportunity_signal_rule_version": "1.0",
-        "change_event_release": "Stage 1-E.4.8 v0.1",
+        "change_event_release": "Stage 1-E.4.9 v0.1",
         "change_event_rule_version": "1.0",
     }
     with _db_transaction() as conn:
@@ -10378,7 +10849,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.4.8 · ChangeEvent Persistence v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.4.9 · Final Live Validation v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -10897,6 +11368,130 @@ def render_stage_1c_sidebar():
                 st.write(idem)
 
 
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.4.9 · Final Live Validation**")
+            st.caption(
+                "End-to-end controlled validation · real persisted PUBLISHED WalletAssessment predecessor/current pair "
+                "under the hidden E4 validation relationship · CHG/EVT outputs remain TEST-only."
+            )
+
+            if st.button(
+                "Run E.4.9 Final Change / Event Validation",
+                key="stage1e4_9_final_validation",
+                use_container_width=True,
+            ):
+                try:
+                    result = _db_stage1e4_9_run_final_validation()
+                    st.session_state["stage1e4_9_final_result"] = result
+                except Exception as exc:
+                    st.error(f"E.4.9 final validation failed: {exc}")
+
+            e49_result = st.session_state.get("stage1e4_9_final_result")
+            if e49_result:
+                if e49_result.get("E.4.9 Final Validation PASS"):
+                    st.success(
+                        "E.4.9 PASS · authoritative wallet-state change + validated corporate event persisted, "
+                        "reloaded and re-evaluated idempotently."
+                    )
+                else:
+                    st.error("E.4.9 CHECK · inspect final-validation output.")
+                st.write(e49_result)
+
+            try:
+                e49_summary = _db_stage1e4_9_validation_summary()
+            except Exception as exc:
+                e49_summary = None
+                st.error(f"E.4.9 reload summary failed: {exc}")
+
+            if e49_summary and e49_summary.get("Wallet Pair Exists"):
+                st.write({
+                    "Previous WalletAssessment": e49_summary.get("Previous WalletAssessment"),
+                    "Current WalletAssessment": e49_summary.get("Current WalletAssessment"),
+                    "Persisted E.4.9 ChangeEvent Rows": len(e49_summary.get("Rows", [])),
+                })
+                e49_rows = e49_summary.get("Rows", [])
+                if e49_rows:
+                    st.dataframe(pd.DataFrame(e49_rows), use_container_width=True, hide_index=True)
+
+                    primary_change_id = None
+                    primary_event_id = None
+                    for row in e49_rows:
+                        if (
+                            primary_change_id is None
+                            and row.get("object_kind") == "CHANGE"
+                            and row.get("change_event_type") == "WALLET_SIZE_CHANGE"
+                            and row.get("metric_scope") == "TOTAL_WALLET"
+                        ):
+                            primary_change_id = row.get("change_event_id")
+                        if primary_event_id is None and row.get("object_kind") == "EVENT":
+                            primary_event_id = row.get("change_event_id")
+
+                    for object_id, label in (
+                        (primary_change_id, "Primary Change"),
+                        (primary_event_id, "Corporate Event"),
+                    ):
+                        if not object_id:
+                            continue
+                        lineage_key = f"stage1e4_9_lineage::{object_id}"
+                        if st.button(
+                            f"Load {object_id} {label} Lineage",
+                            key=f"stage1e4_9_load_lineage::{object_id}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                st.session_state[lineage_key] = _db_stage1e4_change_event_lineage(object_id)
+                            except Exception as exc:
+                                st.error(f"E.4.9 lineage load failed for {object_id}: {exc}")
+
+                        lineage = st.session_state.get(lineage_key)
+                        if lineage:
+                            ce = lineage.get("ChangeEvent", {})
+                            wallet_lineage = lineage.get("Wallet Lineage", {})
+                            direct_evidence = lineage.get("Direct Evidence", [])
+                            temporal_evals = lineage.get("Temporal Evaluations", [])
+                            audit_events = lineage.get("Audit Events", [])
+                            audit_names = [a.get("Event", "") for a in audit_events]
+
+                            if ce.get("Kind") == "CHANGE":
+                                prev = wallet_lineage.get("Previous Assessment", {})
+                                curr = wallet_lineage.get("Current Assessment", {})
+                                prev_evidence = len(prev.get("Evidence", []))
+                                curr_evidence = len(curr.get("Evidence", []))
+                                prev_calcs = len(prev.get("Calculations", []))
+                                curr_calcs = len(curr.get("Calculations", []))
+                                lineage_pass = bool(
+                                    prev_evidence >= 4
+                                    and curr_evidence >= 4
+                                    and prev_calcs >= 1
+                                    and curr_calcs >= 1
+                                    and len(temporal_evals) >= 1
+                                    and "CHANGE_EVENT_CREATED" in audit_names
+                                )
+                                detail = (
+                                    f"Previous EVD {prev_evidence} / CAL {prev_calcs} · "
+                                    f"Current EVD {curr_evidence} / CAL {curr_calcs} · "
+                                    f"Temporal {len(temporal_evals)} · Audit {len(audit_events)}"
+                                )
+                            else:
+                                lineage_pass = bool(
+                                    len(direct_evidence) >= 1
+                                    and len(temporal_evals) >= 1
+                                    and "CORPORATE_EVENT_CREATED" in audit_names
+                                )
+                                detail = (
+                                    f"Direct Evidence {len(direct_evidence)} · "
+                                    f"Temporal {len(temporal_evals)} · Audit {len(audit_events)}"
+                                )
+
+                            if lineage_pass:
+                                st.success(f"E.4.9 {object_id} Lineage PASS · {detail}")
+                            else:
+                                st.error(f"E.4.9 {object_id} Lineage CHECK · {detail}")
+
+                            with st.expander(f"Inspect {object_id} full lineage", expanded=False):
+                                st.json(lineage)
+
         if diagnostics_enabled:
             st.markdown("**Stage 1-E.4.8 · ChangeEvent Persistence**")
             st.caption(
@@ -10974,6 +11569,7 @@ def render_stage_1c_sidebar():
                         or key.startswith("stage1e3_signal_lineage::")
                         or key.startswith("stage1e3_8_lineage::")
                         or key.startswith("stage1e4_lineage::")
+                        or key.startswith("stage1e4_9_lineage::")
                     ):
                         del st.session_state[key]
                 st.rerun()
