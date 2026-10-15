@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.4.9 Final Live Validation Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.5.9 Attention × Urgency Persistence Integration Candidate v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1468,9 +1468,9 @@ ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 9
-ECAI_PERSISTENCE_RUNTIME_VERSION = 11  # E.4.9: ChangeEvent final live validation
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.4.9 ChangeEvent Final Live Validation Hotfix v0.2"
+ECAI_SCHEMA_VERSION = 10
+ECAI_PERSISTENCE_RUNTIME_VERSION = 12  # E.5.9: Attention × Urgency persistence integration
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.5.9 Attention × Urgency Persistence Integration v0.1"
 
 
 def _db_now() -> str:
@@ -2318,6 +2318,7 @@ def _db_init_schema_uncached():
             _db_stage1e2_migrate_wallet_assessment_columns(conn)
             _db_stage1e3_migrate_schema(conn)
             _db_stage1e4_migrate_schema(conn)
+            _db_stage1e5_migrate_schema(conn)
             if conn.backend == "sqlite":
                 conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
             conn.commit()
@@ -2428,7 +2429,7 @@ def _db_list_relationship_registry(conn: _DBConnection | None = None) -> list[di
                       score,attention_rating,primary_driver,recommended_action,
                       created_at,updated_at
                FROM relationship
-               WHERE relationship_id NOT IN ('REL-EC-AI-E3-VALIDATION-CO','REL-EC-AI-E4-VALIDATION-CO')
+               WHERE relationship_id NOT IN ('REL-EC-AI-E3-VALIDATION-CO','REL-EC-AI-E4-VALIDATION-CO','REL-EC-AI-E5-VALIDATION-CO')
                ORDER BY id"""
         ).fetchall()
         return [
@@ -8977,6 +8978,2719 @@ def _db_stage1e4_run_persistence_smoke_test() -> dict:
 
 
 
+
+
+# =============================================================================
+# STAGE 1-E.5.8 — DETERMINISTIC ATTENTION × URGENCY ENGINE v1.0 (LOCKED)
+# Embedded into the single-file test application for Stage 1-E.5.9 integration.
+# The engine remains deterministic, side-effect-free and AI-independent.
+# =============================================================================
+
+"""
+EC-AI Stage 1-E.5.8 — Deterministic Attention × Urgency Engine v1.0
+
+Standalone, deterministic, side-effect-free engine.
+No Streamlit dependency. No database writes. No AI judgement.
+
+Purpose
+-------
+Translate governed OpportunitySignal / ChangeEvent / relationship context /
+time-window inputs into explainable Attention and Urgency factor evaluations,
+economic clusters, relationship ratings, normalized 0–100 display scores,
+quadrant assignment, source-state fingerprinting and lifecycle decisions.
+
+Governing invariants
+--------------------
+- Opportunity != Attention.
+- Materiality != Attention.
+- Temporal Relevance != Urgency.
+- Attention = strength of management relevance.
+- Urgency = cost of waiting.
+- Related objects form one economic cluster; object count is not priority.
+- Independent clusters may reinforce by at most one rating category in v1.
+- Executive relevance gates precede relationship aggregation.
+- UNKNOWN / NOT_ASSESSED != LOW / NONE.
+- Ratings determine quadrants; scores only determine display position.
+- ACT_NOW requires independently governed Why Important + Why Now.
+- Rating -> Score, never Score -> Rating.
+- Same inputs + same coverage + same policy/config -> same deterministic output.
+- Strategic classification contributes Attention but does not by itself force elevated review.
+- Deduplication controls scoring; all contributing source lineage remains preserved.
+- AI never establishes authoritative factor, cluster, rating or quadrant state.
+"""
+
+from dataclasses import asdict, dataclass, field, replace
+from datetime import date
+from enum import Enum
+from hashlib import sha256
+import json
+from typing import Iterable, Optional, Sequence
+
+
+ENGINE_VERSION = "1.0"
+ATTENTION_RULE_VERSION = "1.0"
+URGENCY_RULE_VERSION = "1.0"
+AGGREGATION_RULE_VERSION = "1.0"
+QUADRANT_RULE_VERSION = "1.0"
+NORMALIZATION_RULE_VERSION = "1.0"
+
+
+# ---------------------------------------------------------------------------
+# Enumerations
+# ---------------------------------------------------------------------------
+
+
+class Axis(str, Enum):
+    ATTENTION = "ATTENTION"
+    URGENCY = "URGENCY"
+
+
+class Rating(str, Enum):
+    NOT_ASSESSED = "NOT_ASSESSED"
+    NONE = "NONE"
+    LOW = "LOW"
+    MODERATE = "MODERATE"
+    HIGH = "HIGH"
+    VERY_HIGH = "VERY_HIGH"
+
+
+class CoverageStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class E5ConfidenceLevel(str, Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+
+
+class ExecutiveRelevanceStatus(str, Enum):
+    ELIGIBLE = "ELIGIBLE"
+    NOT_ELIGIBLE = "NOT_ELIGIBLE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class ActionabilityStatus(str, Enum):
+    ACTIONABLE = "ACTIONABLE"
+    MONITOR_ONLY = "MONITOR_ONLY"
+    RESOLVED = "RESOLVED"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class BandPosition(str, Enum):
+    LOWER = "LOWER"
+    MID = "MID"
+    UPPER = "UPPER"
+    NONE = "NONE"
+
+
+class Quadrant(str, Enum):
+    ACT_NOW = "ACT_NOW"
+    STRATEGIC_PRIORITY = "STRATEGIC_PRIORITY"
+    URGENT_REVIEW = "URGENT_REVIEW"
+    MONITOR = "MONITOR"
+
+
+class QuadrantStatus(str, Enum):
+    ASSIGNED = "ASSIGNED"
+    NOT_ASSIGNED = "NOT_ASSIGNED"
+
+
+class AttentionFactorCode(str, Enum):
+    ECONOMIC_OPPORTUNITY = "ECONOMIC_OPPORTUNITY"
+    MATERIAL_CHANGE = "MATERIAL_CHANGE"
+    MATERIAL_EVENT = "MATERIAL_EVENT"
+    STRATEGIC_RELEVANCE = "STRATEGIC_RELEVANCE"
+    RISK_RELATIONSHIP_CONCERN = "RISK_RELATIONSHIP_CONCERN"
+
+
+class UrgencyFactorCode(str, Enum):
+    EVENT_PROXIMITY = "EVENT_PROXIMITY"
+    DECISION_WINDOW = "DECISION_WINDOW"
+    EXECUTION_DEADLINE = "EXECUTION_DEADLINE"
+    RATE_OF_CHANGE = "RATE_OF_CHANGE"
+    OPPORTUNITY_RISK_WINDOW = "OPPORTUNITY_RISK_WINDOW"
+
+
+class ClockType(str, Enum):
+    EVENT_DATE = "EVENT_DATE"
+    DECISION_WINDOW = "DECISION_WINDOW"
+    EXECUTION_DEADLINE = "EXECUTION_DEADLINE"
+    OPPORTUNITY_WINDOW = "OPPORTUNITY_WINDOW"
+    RISK_WINDOW = "RISK_WINDOW"
+
+
+class DatePrecision(str, Enum):
+    DAY = "DAY"
+    MONTH = "MONTH"
+    QUARTER = "QUARTER"
+    YEAR = "YEAR"
+    RANGE = "RANGE"
+    UNKNOWN = "UNKNOWN"
+
+
+class TemporalState(str, Enum):
+    IMMEDIATE = "IMMEDIATE"
+    NEAR_TERM = "NEAR_TERM"
+    FORWARD = "FORWARD"
+    LONG_DATED = "LONG_DATED"
+    RECENTLY_OCCURRED = "RECENTLY_OCCURRED"
+    HISTORICAL = "HISTORICAL"
+    INACTIVE = "INACTIVE"
+    UNKNOWN = "UNKNOWN"
+
+
+class SourceKind(str, Enum):
+    OPPORTUNITY_SIGNAL = "OPPORTUNITY_SIGNAL"
+    CHANGE = "CHANGE"
+    EVENT = "EVENT"
+    STRATEGIC_CONTEXT = "STRATEGIC_CONTEXT"
+    RISK_RELATIONSHIP_CONTEXT = "RISK_RELATIONSHIP_CONTEXT"
+    URGENCY_WINDOW = "URGENCY_WINDOW"
+    RATE_OF_CHANGE = "RATE_OF_CHANGE"
+
+
+class EvaluationLifecycleAction(str, Enum):
+    CREATE = "CREATE"
+    KEEP_EXISTING = "KEEP_EXISTING"
+    SUPERSEDE_AND_CREATE = "SUPERSEDE_AND_CREATE"
+    NO_ACTION = "NO_ACTION"
+
+
+RATING_RANK = {
+    Rating.NOT_ASSESSED: -1,
+    Rating.NONE: 0,
+    Rating.LOW: 1,
+    Rating.MODERATE: 2,
+    Rating.HIGH: 3,
+    Rating.VERY_HIGH: 4,
+}
+
+CONFIDENCE_RANK = {
+    E5ConfidenceLevel.LOW: 1,
+    E5ConfidenceLevel.MEDIUM: 2,
+    E5ConfidenceLevel.HIGH: 3,
+}
+
+
+# ---------------------------------------------------------------------------
+# Review / policy inputs
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReviewContext:
+    relationship_id: str
+    review_cycle_id: str
+    evaluation_as_of: date
+    review_cycle_frozen: bool = False
+    policy_bundle_id: str = "E5_POLICY_1.0"
+
+
+@dataclass(frozen=True)
+class AxisCoverageInput:
+    assessed_factor_codes: frozenset[str]
+    assessment_sufficient: bool
+
+    def snapshot(self) -> dict:
+        return {
+            "assessed_factor_codes": tuple(sorted(self.assessed_factor_codes)),
+            "assessment_sufficient": bool(self.assessment_sufficient),
+        }
+
+
+@dataclass(frozen=True)
+class BandDefinition:
+    minimum: int
+    maximum: int
+    lower_anchor: int
+    mid_anchor: int
+    upper_anchor: int
+
+    def validate(self, label: str) -> tuple[str, ...]:
+        issues: list[str] = []
+        if not (0 <= self.minimum <= self.maximum <= 100):
+            issues.append(f"{label}_BAND_RANGE_INVALID")
+        anchors = (self.lower_anchor, self.mid_anchor, self.upper_anchor)
+        if not all(self.minimum <= x <= self.maximum for x in anchors):
+            issues.append(f"{label}_ANCHOR_OUTSIDE_BAND")
+        if not (self.lower_anchor < self.mid_anchor < self.upper_anchor):
+            issues.append(f"{label}_ANCHOR_ORDER_INVALID")
+        return tuple(issues)
+
+
+@dataclass(frozen=True)
+class NormalizationConfig:
+    config_version: str
+    axis: Axis
+    bands: dict[Rating, BandDefinition]
+    none_score: int = 0
+
+    def validate(self) -> tuple[bool, tuple[str, ...]]:
+        issues: list[str] = []
+        if not self.config_version:
+            issues.append("NORMALIZATION_CONFIG_VERSION_MISSING")
+        if self.none_score != 0:
+            issues.append("NONE_SCORE_MUST_EQUAL_ZERO")
+        required = (Rating.LOW, Rating.MODERATE, Rating.HIGH, Rating.VERY_HIGH)
+        for rating in required:
+            if rating not in self.bands:
+                issues.append(f"NORMALIZATION_BAND_MISSING:{rating.value}")
+            else:
+                issues.extend(self.bands[rating].validate(f"{self.axis.value}_{rating.value}"))
+        if not issues:
+            ordered = [self.bands[r] for r in required]
+            previous_max = self.none_score
+            for rating, band in zip(required, ordered):
+                if band.minimum <= previous_max:
+                    issues.append(f"NORMALIZATION_BANDS_OVERLAP_OR_UNORDERED:{rating.value}")
+                elif band.minimum != previous_max + 1:
+                    issues.append(f"NORMALIZATION_BAND_GAP:{rating.value}")
+                previous_max = band.maximum
+        return (not issues, tuple(issues))
+
+    def snapshot(self) -> dict:
+        return {
+            "config_version": self.config_version,
+            "axis": self.axis.value,
+            "none_score": self.none_score,
+            "bands": {
+                rating.value: asdict(defn)
+                for rating, defn in sorted(self.bands.items(), key=lambda x: RATING_RANK[x[0]])
+            },
+        }
+
+
+@dataclass(frozen=True)
+class ClockUrgencyConfig:
+    config_version: str
+    immediate_max_days: int = 7
+    near_term_max_days: int = 30
+    forward_max_days: int = 90
+    overdue_rating: Rating = Rating.VERY_HIGH
+
+    def validate(self) -> tuple[bool, tuple[str, ...]]:
+        issues: list[str] = []
+        if not self.config_version:
+            issues.append("CLOCK_CONFIG_VERSION_MISSING")
+        if not (0 <= self.immediate_max_days < self.near_term_max_days < self.forward_max_days):
+            issues.append("CLOCK_THRESHOLDS_INVALID")
+        if self.overdue_rating in (Rating.NOT_ASSESSED, Rating.NONE):
+            issues.append("CLOCK_OVERDUE_RATING_INVALID")
+        return (not issues, tuple(issues))
+
+    def snapshot(self) -> dict:
+        return {
+            "config_version": self.config_version,
+            "immediate_max_days": self.immediate_max_days,
+            "near_term_max_days": self.near_term_max_days,
+            "forward_max_days": self.forward_max_days,
+            "overdue_rating": self.overdue_rating.value,
+        }
+
+
+@dataclass(frozen=True)
+class E5PolicyConfig:
+    policy_bundle_id: str
+    attention_normalization: NormalizationConfig
+    urgency_normalization: NormalizationConfig
+    clock_config: ClockUrgencyConfig
+    relationship_reinforcement_minimum: Rating = Rating.MODERATE
+    cluster_reinforcement_minimum: Rating = Rating.MODERATE
+
+    def validate(self) -> tuple[bool, tuple[str, ...]]:
+        issues: list[str] = []
+        if not self.policy_bundle_id:
+            issues.append("POLICY_BUNDLE_ID_MISSING")
+        ok_a, a_issues = self.attention_normalization.validate()
+        ok_u, u_issues = self.urgency_normalization.validate()
+        ok_c, c_issues = self.clock_config.validate()
+        issues.extend(a_issues)
+        issues.extend(u_issues)
+        issues.extend(c_issues)
+        if self.attention_normalization.axis != Axis.ATTENTION:
+            issues.append("ATTENTION_NORMALIZATION_AXIS_INVALID")
+        if self.urgency_normalization.axis != Axis.URGENCY:
+            issues.append("URGENCY_NORMALIZATION_AXIS_INVALID")
+        if self.relationship_reinforcement_minimum in (Rating.NOT_ASSESSED, Rating.NONE, Rating.LOW):
+            issues.append("RELATIONSHIP_REINFORCEMENT_MINIMUM_TOO_LOW")
+        if self.cluster_reinforcement_minimum in (Rating.NOT_ASSESSED, Rating.NONE, Rating.LOW):
+            issues.append("CLUSTER_REINFORCEMENT_MINIMUM_TOO_LOW")
+        return (not issues and ok_a and ok_u and ok_c, tuple(issues))
+
+    def snapshot(self) -> dict:
+        return {
+            "policy_bundle_id": self.policy_bundle_id,
+            "attention_rule_version": ATTENTION_RULE_VERSION,
+            "urgency_rule_version": URGENCY_RULE_VERSION,
+            "aggregation_rule_version": AGGREGATION_RULE_VERSION,
+            "quadrant_rule_version": QUADRANT_RULE_VERSION,
+            "normalization_rule_version": NORMALIZATION_RULE_VERSION,
+            "relationship_reinforcement_minimum": self.relationship_reinforcement_minimum.value,
+            "cluster_reinforcement_minimum": self.cluster_reinforcement_minimum.value,
+            "attention_normalization": self.attention_normalization.snapshot(),
+            "urgency_normalization": self.urgency_normalization.snapshot(),
+            "clock_config": self.clock_config.snapshot(),
+        }
+
+
+def default_policy_config() -> E5PolicyConfig:
+    """Default v1 config aligned to the locked Stage 1-C Attention × Urgency visual.
+
+    Existing visual quadrant cuts are Attention >= 61 and Urgency >= 50.
+    Ratings remain authoritative; these bands only map ratings to display coordinates.
+    """
+
+    attention = NormalizationConfig(
+        config_version="E5_ATTENTION_NORM_1.0",
+        axis=Axis.ATTENTION,
+        bands={
+            Rating.LOW: BandDefinition(1, 30, 10, 20, 28),
+            Rating.MODERATE: BandDefinition(31, 60, 35, 46, 57),
+            Rating.HIGH: BandDefinition(61, 79, 64, 70, 76),
+            Rating.VERY_HIGH: BandDefinition(80, 100, 84, 90, 97),
+        },
+    )
+    urgency = NormalizationConfig(
+        config_version="E5_URGENCY_NORM_1.0",
+        axis=Axis.URGENCY,
+        bands={
+            Rating.LOW: BandDefinition(1, 24, 8, 15, 22),
+            Rating.MODERATE: BandDefinition(25, 49, 30, 38, 46),
+            Rating.HIGH: BandDefinition(50, 79, 55, 65, 75),
+            Rating.VERY_HIGH: BandDefinition(80, 100, 84, 90, 97),
+        },
+    )
+    return E5PolicyConfig(
+        policy_bundle_id="E5_POLICY_1.0",
+        attention_normalization=attention,
+        urgency_normalization=urgency,
+        # First-pass v1 review calibration only; 7/30/90 is configurable and
+        # must not be interpreted as universal banking methodology.
+        clock_config=ClockUrgencyConfig(config_version="E5_CLOCK_1.0"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Governed source-state inputs
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class OpportunitySignalInput:
+    signal_id: str
+    relationship_id: str
+    domain: str
+    signal_strength: str  # HIGH / MEDIUM / LOW
+    signal_status: str  # ACTIVE / MONITORING / SUPPRESSED / SUPERSEDED / CLOSED
+    confidence: E5ConfidenceLevel
+    executive_relevance: ExecutiveRelevanceStatus
+    economic_episode_key: Optional[str] = None
+    test_only: bool = False
+
+    def snapshot(self) -> dict:
+        return _enum_safe(asdict(self))
+
+
+@dataclass(frozen=True)
+class ChangeInput:
+    change_id: str
+    relationship_id: str
+    domain: str
+    change_type: str
+    change_status: str
+    materiality: str  # MATERIAL / NOT_MATERIAL / NOT_ASSESSED
+    temporal_state: TemporalState
+    confidence: E5ConfidenceLevel
+    executive_relevance: ExecutiveRelevanceStatus
+    economic_episode_key: Optional[str] = None
+    related_event_id: Optional[str] = None
+    test_only: bool = False
+
+    def snapshot(self) -> dict:
+        return _enum_safe(asdict(self))
+
+
+@dataclass(frozen=True)
+class CorporateEventInput:
+    event_id: str
+    relationship_id: str
+    domain: str
+    event_type: str
+    event_status: str
+    materiality: str
+    temporal_state: TemporalState
+    confidence: E5ConfidenceLevel
+    executive_relevance: ExecutiveRelevanceStatus
+    actionability: ActionabilityStatus
+    economic_episode_key: Optional[str] = None
+    event_group_id: Optional[str] = None
+    test_only: bool = False
+
+    def snapshot(self) -> dict:
+        return _enum_safe(asdict(self))
+
+
+@dataclass(frozen=True)
+class StrategicContextInput:
+    relationship_id: str
+    classification: str  # STRATEGIC / CORE / STANDARD / UNKNOWN
+    confidence: E5ConfidenceLevel
+    executive_relevance: ExecutiveRelevanceStatus = ExecutiveRelevanceStatus.ELIGIBLE
+    context_version: str = "1.0"
+    test_only: bool = False
+
+    def snapshot(self) -> dict:
+        return _enum_safe(asdict(self))
+
+
+@dataclass(frozen=True)
+class RiskRelationshipConcernInput:
+    concern_id: str
+    relationship_id: str
+    domain: str
+    governed_rating: Rating
+    confidence: E5ConfidenceLevel
+    executive_relevance: ExecutiveRelevanceStatus
+    economic_episode_key: Optional[str] = None
+    concern_status: str = "ACTIVE"
+    test_only: bool = False
+
+    def snapshot(self) -> dict:
+        return _enum_safe(asdict(self))
+
+
+@dataclass(frozen=True)
+class UrgencyWindowInput:
+    window_id: str
+    relationship_id: str
+    domain: str
+    factor_code: UrgencyFactorCode
+    clock_type: ClockType
+    confidence: E5ConfidenceLevel
+    executive_relevance: ExecutiveRelevanceStatus
+    actionability: ActionabilityStatus
+    economic_episode_key: Optional[str] = None
+    binding_date: Optional[date] = None
+    date_precision: DatePrecision = DatePrecision.DAY
+    governed_rating_if_imprecise: Optional[Rating] = None
+    window_status: str = "ACTIVE"
+    test_only: bool = False
+
+    def snapshot(self) -> dict:
+        return _enum_safe(asdict(self))
+
+
+@dataclass(frozen=True)
+class RateOfChangeInput:
+    velocity_id: str
+    relationship_id: str
+    domain: str
+    governed_rating: Rating
+    confidence: E5ConfidenceLevel
+    executive_relevance: ExecutiveRelevanceStatus
+    economic_episode_key: Optional[str] = None
+    velocity_status: str = "ACTIVE"
+    test_only: bool = False
+
+    def snapshot(self) -> dict:
+        return _enum_safe(asdict(self))
+
+
+@dataclass(frozen=True)
+class EvaluationInputs:
+    opportunities: tuple[OpportunitySignalInput, ...] = ()
+    changes: tuple[ChangeInput, ...] = ()
+    events: tuple[CorporateEventInput, ...] = ()
+    strategic_context: Optional[StrategicContextInput] = None
+    concerns: tuple[RiskRelationshipConcernInput, ...] = ()
+    urgency_windows: tuple[UrgencyWindowInput, ...] = ()
+    rates_of_change: tuple[RateOfChangeInput, ...] = ()
+
+    def all_snapshots(self) -> list[dict]:
+        out: list[dict] = []
+        for item in self.opportunities:
+            out.append({"source_kind": SourceKind.OPPORTUNITY_SIGNAL.value, "state": item.snapshot()})
+        for item in self.changes:
+            out.append({"source_kind": SourceKind.CHANGE.value, "state": item.snapshot()})
+        for item in self.events:
+            out.append({"source_kind": SourceKind.EVENT.value, "state": item.snapshot()})
+        if self.strategic_context is not None:
+            out.append({"source_kind": SourceKind.STRATEGIC_CONTEXT.value, "state": self.strategic_context.snapshot()})
+        for item in self.concerns:
+            out.append({"source_kind": SourceKind.RISK_RELATIONSHIP_CONTEXT.value, "state": item.snapshot()})
+        for item in self.urgency_windows:
+            out.append({"source_kind": SourceKind.URGENCY_WINDOW.value, "state": item.snapshot()})
+        for item in self.rates_of_change:
+            out.append({"source_kind": SourceKind.RATE_OF_CHANGE.value, "state": item.snapshot()})
+        return out
+
+
+# ---------------------------------------------------------------------------
+# Deterministic outputs
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FactorEvaluation:
+    axis: Axis
+    factor_code: str
+    factor_rating: Rating
+    domain: str
+    economic_episode_key: str
+    executive_relevance: ExecutiveRelevanceStatus
+    source_kind: SourceKind
+    source_ids: tuple[str, ...]
+    reason_codes: tuple[str, ...]
+    confidence: E5ConfidenceLevel
+    binding_clock_type: Optional[ClockType] = None
+    binding_date: Optional[date] = None
+    days_remaining: Optional[int] = None
+    date_precision: Optional[DatePrecision] = None
+
+
+@dataclass(frozen=True)
+class ClusterEvaluation:
+    axis: Axis
+    cluster_key: str
+    domain: str
+    economic_episode_key: str
+    cluster_rating: Rating
+    strongest_factor_rating: Rating
+    factor_codes: tuple[str, ...]
+    source_ids: tuple[str, ...]
+    reason_codes: tuple[str, ...]
+    confidence: E5ConfidenceLevel
+    internal_reinforcement: bool
+    binding_clock_type: Optional[ClockType] = None
+    binding_date: Optional[date] = None
+    days_remaining: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class AxisEvaluation:
+    axis: Axis
+    rating: Rating
+    score: Optional[int]
+    band_position: Optional[BandPosition]
+    coverage: CoverageStatus
+    confidence: Optional[E5ConfidenceLevel]
+    strongest_cluster_rating: Rating
+    reinforcement_state: str
+    primary_cluster_key: Optional[str]
+    reason_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class QuadrantEvaluation:
+    status: QuadrantStatus
+    quadrant: Optional[Quadrant]
+    reason_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AttentionUrgencyCandidate:
+    relationship_id: str
+    review_cycle_id: str
+    evaluation_as_of: str
+    policy_bundle_id: str
+    attention: AxisEvaluation
+    urgency: AxisEvaluation
+    quadrant: QuadrantEvaluation
+    factor_evaluations: tuple[FactorEvaluation, ...]
+    clusters: tuple[ClusterEvaluation, ...]
+    source_fingerprint: str
+    idempotency_key: str
+    policy_snapshot: dict
+    source_snapshot: tuple[dict, ...]
+    quality_gate_pass: bool
+    quality_gate_reason_codes: tuple[str, ...]
+    rule_versions: dict
+
+
+@dataclass(frozen=True)
+class ExistingEvaluation:
+    evaluation_id: str
+    relationship_id: str
+    review_cycle_id: str
+    idempotency_key: str
+    status: str  # DRAFT / VALIDATED / PUBLISHED / SUPERSEDED / INVALIDATED
+
+
+@dataclass(frozen=True)
+class LifecycleDecision:
+    action: EvaluationLifecycleAction
+    existing_evaluation_id: Optional[str]
+    reason_codes: tuple[str, ...]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _enum_safe(value):
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _enum_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_enum_safe(v) for v in value]
+    return value
+
+
+def _canonical_json(value) -> str:
+    return json.dumps(_enum_safe(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sha(value) -> str:
+    return sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _rating_max(values: Iterable[Rating], default: Rating = Rating.NONE) -> Rating:
+    vals = list(values)
+    if not vals:
+        return default
+    return max(vals, key=lambda x: RATING_RANK[x])
+
+
+def _promote_one(rating: Rating) -> Rating:
+    order = [Rating.NONE, Rating.LOW, Rating.MODERATE, Rating.HIGH, Rating.VERY_HIGH]
+    if rating in (Rating.NOT_ASSESSED, Rating.VERY_HIGH):
+        return rating
+    idx = order.index(rating)
+    return order[min(idx + 1, len(order) - 1)]
+
+
+def _min_confidence(values: Iterable[E5ConfidenceLevel]) -> Optional[E5ConfidenceLevel]:
+    vals = list(values)
+    if not vals:
+        return None
+    return min(vals, key=lambda x: CONFIDENCE_RANK[x])
+
+
+def _episode_key(domain: str, explicit: Optional[str], source_id: str) -> str:
+    # Missing episode keys must not cause unrelated objects to be merged merely
+    # because they share a relationship/domain. Fallback stays source-specific.
+    return explicit or f"UNLINKED:{domain}:{source_id}"
+
+
+def _cluster_key(axis: Axis, domain: str, episode: str) -> str:
+    return f"{axis.value}|{domain}|{episode}"
+
+
+def _same_relationship(expected: str, actual: str) -> bool:
+    return expected == actual
+
+
+def _coverage_status(coverage: AxisCoverageInput, all_codes: set[str]) -> CoverageStatus:
+    if not coverage.assessment_sufficient or not coverage.assessed_factor_codes:
+        return CoverageStatus.NOT_ASSESSED
+    if all_codes.issubset(set(coverage.assessed_factor_codes)):
+        return CoverageStatus.COMPLETE
+    return CoverageStatus.PARTIAL
+
+
+# ---------------------------------------------------------------------------
+# Attention factor evaluation
+# ---------------------------------------------------------------------------
+
+
+def evaluate_attention_factors(
+    ctx: ReviewContext,
+    inputs: EvaluationInputs,
+) -> tuple[FactorEvaluation, ...]:
+    factors: list[FactorEvaluation] = []
+
+    for s in inputs.opportunities:
+        if not _same_relationship(ctx.relationship_id, s.relationship_id) or s.test_only:
+            continue
+        rating = Rating.NONE
+        reasons: list[str] = []
+        if s.signal_status in {"SUPERSEDED", "CLOSED", "SUPPRESSED"}:
+            reasons.append(f"SIGNAL_STATUS_{s.signal_status}")
+        elif s.signal_strength == "HIGH":
+            rating = Rating.HIGH
+            reasons.append("HIGH_OPPORTUNITY_SIGNAL")
+        elif s.signal_strength == "MEDIUM":
+            rating = Rating.MODERATE
+            reasons.append("MEDIUM_OPPORTUNITY_SIGNAL")
+        elif s.signal_strength == "LOW":
+            rating = Rating.LOW
+            reasons.append("LOW_OPPORTUNITY_SIGNAL")
+        else:
+            rating = Rating.NOT_ASSESSED
+            reasons.append("SIGNAL_STRENGTH_UNKNOWN")
+
+        if s.signal_status == "MONITORING" and RATING_RANK[rating] > RATING_RANK[Rating.MODERATE]:
+            rating = Rating.MODERATE
+            reasons.append("MONITORING_SIGNAL_CAPPED_MODERATE")
+
+        episode = _episode_key(s.domain, s.economic_episode_key, s.signal_id)
+        factors.append(FactorEvaluation(
+            axis=Axis.ATTENTION,
+            factor_code=AttentionFactorCode.ECONOMIC_OPPORTUNITY.value,
+            factor_rating=rating,
+            domain=s.domain,
+            economic_episode_key=episode,
+            executive_relevance=s.executive_relevance,
+            source_kind=SourceKind.OPPORTUNITY_SIGNAL,
+            source_ids=(s.signal_id,),
+            reason_codes=tuple(reasons),
+            confidence=s.confidence,
+        ))
+
+    for c in inputs.changes:
+        if not _same_relationship(ctx.relationship_id, c.relationship_id) or c.test_only:
+            continue
+        reasons: list[str] = []
+        if c.change_status != "RECORDED":
+            rating = Rating.NONE
+            reasons.append(f"CHANGE_STATUS_{c.change_status}")
+        elif c.materiality == "NOT_ASSESSED":
+            rating = Rating.NOT_ASSESSED
+            reasons.append("CHANGE_MATERIALITY_NOT_ASSESSED")
+        elif c.materiality != "MATERIAL":
+            rating = Rating.NONE
+            reasons.append("CHANGE_NOT_MATERIAL")
+        elif c.temporal_state == TemporalState.RECENTLY_OCCURRED:
+            rating = Rating.HIGH
+            reasons.append("RECENT_MATERIAL_CHANGE")
+        elif c.temporal_state == TemporalState.HISTORICAL:
+            rating = Rating.LOW
+            reasons.append("HISTORICAL_MATERIAL_CHANGE")
+        elif c.temporal_state == TemporalState.INACTIVE:
+            rating = Rating.NONE
+            reasons.append("CHANGE_TEMPORALLY_INACTIVE")
+        elif c.temporal_state == TemporalState.UNKNOWN:
+            rating = Rating.MODERATE
+            reasons.append("MATERIAL_CHANGE_TIMING_UNKNOWN")
+        else:
+            rating = Rating.MODERATE
+            reasons.append("MATERIAL_CHANGE")
+
+        # If Change explicitly links to an Event, use the Event as the economic
+        # episode so Signal/Change/Event can be clustered as one story when the
+        # governed upstream lineage says they are related.
+        # v1 treats a governed material Change as management relevance.
+        # It does not infer "good" or "bad" from direction here; metric-specific
+        # desirability semantics belong in a future governed change interpretation
+        # methodology, not in the Attention engine.
+        if rating not in (Rating.NONE, Rating.NOT_ASSESSED):
+            reasons.append("CHANGE_DIRECTION_DESIRABILITY_NOT_INTERPRETED_V1")
+
+        explicit_episode = c.economic_episode_key or c.related_event_id
+        episode = _episode_key(c.domain, explicit_episode, c.change_id)
+        factors.append(FactorEvaluation(
+            axis=Axis.ATTENTION,
+            factor_code=AttentionFactorCode.MATERIAL_CHANGE.value,
+            factor_rating=rating,
+            domain=c.domain,
+            economic_episode_key=episode,
+            executive_relevance=c.executive_relevance,
+            source_kind=SourceKind.CHANGE,
+            source_ids=(c.change_id,),
+            reason_codes=tuple(reasons),
+            confidence=c.confidence,
+        ))
+
+    for e in inputs.events:
+        if not _same_relationship(ctx.relationship_id, e.relationship_id) or e.test_only:
+            continue
+        reasons: list[str] = []
+        if e.event_status in {"CANCELLED", "SUPERSEDED"} or e.temporal_state == TemporalState.INACTIVE:
+            rating = Rating.NONE
+            reasons.append("EVENT_INACTIVE")
+        elif e.materiality == "NOT_ASSESSED":
+            rating = Rating.NOT_ASSESSED
+            reasons.append("EVENT_MATERIALITY_NOT_ASSESSED")
+        elif e.materiality != "MATERIAL":
+            rating = Rating.NONE
+            reasons.append("EVENT_NOT_MATERIAL")
+        elif e.temporal_state == TemporalState.HISTORICAL:
+            rating = Rating.LOW
+            reasons.append("HISTORICAL_MATERIAL_EVENT")
+        else:
+            # Attention intentionally does not escalate merely because the
+            # event is near. Materiality establishes the importance input;
+            # proximity is handled on the Urgency axis.
+            rating = Rating.HIGH
+            reasons.append("MATERIAL_CURRENT_EVENT")
+
+        explicit_episode = e.economic_episode_key or e.event_group_id
+        episode = _episode_key(e.domain, explicit_episode, e.event_id)
+        factors.append(FactorEvaluation(
+            axis=Axis.ATTENTION,
+            factor_code=AttentionFactorCode.MATERIAL_EVENT.value,
+            factor_rating=rating,
+            domain=e.domain,
+            economic_episode_key=episode,
+            executive_relevance=e.executive_relevance,
+            source_kind=SourceKind.EVENT,
+            source_ids=(e.event_id,),
+            reason_codes=tuple(reasons),
+            confidence=e.confidence,
+        ))
+
+    sctx = inputs.strategic_context
+    if sctx is not None and _same_relationship(ctx.relationship_id, sctx.relationship_id) and not sctx.test_only:
+        classification = sctx.classification.upper()
+        # Strategic relevance is a management-context contribution, not a
+        # permanent executive-review trigger. It can reinforce an independent
+        # economic/risk story, but by itself does not force HIGH Attention.
+        mapping = {
+            "STRATEGIC": Rating.MODERATE,
+            "CORE": Rating.LOW,
+            "STANDARD": Rating.NONE,
+            "UNKNOWN": Rating.NOT_ASSESSED,
+        }
+        rating = mapping.get(classification, Rating.NOT_ASSESSED)
+        factors.append(FactorEvaluation(
+            axis=Axis.ATTENTION,
+            factor_code=AttentionFactorCode.STRATEGIC_RELEVANCE.value,
+            factor_rating=rating,
+            domain="STRATEGIC",
+            economic_episode_key="STRATEGIC_RELATIONSHIP",
+            executive_relevance=sctx.executive_relevance,
+            source_kind=SourceKind.STRATEGIC_CONTEXT,
+            source_ids=(f"STRATEGIC_CONTEXT:{sctx.context_version}",),
+            reason_codes=(f"STRATEGIC_CLASSIFICATION_{classification}",),
+            confidence=sctx.confidence,
+        ))
+
+    for c in inputs.concerns:
+        if not _same_relationship(ctx.relationship_id, c.relationship_id) or c.test_only:
+            continue
+        rating = c.governed_rating if c.concern_status == "ACTIVE" else Rating.NONE
+        episode = _episode_key(c.domain, c.economic_episode_key, c.concern_id)
+        factors.append(FactorEvaluation(
+            axis=Axis.ATTENTION,
+            factor_code=AttentionFactorCode.RISK_RELATIONSHIP_CONCERN.value,
+            factor_rating=rating,
+            domain=c.domain,
+            economic_episode_key=episode,
+            executive_relevance=c.executive_relevance,
+            source_kind=SourceKind.RISK_RELATIONSHIP_CONTEXT,
+            source_ids=(c.concern_id,),
+            reason_codes=("GOVERNED_RISK_RELATIONSHIP_CONCERN",) if rating != Rating.NONE else ("CONCERN_NOT_ACTIVE",),
+            confidence=c.confidence,
+        ))
+
+    return tuple(sorted(factors, key=lambda f: (f.domain, f.economic_episode_key, f.factor_code, f.source_ids)))
+
+
+# ---------------------------------------------------------------------------
+# Urgency factor evaluation
+# ---------------------------------------------------------------------------
+
+
+def _rating_from_temporal_state(state: TemporalState) -> Rating:
+    return {
+        TemporalState.IMMEDIATE: Rating.VERY_HIGH,
+        TemporalState.NEAR_TERM: Rating.HIGH,
+        TemporalState.FORWARD: Rating.MODERATE,
+        TemporalState.LONG_DATED: Rating.LOW,
+        TemporalState.RECENTLY_OCCURRED: Rating.LOW,
+        TemporalState.HISTORICAL: Rating.NONE,
+        TemporalState.INACTIVE: Rating.NONE,
+        TemporalState.UNKNOWN: Rating.NOT_ASSESSED,
+    }[state]
+
+
+def _rating_from_days(days_remaining: int, config: ClockUrgencyConfig) -> Rating:
+    if days_remaining < 0:
+        return config.overdue_rating
+    if days_remaining <= config.immediate_max_days:
+        return Rating.VERY_HIGH
+    if days_remaining <= config.near_term_max_days:
+        return Rating.HIGH
+    if days_remaining <= config.forward_max_days:
+        return Rating.MODERATE
+    return Rating.LOW
+
+
+def evaluate_urgency_factors(
+    ctx: ReviewContext,
+    inputs: EvaluationInputs,
+    policy: E5PolicyConfig,
+) -> tuple[FactorEvaluation, ...]:
+    factors: list[FactorEvaluation] = []
+
+    for e in inputs.events:
+        if not _same_relationship(ctx.relationship_id, e.relationship_id) or e.test_only:
+            continue
+        reasons: list[str] = []
+        if e.event_status in {"CANCELLED", "SUPERSEDED"} or e.temporal_state == TemporalState.INACTIVE:
+            rating = Rating.NONE
+            reasons.append("EVENT_INACTIVE")
+        elif e.actionability == ActionabilityStatus.RESOLVED:
+            rating = Rating.NONE
+            reasons.append("EVENT_RESOLVED")
+        elif e.actionability == ActionabilityStatus.NOT_ASSESSED:
+            rating = Rating.NOT_ASSESSED
+            reasons.append("EVENT_ACTIONABILITY_NOT_ASSESSED")
+        else:
+            rating = _rating_from_temporal_state(e.temporal_state)
+            reasons.append(f"EVENT_TEMPORAL_{e.temporal_state.value}")
+            if e.actionability == ActionabilityStatus.MONITOR_ONLY and RATING_RANK[rating] > RATING_RANK[Rating.LOW]:
+                rating = Rating.LOW
+                reasons.append("MONITOR_ONLY_CAPPED_LOW")
+
+        explicit_episode = e.economic_episode_key or e.event_group_id
+        episode = _episode_key(e.domain, explicit_episode, e.event_id)
+        factors.append(FactorEvaluation(
+            axis=Axis.URGENCY,
+            factor_code=UrgencyFactorCode.EVENT_PROXIMITY.value,
+            factor_rating=rating,
+            domain=e.domain,
+            economic_episode_key=episode,
+            executive_relevance=e.executive_relevance,
+            source_kind=SourceKind.EVENT,
+            source_ids=(e.event_id,),
+            reason_codes=tuple(reasons),
+            confidence=e.confidence,
+            binding_clock_type=ClockType.EVENT_DATE,
+            date_precision=DatePrecision.UNKNOWN,
+        ))
+
+    for w in inputs.urgency_windows:
+        if not _same_relationship(ctx.relationship_id, w.relationship_id) or w.test_only:
+            continue
+        reasons: list[str] = []
+        days_remaining: Optional[int] = None
+        rating = Rating.NOT_ASSESSED
+        if w.window_status not in {"ACTIVE", "OPEN", "OVERDUE"}:
+            rating = Rating.NONE
+            reasons.append(f"WINDOW_STATUS_{w.window_status}")
+        elif w.actionability == ActionabilityStatus.RESOLVED:
+            rating = Rating.NONE
+            reasons.append("WINDOW_RESOLVED")
+        elif w.actionability == ActionabilityStatus.NOT_ASSESSED:
+            rating = Rating.NOT_ASSESSED
+            reasons.append("WINDOW_ACTIONABILITY_NOT_ASSESSED")
+        elif w.date_precision == DatePrecision.DAY and w.binding_date is not None:
+            days_remaining = (w.binding_date - ctx.evaluation_as_of).days
+            rating = _rating_from_days(days_remaining, policy.clock_config)
+            reasons.append("EXACT_GOVERNED_BINDING_CLOCK")
+            if days_remaining < 0:
+                reasons.append("BINDING_CLOCK_OVERDUE")
+        elif w.governed_rating_if_imprecise is not None:
+            rating = w.governed_rating_if_imprecise
+            reasons.append("IMPRECISE_CLOCK_GOVERNED_RATING")
+        else:
+            rating = Rating.NOT_ASSESSED
+            reasons.append("IMPRECISE_CLOCK_WITHOUT_GOVERNED_RATING")
+
+        if w.actionability == ActionabilityStatus.MONITOR_ONLY and RATING_RANK[rating] > RATING_RANK[Rating.LOW]:
+            rating = Rating.LOW
+            reasons.append("MONITOR_ONLY_CAPPED_LOW")
+
+        episode = _episode_key(w.domain, w.economic_episode_key, w.window_id)
+        factors.append(FactorEvaluation(
+            axis=Axis.URGENCY,
+            factor_code=w.factor_code.value,
+            factor_rating=rating,
+            domain=w.domain,
+            economic_episode_key=episode,
+            executive_relevance=w.executive_relevance,
+            source_kind=SourceKind.URGENCY_WINDOW,
+            source_ids=(w.window_id,),
+            reason_codes=tuple(reasons),
+            confidence=w.confidence,
+            binding_clock_type=w.clock_type,
+            binding_date=w.binding_date,
+            days_remaining=days_remaining,
+            date_precision=w.date_precision,
+        ))
+
+    for r in inputs.rates_of_change:
+        if not _same_relationship(ctx.relationship_id, r.relationship_id) or r.test_only:
+            continue
+        rating = r.governed_rating if r.velocity_status == "ACTIVE" else Rating.NONE
+        episode = _episode_key(r.domain, r.economic_episode_key, r.velocity_id)
+        factors.append(FactorEvaluation(
+            axis=Axis.URGENCY,
+            factor_code=UrgencyFactorCode.RATE_OF_CHANGE.value,
+            factor_rating=rating,
+            domain=r.domain,
+            economic_episode_key=episode,
+            executive_relevance=r.executive_relevance,
+            source_kind=SourceKind.RATE_OF_CHANGE,
+            source_ids=(r.velocity_id,),
+            reason_codes=("GOVERNED_RATE_OF_CHANGE",) if rating != Rating.NONE else ("VELOCITY_NOT_ACTIVE",),
+            confidence=r.confidence,
+        ))
+
+    return tuple(sorted(factors, key=lambda f: (f.domain, f.economic_episode_key, f.factor_code, f.source_ids)))
+
+
+# ---------------------------------------------------------------------------
+# Clustering / aggregation
+# ---------------------------------------------------------------------------
+
+
+def _qualifying_factor(f: FactorEvaluation) -> bool:
+    return (
+        f.executive_relevance == ExecutiveRelevanceStatus.ELIGIBLE
+        and f.factor_rating not in (Rating.NOT_ASSESSED, Rating.NONE)
+    )
+
+
+def build_clusters(
+    axis: Axis,
+    factors: Sequence[FactorEvaluation],
+    policy: E5PolicyConfig,
+) -> tuple[ClusterEvaluation, ...]:
+    grouped: dict[tuple[str, str], list[FactorEvaluation]] = {}
+    for f in factors:
+        if f.axis != axis or not _qualifying_factor(f):
+            continue
+        grouped.setdefault((f.domain, f.economic_episode_key), []).append(f)
+
+    clusters: list[ClusterEvaluation] = []
+    for (domain, episode), members in sorted(grouped.items()):
+        # Deduplicate within the cluster by factor code. Multiple source rows of
+        # the same factor type do not create reinforcement merely by row count.
+        strongest_by_code: dict[str, FactorEvaluation] = {}
+        for f in members:
+            existing = strongest_by_code.get(f.factor_code)
+            if existing is None or RATING_RANK[f.factor_rating] > RATING_RANK[existing.factor_rating]:
+                strongest_by_code[f.factor_code] = f
+            elif existing is not None and RATING_RANK[f.factor_rating] == RATING_RANK[existing.factor_rating]:
+                # Stable tie break by source IDs.
+                if f.source_ids < existing.source_ids:
+                    strongest_by_code[f.factor_code] = f
+
+        distinct = list(strongest_by_code.values())
+        strongest = _rating_max((f.factor_rating for f in distinct))
+        cluster_rating = strongest
+        internal_reinforcement = False
+        decisive_factors: list[FactorEvaluation] = []
+
+        if axis == Axis.ATTENTION:
+            same_strength_or_higher = [
+                f for f in distinct
+                if RATING_RANK[f.factor_rating] >= RATING_RANK[strongest]
+                and RATING_RANK[f.factor_rating] >= RATING_RANK[policy.cluster_reinforcement_minimum]
+            ]
+            if len(same_strength_or_higher) >= 2 and strongest != Rating.VERY_HIGH:
+                cluster_rating = _promote_one(strongest)
+                internal_reinforcement = True
+                decisive_factors = same_strength_or_higher
+            else:
+                decisive_factors = [
+                    f for f in distinct
+                    if f.factor_rating == strongest and RATING_RANK[f.factor_rating] > 0
+                ]
+        else:
+            # Multiple clocks from the same economic episode never reinforce
+            # one another. The most binding/strongest clock establishes the
+            # base. A distinct non-clock urgency factor (e.g. RATE_OF_CHANGE)
+            # may provide bounded reinforcement.
+            clock_factors = [f for f in distinct if f.binding_clock_type is not None]
+            non_clock = [f for f in distinct if f.binding_clock_type is None]
+            clock_base = _rating_max((f.factor_rating for f in clock_factors), default=Rating.NONE)
+            non_clock_base = _rating_max((f.factor_rating for f in non_clock), default=Rating.NONE)
+            base = _rating_max([clock_base, non_clock_base])
+            strongest = base
+
+            # A factor must never reinforce itself. Multiple clocks from the
+            # same episode do not reinforce one another. Bounded internal
+            # reinforcement therefore requires either:
+            #   (a) a clock-established base plus a distinct non-clock factor
+            #       at least as strong; or
+            #   (b) at least two distinct non-clock factor codes at the base.
+            qualifying_non_clock = [
+                f for f in non_clock
+                if RATING_RANK[f.factor_rating] >= RATING_RANK[base]
+                and RATING_RANK[f.factor_rating] >= RATING_RANK[policy.cluster_reinforcement_minimum]
+            ]
+            clock_plus_nonclock = (
+                RATING_RANK[clock_base] >= RATING_RANK[base]
+                and bool(qualifying_non_clock)
+            )
+            two_nonclock = len(qualifying_non_clock) >= 2
+            if (clock_plus_nonclock or two_nonclock) and base != Rating.VERY_HIGH:
+                cluster_rating = _promote_one(base)
+                internal_reinforcement = True
+                if clock_plus_nonclock:
+                    decisive_factors = [
+                        f for f in clock_factors
+                        if f.factor_rating == clock_base and RATING_RANK[f.factor_rating] > 0
+                    ] + qualifying_non_clock
+                else:
+                    decisive_factors = qualifying_non_clock
+            else:
+                cluster_rating = base
+                decisive_factors = [
+                    f for f in distinct
+                    if f.factor_rating == base and RATING_RANK[f.factor_rating] > 0
+                ]
+
+        confidence = (
+            _min_confidence(f.confidence for f in decisive_factors)
+            or E5ConfidenceLevel.LOW
+        )
+
+        # Binding clock: earliest exact governed actionable deadline among the
+        # retained factors, otherwise the strongest clock factor with stable tie break.
+        clocks = [f for f in distinct if f.binding_clock_type is not None]
+        exact_clocks = [f for f in clocks if f.days_remaining is not None]
+        binding: Optional[FactorEvaluation] = None
+        if exact_clocks:
+            binding = min(exact_clocks, key=lambda f: (f.days_remaining, f.factor_code, f.source_ids))
+        elif clocks:
+            binding = max(clocks, key=lambda f: (RATING_RANK[f.factor_rating], f.factor_code, f.source_ids))
+
+        # Scoring uses one strongest row per factor code, but lineage preserves
+        # every contributing source/reason from the governed economic episode.
+        reason_codes = sorted({r for f in members for r in f.reason_codes})
+        if internal_reinforcement:
+            reason_codes.append("BOUNDED_INTERNAL_REINFORCEMENT")
+
+        clusters.append(ClusterEvaluation(
+            axis=axis,
+            cluster_key=_cluster_key(axis, domain, episode),
+            domain=domain,
+            economic_episode_key=episode,
+            cluster_rating=cluster_rating,
+            strongest_factor_rating=strongest,
+            factor_codes=tuple(sorted(strongest_by_code)),
+            source_ids=tuple(sorted({sid for f in members for sid in f.source_ids})),
+            reason_codes=tuple(reason_codes),
+            confidence=confidence,
+            internal_reinforcement=internal_reinforcement,
+            binding_clock_type=binding.binding_clock_type if binding else None,
+            binding_date=binding.binding_date if binding else None,
+            days_remaining=binding.days_remaining if binding else None,
+        ))
+
+    return tuple(sorted(clusters, key=lambda c: (c.domain, c.economic_episode_key, c.cluster_key)))
+
+
+def _urgency_clock_band_position(cluster: ClusterEvaluation, policy: E5PolicyConfig) -> Optional[BandPosition]:
+    if cluster.days_remaining is None:
+        return None
+    days = cluster.days_remaining
+    cfg = policy.clock_config
+    rating = cluster.cluster_rating
+
+    if rating == Rating.VERY_HIGH:
+        if days < 0:
+            return BandPosition.UPPER
+        upper = cfg.immediate_max_days
+        if upper <= 0:
+            return BandPosition.MID
+        frac = days / upper
+        return BandPosition.UPPER if frac <= 1/3 else BandPosition.MID if frac <= 2/3 else BandPosition.LOWER
+    if rating == Rating.HIGH:
+        lo, hi = cfg.immediate_max_days + 1, cfg.near_term_max_days
+    elif rating == Rating.MODERATE:
+        lo, hi = cfg.near_term_max_days + 1, cfg.forward_max_days
+    elif rating == Rating.LOW:
+        return BandPosition.MID
+    else:
+        return None
+
+    span = max(1, hi - lo)
+    frac = (days - lo) / span
+    # Closer deadline = higher display position within the authoritative band.
+    return BandPosition.UPPER if frac <= 1/3 else BandPosition.MID if frac <= 2/3 else BandPosition.LOWER
+
+
+def aggregate_axis(
+    axis: Axis,
+    factors: Sequence[FactorEvaluation],
+    clusters: Sequence[ClusterEvaluation],
+    coverage_input: AxisCoverageInput,
+    policy: E5PolicyConfig,
+) -> AxisEvaluation:
+    all_codes = (
+        {x.value for x in AttentionFactorCode}
+        if axis == Axis.ATTENTION
+        else {x.value for x in UrgencyFactorCode}
+    )
+    coverage = _coverage_status(coverage_input, all_codes)
+    norm = policy.attention_normalization if axis == Axis.ATTENTION else policy.urgency_normalization
+
+    if coverage == CoverageStatus.NOT_ASSESSED:
+        return AxisEvaluation(
+            axis=axis,
+            rating=Rating.NOT_ASSESSED,
+            score=None,
+            band_position=None,
+            coverage=coverage,
+            confidence=None,
+            strongest_cluster_rating=Rating.NOT_ASSESSED,
+            reinforcement_state="NOT_ASSESSED",
+            primary_cluster_key=None,
+            reason_codes=("AXIS_ASSESSMENT_NOT_SUFFICIENT",),
+        )
+
+    eligible_clusters = [c for c in clusters if c.axis == axis]
+    if not eligible_clusters:
+        # If the axis was sufficiently assessed and no eligible management
+        # driver remains, NONE is an active conclusion rather than unknown.
+        return AxisEvaluation(
+            axis=axis,
+            rating=Rating.NONE,
+            score=norm.none_score,
+            band_position=BandPosition.NONE,
+            coverage=coverage,
+            confidence=None,
+            strongest_cluster_rating=Rating.NONE,
+            reinforcement_state="NONE",
+            primary_cluster_key=None,
+            reason_codes=("NO_ELIGIBLE_CURRENT_EXECUTIVE_DRIVER",),
+        )
+
+    ordered = sorted(
+        eligible_clusters,
+        key=lambda c: (-RATING_RANK[c.cluster_rating], c.cluster_key),
+    )
+    primary = ordered[0]
+    strongest = primary.cluster_rating
+    final = strongest
+
+    # Relationship-level bounded reinforcement. A second independent cluster
+    # must be at least as strong as the base and at least MODERATE by default.
+    # Because clusters are keyed by domain + economic episode, a second cluster
+    # represents a distinct management story rather than another row of the same story.
+    qualifying_secondary = [
+        c for c in ordered[1:]
+        if RATING_RANK[c.cluster_rating] >= RATING_RANK[strongest]
+        and RATING_RANK[c.cluster_rating] >= RATING_RANK[policy.relationship_reinforcement_minimum]
+    ]
+    promoted = False
+    if qualifying_secondary and strongest != Rating.VERY_HIGH:
+        final = _promote_one(strongest)
+        promoted = True
+
+    # Additional independent MODERATE-or-higher story can support an UPPER
+    # band position without changing the category if it is not strong enough
+    # for categorical promotion.
+    supporting_secondary = [
+        c for c in ordered[1:]
+        if RATING_RANK[c.cluster_rating] >= RATING_RANK[policy.relationship_reinforcement_minimum]
+    ]
+
+    if promoted:
+        position = BandPosition.LOWER
+        reinforcement_state = "PROMOTED_ONE_CATEGORY"
+    elif axis == Axis.URGENCY:
+        clock_pos = _urgency_clock_band_position(primary, policy)
+        if clock_pos is not None:
+            position = clock_pos
+        elif supporting_secondary:
+            position = BandPosition.UPPER
+        else:
+            position = BandPosition.MID
+        reinforcement_state = "SUPPORTING_INDEPENDENT_CLUSTER" if supporting_secondary else "NONE"
+    else:
+        position = BandPosition.UPPER if supporting_secondary else BandPosition.MID
+        reinforcement_state = "SUPPORTING_INDEPENDENT_CLUSTER" if supporting_secondary else "NONE"
+
+    if final == Rating.NONE:
+        score = norm.none_score
+        position = BandPosition.NONE
+    else:
+        band = norm.bands[final]
+        score = {
+            BandPosition.LOWER: band.lower_anchor,
+            BandPosition.MID: band.mid_anchor,
+            BandPosition.UPPER: band.upper_anchor,
+            BandPosition.NONE: norm.none_score,
+        }[position]
+
+    # Confidence follows the cluster(s) that actually determine the
+    # authoritative category. A weak minor side-story must not silently reduce
+    # confidence in a rating established by a stronger independent cluster.
+    confidence_clusters = [primary]
+    if promoted:
+        confidence_clusters.extend(qualifying_secondary)
+    decisive_confidence = _min_confidence(c.confidence for c in confidence_clusters)
+    reasons = [f"PRIMARY_CLUSTER:{primary.cluster_key}"]
+    if promoted:
+        reasons.append("RELATIONSHIP_BOUNDED_REINFORCEMENT")
+    elif supporting_secondary:
+        reasons.append("INDEPENDENT_SUPPORTING_CLUSTER")
+
+    return AxisEvaluation(
+        axis=axis,
+        rating=final,
+        score=score,
+        band_position=position,
+        coverage=coverage,
+        confidence=decisive_confidence,
+        strongest_cluster_rating=strongest,
+        reinforcement_state=reinforcement_state,
+        primary_cluster_key=primary.cluster_key,
+        reason_codes=tuple(reasons),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Quadrant / normalization quality gate
+# ---------------------------------------------------------------------------
+
+
+def assign_quadrant(attention: AxisEvaluation, urgency: AxisEvaluation) -> QuadrantEvaluation:
+    if attention.rating == Rating.NOT_ASSESSED and urgency.rating == Rating.NOT_ASSESSED:
+        return QuadrantEvaluation(
+            status=QuadrantStatus.NOT_ASSIGNED,
+            quadrant=None,
+            reason_codes=("BOTH_AXES_NOT_ASSESSED",),
+        )
+    if attention.rating == Rating.NOT_ASSESSED:
+        return QuadrantEvaluation(
+            status=QuadrantStatus.NOT_ASSIGNED,
+            quadrant=None,
+            reason_codes=("ATTENTION_AXIS_NOT_ASSESSED",),
+        )
+    if urgency.rating == Rating.NOT_ASSESSED:
+        return QuadrantEvaluation(
+            status=QuadrantStatus.NOT_ASSIGNED,
+            quadrant=None,
+            reason_codes=("URGENCY_AXIS_NOT_ASSESSED",),
+        )
+
+    high_a = attention.rating in {Rating.HIGH, Rating.VERY_HIGH}
+    high_u = urgency.rating in {Rating.HIGH, Rating.VERY_HIGH}
+    if high_a and high_u:
+        quadrant = Quadrant.ACT_NOW
+    elif high_a:
+        quadrant = Quadrant.STRATEGIC_PRIORITY
+    elif high_u:
+        quadrant = Quadrant.URGENT_REVIEW
+    else:
+        quadrant = Quadrant.MONITOR
+    return QuadrantEvaluation(
+        status=QuadrantStatus.ASSIGNED,
+        quadrant=quadrant,
+        reason_codes=(f"{attention.rating.value}_X_{urgency.rating.value}",),
+    )
+
+
+def _validate_axis_score(axis_eval: AxisEvaluation, norm: NormalizationConfig) -> list[str]:
+    issues: list[str] = []
+    if axis_eval.rating == Rating.NOT_ASSESSED:
+        if axis_eval.score is not None or axis_eval.band_position is not None:
+            issues.append(f"{axis_eval.axis.value}_NOT_ASSESSED_MUST_HAVE_NULL_SCORE")
+        return issues
+    if axis_eval.rating == Rating.NONE:
+        if axis_eval.score != norm.none_score:
+            issues.append(f"{axis_eval.axis.value}_NONE_SCORE_INVALID")
+        if axis_eval.band_position != BandPosition.NONE:
+            issues.append(f"{axis_eval.axis.value}_NONE_BAND_POSITION_INVALID")
+        return issues
+    if axis_eval.score is None or axis_eval.band_position is None:
+        issues.append(f"{axis_eval.axis.value}_SCORE_OR_POSITION_MISSING")
+        return issues
+    band = norm.bands[axis_eval.rating]
+    if not (band.minimum <= axis_eval.score <= band.maximum):
+        issues.append(f"{axis_eval.axis.value}_SCORE_OUTSIDE_RATING_BAND")
+    expected = {
+        BandPosition.LOWER: band.lower_anchor,
+        BandPosition.MID: band.mid_anchor,
+        BandPosition.UPPER: band.upper_anchor,
+    }.get(axis_eval.band_position)
+    if expected != axis_eval.score:
+        issues.append(f"{axis_eval.axis.value}_SCORE_NOT_CONFIGURED_ANCHOR")
+    return issues
+
+
+def quality_gate(
+    candidate: AttentionUrgencyCandidate,
+    policy: E5PolicyConfig,
+) -> tuple[bool, tuple[str, ...]]:
+    issues: list[str] = []
+    ok_policy, policy_issues = policy.validate()
+    if not ok_policy:
+        issues.extend(policy_issues)
+    if not candidate.relationship_id:
+        issues.append("RELATIONSHIP_ID_MISSING")
+    if not candidate.review_cycle_id:
+        issues.append("REVIEW_CYCLE_ID_MISSING")
+    if not candidate.source_fingerprint:
+        issues.append("SOURCE_FINGERPRINT_MISSING")
+    if not candidate.idempotency_key:
+        issues.append("IDEMPOTENCY_KEY_MISSING")
+    issues.extend(_validate_axis_score(candidate.attention, policy.attention_normalization))
+    issues.extend(_validate_axis_score(candidate.urgency, policy.urgency_normalization))
+
+    q = candidate.quadrant
+    expected_q = assign_quadrant(candidate.attention, candidate.urgency)
+    if q != expected_q:
+        issues.append("QUADRANT_INCONSISTENT_WITH_AUTHORITATIVE_RATINGS")
+
+    # Published candidates must be explainable if a non-NONE rating exists.
+    if candidate.attention.rating not in (Rating.NOT_ASSESSED, Rating.NONE):
+        if not any(c.axis == Axis.ATTENTION for c in candidate.clusters):
+            issues.append("ATTENTION_CLUSTER_LINEAGE_MISSING")
+    if candidate.urgency.rating not in (Rating.NOT_ASSESSED, Rating.NONE):
+        if not any(c.axis == Axis.URGENCY for c in candidate.clusters):
+            issues.append("URGENCY_CLUSTER_LINEAGE_MISSING")
+
+    return (not issues, tuple(sorted(set(issues))))
+
+
+# ---------------------------------------------------------------------------
+# Source fingerprint / full evaluation
+# ---------------------------------------------------------------------------
+
+
+def build_source_fingerprint(
+    ctx: ReviewContext,
+    inputs: EvaluationInputs,
+    policy: E5PolicyConfig,
+    attention_coverage: Optional[AxisCoverageInput] = None,
+    urgency_coverage: Optional[AxisCoverageInput] = None,
+) -> tuple[str, tuple[dict, ...]]:
+    snapshots = [
+        item for item in inputs.all_snapshots()
+        if item.get("state", {}).get("relationship_id") == ctx.relationship_id
+        and not bool(item.get("state", {}).get("test_only", False))
+    ]
+    # Canonical source-state ordering: source kind, then canonical state JSON.
+    # Sources outside the relationship or marked test_only are not consumed by
+    # the production evaluation and therefore cannot perturb its fingerprint.
+    snapshots_sorted = sorted(
+        snapshots,
+        key=lambda x: (x["source_kind"], _canonical_json(x["state"])),
+    )
+    payload = {
+        "relationship_id": ctx.relationship_id,
+        "review_cycle_id": ctx.review_cycle_id,
+        "evaluation_as_of": ctx.evaluation_as_of.isoformat(),
+        "sources": snapshots_sorted,
+        # Coverage is part of the governed evaluation context. Two runs with
+        # identical source objects but different assessed/sufficient factor
+        # coverage can legitimately produce different authoritative ratings.
+        "attention_coverage": (
+            attention_coverage.snapshot() if attention_coverage is not None else None
+        ),
+        "urgency_coverage": (
+            urgency_coverage.snapshot() if urgency_coverage is not None else None
+        ),
+        "policy_snapshot": policy.snapshot(),
+    }
+    return _sha(payload), tuple(snapshots_sorted)
+
+
+def evaluate_attention_urgency(
+    ctx: ReviewContext,
+    inputs: EvaluationInputs,
+    attention_coverage: AxisCoverageInput,
+    urgency_coverage: AxisCoverageInput,
+    policy: Optional[E5PolicyConfig] = None,
+) -> AttentionUrgencyCandidate:
+    policy = policy or default_policy_config()
+    ok_policy, policy_issues = policy.validate()
+    if not ok_policy:
+        raise ValueError("Invalid E.5 policy config: " + "; ".join(policy_issues))
+    if ctx.policy_bundle_id and ctx.policy_bundle_id != policy.policy_bundle_id:
+        raise ValueError("ReviewContext policy_bundle_id does not match supplied E.5 policy bundle.")
+
+    attention_factors = evaluate_attention_factors(ctx, inputs)
+    urgency_factors = evaluate_urgency_factors(ctx, inputs, policy)
+    factors = tuple(sorted(attention_factors + urgency_factors, key=lambda f: (f.axis.value, f.domain, f.economic_episode_key, f.factor_code, f.source_ids)))
+
+    attention_clusters = build_clusters(Axis.ATTENTION, attention_factors, policy)
+    urgency_clusters = build_clusters(Axis.URGENCY, urgency_factors, policy)
+    clusters = tuple(sorted(attention_clusters + urgency_clusters, key=lambda c: (c.axis.value, c.cluster_key)))
+
+    attention = aggregate_axis(Axis.ATTENTION, attention_factors, attention_clusters, attention_coverage, policy)
+    urgency = aggregate_axis(Axis.URGENCY, urgency_factors, urgency_clusters, urgency_coverage, policy)
+    quadrant = assign_quadrant(attention, urgency)
+
+    source_fingerprint, source_snapshot = build_source_fingerprint(
+        ctx,
+        inputs,
+        policy,
+        attention_coverage=attention_coverage,
+        urgency_coverage=urgency_coverage,
+    )
+    idempotency_payload = {
+        "relationship_id": ctx.relationship_id,
+        "review_cycle_id": ctx.review_cycle_id,
+        "source_fingerprint": source_fingerprint,
+        "engine_version": ENGINE_VERSION,
+        "policy_bundle_id": policy.policy_bundle_id,
+        "attention_rule_version": ATTENTION_RULE_VERSION,
+        "urgency_rule_version": URGENCY_RULE_VERSION,
+        "aggregation_rule_version": AGGREGATION_RULE_VERSION,
+        "quadrant_rule_version": QUADRANT_RULE_VERSION,
+        "normalization_rule_version": NORMALIZATION_RULE_VERSION,
+    }
+    idempotency_key = _sha(idempotency_payload)
+
+    provisional = AttentionUrgencyCandidate(
+        relationship_id=ctx.relationship_id,
+        review_cycle_id=ctx.review_cycle_id,
+        evaluation_as_of=ctx.evaluation_as_of.isoformat(),
+        policy_bundle_id=policy.policy_bundle_id,
+        attention=attention,
+        urgency=urgency,
+        quadrant=quadrant,
+        factor_evaluations=factors,
+        clusters=clusters,
+        source_fingerprint=source_fingerprint,
+        idempotency_key=idempotency_key,
+        policy_snapshot=policy.snapshot(),
+        source_snapshot=source_snapshot,
+        quality_gate_pass=False,
+        quality_gate_reason_codes=(),
+        rule_versions={
+            "engine": ENGINE_VERSION,
+            "attention": ATTENTION_RULE_VERSION,
+            "urgency": URGENCY_RULE_VERSION,
+            "aggregation": AGGREGATION_RULE_VERSION,
+            "quadrant": QUADRANT_RULE_VERSION,
+            "normalization": NORMALIZATION_RULE_VERSION,
+        },
+    )
+    passed, issues = quality_gate(provisional, policy)
+    return replace(
+        provisional,
+        quality_gate_pass=passed,
+        quality_gate_reason_codes=issues,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle decision (side-effect-free)
+# ---------------------------------------------------------------------------
+
+
+def decide_lifecycle(
+    ctx: ReviewContext,
+    candidate: AttentionUrgencyCandidate,
+    existing: Sequence[ExistingEvaluation],
+) -> LifecycleDecision:
+    same_scope = [
+        e for e in existing
+        if e.relationship_id == candidate.relationship_id
+        and e.review_cycle_id == candidate.review_cycle_id
+        and e.status in {"DRAFT", "VALIDATED", "PUBLISHED"}
+    ]
+    same_key = [e for e in same_scope if e.idempotency_key == candidate.idempotency_key]
+    if same_key:
+        chosen = sorted(same_key, key=lambda e: e.evaluation_id)[0]
+        return LifecycleDecision(
+            action=EvaluationLifecycleAction.KEEP_EXISTING,
+            existing_evaluation_id=chosen.evaluation_id,
+            reason_codes=("IDEMPOTENT_EVALUATION_ALREADY_EXISTS",),
+        )
+
+    current_published = [e for e in same_scope if e.status == "PUBLISHED"]
+    if ctx.review_cycle_frozen:
+        return LifecycleDecision(
+            action=EvaluationLifecycleAction.NO_ACTION,
+            existing_evaluation_id=(sorted(current_published, key=lambda e: e.evaluation_id)[0].evaluation_id if current_published else None),
+            reason_codes=("REVIEW_CYCLE_FROZEN",),
+        )
+
+    if not candidate.quality_gate_pass:
+        return LifecycleDecision(
+            action=EvaluationLifecycleAction.NO_ACTION,
+            existing_evaluation_id=None,
+            reason_codes=("CANDIDATE_QUALITY_GATE_FAILED",) + candidate.quality_gate_reason_codes,
+        )
+
+    if current_published:
+        chosen = sorted(current_published, key=lambda e: e.evaluation_id)[0]
+        return LifecycleDecision(
+            action=EvaluationLifecycleAction.SUPERSEDE_AND_CREATE,
+            existing_evaluation_id=chosen.evaluation_id,
+            reason_codes=("SOURCE_STATE_CHANGED_WITHIN_OPEN_REVIEW_CYCLE",),
+        )
+
+    return LifecycleDecision(
+        action=EvaluationLifecycleAction.CREATE,
+        existing_evaluation_id=None,
+        reason_codes=("NO_EXISTING_AUTHORITATIVE_EVALUATION_FOR_REVIEW_CYCLE",),
+    )
+
+
+__all__ = [
+    "ENGINE_VERSION",
+    "Axis",
+    "Rating",
+    "CoverageStatus",
+    "E5ConfidenceLevel",
+    "ExecutiveRelevanceStatus",
+    "ActionabilityStatus",
+    "BandPosition",
+    "Quadrant",
+    "QuadrantStatus",
+    "AttentionFactorCode",
+    "UrgencyFactorCode",
+    "ClockType",
+    "DatePrecision",
+    "TemporalState",
+    "SourceKind",
+    "EvaluationLifecycleAction",
+    "ReviewContext",
+    "AxisCoverageInput",
+    "BandDefinition",
+    "NormalizationConfig",
+    "ClockUrgencyConfig",
+    "E5PolicyConfig",
+    "OpportunitySignalInput",
+    "ChangeInput",
+    "CorporateEventInput",
+    "StrategicContextInput",
+    "RiskRelationshipConcernInput",
+    "UrgencyWindowInput",
+    "RateOfChangeInput",
+    "EvaluationInputs",
+    "FactorEvaluation",
+    "ClusterEvaluation",
+    "AxisEvaluation",
+    "QuadrantEvaluation",
+    "AttentionUrgencyCandidate",
+    "ExistingEvaluation",
+    "LifecycleDecision",
+    "default_policy_config",
+    "evaluate_attention_factors",
+    "evaluate_urgency_factors",
+    "build_clusters",
+    "aggregate_axis",
+    "assign_quadrant",
+    "build_source_fingerprint",
+    "evaluate_attention_urgency",
+    "decide_lifecycle",
+    "quality_gate",
+]
+
+
+# =============================================================================
+# STAGE 1-E.5.9 — ATTENTION × URGENCY PERSISTENCE & APP INTEGRATION
+# =============================================================================
+
+E5_VALIDATION_COMPANY = "EC-AI E5 Validation Co"
+E5_VALIDATION_RELATIONSHIP_ID = "REL-EC-AI-E5-VALIDATION-CO"
+E5_TEST_POLICY_SCOPE = "E5_TEST_PERSISTENCE_2026_10"
+
+
+def _db_stage1e5_migrate_schema(conn: _DBConnection):
+    """Add E.5 persistence additively without rewriting Stage 1-D/E history."""
+    id_type = "INTEGER PRIMARY KEY AUTOINCREMENT" if conn.backend == "sqlite" else "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+    fk_type = "INTEGER" if conn.backend == "sqlite" else "BIGINT"
+    bool_type = "INTEGER NOT NULL DEFAULT 0" if conn.backend == "sqlite" else "SMALLINT NOT NULL DEFAULT 0"
+
+    # Additive ReviewCycle date field for future governed review-time context.
+    if conn.backend == "sqlite":
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(review_cycle)").fetchall()}
+        if "as_of_date" not in existing:
+            conn.execute("ALTER TABLE review_cycle ADD COLUMN as_of_date TEXT")
+    else:
+        conn.execute("ALTER TABLE review_cycle ADD COLUMN IF NOT EXISTS as_of_date TEXT")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS attention_urgency_review_policy (
+        id {id_type},
+        review_cycle_id {fk_type} NOT NULL REFERENCES review_cycle(id),
+        policy_bundle_id TEXT NOT NULL,
+        policy_snapshot_json TEXT NOT NULL,
+        rule_versions_json TEXT NOT NULL,
+        evaluation_as_of TEXT NOT NULL,
+        test_only {bool_type},
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(review_cycle_id, test_only)
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS attention_urgency_evaluation (
+        id {id_type},
+        evaluation_id TEXT NOT NULL UNIQUE,
+        relationship_id {fk_type} NOT NULL REFERENCES relationship(id),
+        review_cycle_id {fk_type} NOT NULL REFERENCES review_cycle(id),
+        evaluation_as_of TEXT NOT NULL,
+        policy_bundle_id TEXT NOT NULL,
+
+        attention_rating TEXT NOT NULL,
+        attention_score INTEGER,
+        attention_band_position TEXT,
+        attention_coverage TEXT NOT NULL,
+        attention_confidence TEXT,
+        attention_strongest_cluster_rating TEXT NOT NULL,
+        attention_reinforcement_state TEXT NOT NULL,
+        attention_primary_cluster_key TEXT,
+        attention_reason_codes_json TEXT NOT NULL DEFAULT '[]',
+
+        urgency_rating TEXT NOT NULL,
+        urgency_score INTEGER,
+        urgency_band_position TEXT,
+        urgency_coverage TEXT NOT NULL,
+        urgency_confidence TEXT,
+        urgency_strongest_cluster_rating TEXT NOT NULL,
+        urgency_reinforcement_state TEXT NOT NULL,
+        urgency_primary_cluster_key TEXT,
+        urgency_reason_codes_json TEXT NOT NULL DEFAULT '[]',
+
+        quadrant TEXT,
+        quadrant_status TEXT NOT NULL,
+        quadrant_reason_codes_json TEXT NOT NULL DEFAULT '[]',
+
+        source_fingerprint TEXT NOT NULL,
+        source_snapshot_json TEXT NOT NULL,
+        policy_snapshot_json TEXT NOT NULL,
+        rule_versions_json TEXT NOT NULL,
+        quality_gate_pass {bool_type},
+        quality_gate_reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        idempotency_key TEXT NOT NULL,
+
+        status TEXT NOT NULL,
+        version_number INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        validated_at TEXT,
+        published_at TEXT,
+        superseded_at TEXT,
+        invalidated_at TEXT,
+        invalidation_reason TEXT,
+        created_by TEXT NOT NULL,
+        test_only {bool_type}
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS attention_urgency_factor_evaluation (
+        id {id_type},
+        factor_evaluation_id TEXT NOT NULL UNIQUE,
+        evaluation_db_id {fk_type} NOT NULL REFERENCES attention_urgency_evaluation(id) ON DELETE CASCADE,
+        evaluation_id TEXT NOT NULL,
+        axis TEXT NOT NULL,
+        factor_code TEXT NOT NULL,
+        factor_rating TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        economic_episode_key TEXT NOT NULL,
+        executive_relevance TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_ids_json TEXT NOT NULL DEFAULT '[]',
+        reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        confidence TEXT NOT NULL,
+        binding_clock_type TEXT,
+        binding_date TEXT,
+        days_remaining INTEGER,
+        date_precision TEXT,
+        created_at TEXT NOT NULL,
+        test_only {bool_type}
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS attention_urgency_cluster (
+        id {id_type},
+        cluster_evaluation_id TEXT NOT NULL UNIQUE,
+        evaluation_db_id {fk_type} NOT NULL REFERENCES attention_urgency_evaluation(id) ON DELETE CASCADE,
+        evaluation_id TEXT NOT NULL,
+        axis TEXT NOT NULL,
+        cluster_key TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        economic_episode_key TEXT NOT NULL,
+        cluster_rating TEXT NOT NULL,
+        strongest_factor_rating TEXT NOT NULL,
+        factor_codes_json TEXT NOT NULL DEFAULT '[]',
+        source_ids_json TEXT NOT NULL DEFAULT '[]',
+        reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        confidence TEXT NOT NULL,
+        internal_reinforcement {bool_type},
+        binding_clock_type TEXT,
+        binding_date TEXT,
+        days_remaining INTEGER,
+        created_at TEXT NOT NULL,
+        test_only {bool_type}
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS attention_urgency_source_snapshot (
+        id {id_type},
+        source_snapshot_id TEXT NOT NULL UNIQUE,
+        evaluation_db_id {fk_type} NOT NULL REFERENCES attention_urgency_evaluation(id) ON DELETE CASCADE,
+        evaluation_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_object_id TEXT,
+        source_state_hash TEXT NOT NULL,
+        source_state_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        test_only {bool_type}
+    )""")
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_aue_relationship_cycle "
+        "ON attention_urgency_evaluation(relationship_id,review_cycle_id,id DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_aue_status "
+        "ON attention_urgency_evaluation(status,test_only,id DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_aue_source_fingerprint "
+        "ON attention_urgency_evaluation(source_fingerprint,id DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_aue_factor_parent "
+        "ON attention_urgency_factor_evaluation(evaluation_db_id,axis,id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_aue_cluster_parent "
+        "ON attention_urgency_cluster(evaluation_db_id,axis,id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_aue_snapshot_parent "
+        "ON attention_urgency_source_snapshot(evaluation_db_id,id)"
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_aue_one_published_per_cycle
+           ON attention_urgency_evaluation(relationship_id,review_cycle_id,test_only)
+           WHERE status='PUBLISHED'"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_aue_active_idempotency
+           ON attention_urgency_evaluation(relationship_id,review_cycle_id,test_only,idempotency_key)
+           WHERE status IN ('DRAFT','VALIDATED','PUBLISHED')"""
+    )
+
+
+def _db_stage1e5_validation_relationship(conn: _DBConnection):
+    row = conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E5_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+    if row is not None:
+        return row
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO relationship(
+               relationship_id,name,country,sector,external_rating,outlook,score,
+               attention_rating,primary_driver,recommended_action,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            E5_VALIDATION_RELATIONSHIP_ID, E5_VALIDATION_COMPANY, "SYSTEM", "VALIDATION",
+            None, None, None, None, "E5.9 controlled persistence fixture",
+            "Hidden from business UI; test-only Attention × Urgency validation.", now, now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E5_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+
+
+def _db_stage1e5_review_as_of(cycle) -> str:
+    """Return the governed ReviewCycle date; legacy cycles fall back to started_at."""
+    try:
+        value = cycle["as_of_date"]
+    except Exception:
+        value = None
+    if value:
+        return str(value)[:10]
+    started = str(cycle["started_at"] or "")[:10]
+    if started:
+        return started
+    raise ValueError("ReviewCycle has neither as_of_date nor a usable started_at date.")
+
+
+def _db_stage1e5_policy_payload(policy: E5PolicyConfig) -> tuple[str, str]:
+    policy_json = json.dumps(policy.snapshot(), ensure_ascii=False, sort_keys=True, default=str)
+    rule_versions = json.dumps(
+        {
+            "engine": ENGINE_VERSION,
+            "attention": ATTENTION_RULE_VERSION,
+            "urgency": URGENCY_RULE_VERSION,
+            "aggregation": AGGREGATION_RULE_VERSION,
+            "quadrant": QUADRANT_RULE_VERSION,
+            "normalization": NORMALIZATION_RULE_VERSION,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return policy_json, rule_versions
+
+
+def _db_stage1e5_ensure_review_policy(
+    conn: _DBConnection,
+    cycle,
+    policy: E5PolicyConfig,
+    *,
+    test_only: bool,
+):
+    """Pin one E.5 methodology bundle per ReviewCycle and test/production scope."""
+    policy_json, rule_versions = _db_stage1e5_policy_payload(policy)
+    as_of = _db_stage1e5_review_as_of(cycle)
+    row = conn.execute(
+        """SELECT * FROM attention_urgency_review_policy
+           WHERE review_cycle_id=? AND test_only=?""",
+        (cycle["id"], int(bool(test_only))),
+    ).fetchone()
+    if row is None:
+        now = _db_now()
+        conn.execute(
+            """INSERT INTO attention_urgency_review_policy(
+                   review_cycle_id,policy_bundle_id,policy_snapshot_json,rule_versions_json,
+                   evaluation_as_of,test_only,created_at,updated_at
+               ) VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                cycle["id"], policy.policy_bundle_id, policy_json, rule_versions,
+                as_of, int(bool(test_only)), now, now,
+            ),
+        )
+        row = conn.execute(
+            """SELECT * FROM attention_urgency_review_policy
+               WHERE review_cycle_id=? AND test_only=?""",
+            (cycle["id"], int(bool(test_only))),
+        ).fetchone()
+    else:
+        if (
+            row["policy_bundle_id"] != policy.policy_bundle_id
+            or str(row["policy_snapshot_json"]) != policy_json
+            or str(row["rule_versions_json"]) != rule_versions
+            or str(row["evaluation_as_of"])[:10] != as_of
+        ):
+            raise ValueError(
+                "E5_POLICY_BUNDLE_MISMATCH_WITH_REVIEW_CYCLE: "
+                "one ReviewCycle cannot silently mix Attention × Urgency methodologies."
+            )
+    return row
+
+
+def _db_stage1e5_existing_evaluations(
+    conn: _DBConnection,
+    relationship_db_id: int,
+    review_cycle_db_id: int,
+    *,
+    test_only: bool,
+) -> list[ExistingEvaluation]:
+    rows = conn.execute(
+        """SELECT evaluation_id,idempotency_key,status
+           FROM attention_urgency_evaluation
+           WHERE relationship_id=? AND review_cycle_id=? AND test_only=?
+           ORDER BY id""",
+        (relationship_db_id, review_cycle_db_id, int(bool(test_only))),
+    ).fetchall()
+    # Public relationship/review IDs are supplied by the persistence caller.
+    rel = conn.execute("SELECT relationship_id FROM relationship WHERE id=?", (relationship_db_id,)).fetchone()
+    cyc = conn.execute("SELECT review_cycle_id FROM review_cycle WHERE id=?", (review_cycle_db_id,)).fetchone()
+    return [
+        ExistingEvaluation(
+            evaluation_id=r["evaluation_id"],
+            relationship_id=rel["relationship_id"],
+            review_cycle_id=cyc["review_cycle_id"],
+            idempotency_key=r["idempotency_key"],
+            status=r["status"],
+        )
+        for r in rows
+    ]
+
+
+def _db_stage1e5_source_object_id(source_kind: str, state: dict) -> str | None:
+    candidates = {
+        "OPPORTUNITY_SIGNAL": "signal_id",
+        "CHANGE": "change_id",
+        "EVENT": "event_id",
+        "RISK_RELATIONSHIP_CONTEXT": "concern_id",
+        "URGENCY_WINDOW": "window_id",
+        "RATE_OF_CHANGE": "velocity_id",
+    }
+    field_name = candidates.get(source_kind)
+    if field_name:
+        return state.get(field_name)
+    if source_kind == "STRATEGIC_CONTEXT":
+        return f"STRATEGIC_CONTEXT:{state.get('context_version', 'UNKNOWN')}"
+    return None
+
+
+def _db_stage1e5_eval_summary_row(row) -> dict:
+    if row is None:
+        return {}
+    return {
+        "Evaluation ID": row["evaluation_id"],
+        "Status": row["status"],
+        "Attention Rating": row["attention_rating"],
+        "Attention Score": row["attention_score"],
+        "Attention Coverage": row["attention_coverage"],
+        "Attention Confidence": row["attention_confidence"],
+        "Urgency Rating": row["urgency_rating"],
+        "Urgency Score": row["urgency_score"],
+        "Urgency Coverage": row["urgency_coverage"],
+        "Urgency Confidence": row["urgency_confidence"],
+        "Quadrant": row["quadrant"],
+        "Quadrant Status": row["quadrant_status"],
+        "Source Fingerprint": row["source_fingerprint"],
+        "Idempotency Key": row["idempotency_key"],
+        "Test Only": bool(row["test_only"]),
+        "Created": row["created_at"],
+        "Published": row["published_at"],
+        "Superseded": row["superseded_at"],
+    }
+
+
+def _db_stage1e5_get_evaluation(evaluation_id: str) -> dict:
+    conn = _db_connect()
+    try:
+        row = conn.execute(
+            """SELECT aue.*,r.name AS relationship_name,rc.review_cycle_id AS review_cycle_public_id
+               FROM attention_urgency_evaluation aue
+               JOIN relationship r ON r.id=aue.relationship_id
+               JOIN review_cycle rc ON rc.id=aue.review_cycle_id
+               WHERE aue.evaluation_id=?""",
+            (evaluation_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"AttentionUrgencyEvaluation {evaluation_id} not found.")
+        result = _db_stage1e5_eval_summary_row(row)
+        result.update({
+            "Relationship": row["relationship_name"],
+            "Review Cycle": row["review_cycle_public_id"],
+            "Evaluation As Of": row["evaluation_as_of"],
+            "Policy Bundle": row["policy_bundle_id"],
+            "Quality Gate PASS": bool(row["quality_gate_pass"]),
+        })
+        return result
+    finally:
+        conn.close()
+
+
+def _db_stage1e5_persist_candidate(
+    ctx: ReviewContext,
+    candidate: AttentionUrgencyCandidate,
+    *,
+    actor: str,
+    test_only: bool,
+) -> dict:
+    """Persist one AUE tree transactionally with same-cycle supersession and audit."""
+    with _db_transaction() as conn:
+        rel = conn.execute(
+            "SELECT * FROM relationship WHERE relationship_id=?",
+            (candidate.relationship_id,),
+        ).fetchone()
+        if rel is None:
+            raise ValueError(f"E.5 relationship {candidate.relationship_id} is not registered.")
+        cycle = conn.execute(
+            "SELECT * FROM review_cycle WHERE review_cycle_id=?",
+            (candidate.review_cycle_id,),
+        ).fetchone()
+        if cycle is None:
+            raise ValueError(f"E.5 ReviewCycle {candidate.review_cycle_id} is not registered.")
+
+        if cycle["status"] != "Active":
+            return {
+                "Persistence Action": EvaluationLifecycleAction.NO_ACTION.value,
+                "Evaluation ID": None,
+                "Reason Codes": ["REVIEW_CYCLE_FROZEN_AT_WRITE_LAYER"],
+            }
+
+        policy = default_policy_config()
+        _db_stage1e5_ensure_review_policy(conn, cycle, policy, test_only=test_only)
+
+        # Protect against a stale candidate created for another cycle/as-of/policy.
+        if candidate.relationship_id != rel["relationship_id"]:
+            raise ValueError("E5_RELATIONSHIP_IDENTITY_MISMATCH")
+        if candidate.review_cycle_id != cycle["review_cycle_id"]:
+            raise ValueError("E5_REVIEW_CYCLE_IDENTITY_MISMATCH")
+        if candidate.evaluation_as_of != _db_stage1e5_review_as_of(cycle):
+            raise ValueError("E5_REVIEW_AS_OF_MISMATCH")
+        if candidate.policy_bundle_id != policy.policy_bundle_id:
+            raise ValueError("E5_POLICY_BUNDLE_MISMATCH")
+        if not candidate.quality_gate_pass:
+            raise ValueError(
+                "E5_CANDIDATE_QUALITY_GATE_FAILED: "
+                + ",".join(candidate.quality_gate_reason_codes)
+            )
+
+        existing = _db_stage1e5_existing_evaluations(
+            conn, rel["id"], cycle["id"], test_only=test_only
+        )
+        live_ctx = ReviewContext(
+            relationship_id=ctx.relationship_id,
+            review_cycle_id=ctx.review_cycle_id,
+            evaluation_as_of=ctx.evaluation_as_of,
+            review_cycle_frozen=(cycle["status"] != "Active"),
+            policy_bundle_id=ctx.policy_bundle_id,
+        )
+        lifecycle = decide_lifecycle(live_ctx, candidate, existing)
+
+        if lifecycle.action == EvaluationLifecycleAction.KEEP_EXISTING:
+            row = conn.execute(
+                "SELECT * FROM attention_urgency_evaluation WHERE evaluation_id=?",
+                (lifecycle.existing_evaluation_id,),
+            ).fetchone()
+            result = _db_stage1e5_eval_summary_row(row)
+            result.update({
+                "Persistence Action": lifecycle.action.value,
+                "Reason Codes": list(lifecycle.reason_codes),
+            })
+            return result
+
+        if lifecycle.action == EvaluationLifecycleAction.NO_ACTION:
+            return {
+                "Persistence Action": lifecycle.action.value,
+                "Evaluation ID": lifecycle.existing_evaluation_id,
+                "Reason Codes": list(lifecycle.reason_codes),
+            }
+
+        now = _db_now()
+        if lifecycle.action == EvaluationLifecycleAction.SUPERSEDE_AND_CREATE:
+            current = conn.execute(
+                """SELECT * FROM attention_urgency_evaluation
+                   WHERE evaluation_id=? AND status='PUBLISHED'""",
+                (lifecycle.existing_evaluation_id,),
+            ).fetchone()
+            if current is None:
+                raise ValueError("E5_CURRENT_PUBLISHED_EVALUATION_NOT_FOUND")
+            conn.execute(
+                """UPDATE attention_urgency_evaluation
+                   SET status='SUPERSEDED',superseded_at=?
+                   WHERE id=? AND status='PUBLISHED'""",
+                (now, current["id"]),
+            )
+            _db_append_audit(
+                conn,
+                entity_type="AttentionUrgencyEvaluation",
+                entity_id=current["evaluation_id"],
+                relationship_id=rel["id"],
+                event_type="ATTENTION_URGENCY_EVALUATION_SUPERSEDED",
+                actor=actor,
+                payload={"superseded_by_source_fingerprint": candidate.source_fingerprint},
+            )
+
+        evaluation_id = _db_next_id(
+            conn, "attention_urgency_evaluation", "evaluation_id", "AUE", width=4
+        )
+        policy_snapshot_json = json.dumps(
+            candidate.policy_snapshot, ensure_ascii=False, sort_keys=True, default=str
+        )
+        source_snapshot_json = json.dumps(
+            candidate.source_snapshot, ensure_ascii=False, sort_keys=True, default=str
+        )
+        rule_versions_json = json.dumps(
+            candidate.rule_versions, ensure_ascii=False, sort_keys=True, default=str
+        )
+
+        conn.execute(
+            """INSERT INTO attention_urgency_evaluation(
+                   evaluation_id,relationship_id,review_cycle_id,evaluation_as_of,policy_bundle_id,
+                   attention_rating,attention_score,attention_band_position,attention_coverage,
+                   attention_confidence,attention_strongest_cluster_rating,attention_reinforcement_state,
+                   attention_primary_cluster_key,attention_reason_codes_json,
+                   urgency_rating,urgency_score,urgency_band_position,urgency_coverage,
+                   urgency_confidence,urgency_strongest_cluster_rating,urgency_reinforcement_state,
+                   urgency_primary_cluster_key,urgency_reason_codes_json,
+                   quadrant,quadrant_status,quadrant_reason_codes_json,
+                   source_fingerprint,source_snapshot_json,policy_snapshot_json,rule_versions_json,
+                   quality_gate_pass,quality_gate_reason_codes_json,idempotency_key,
+                   status,version_number,created_at,validated_at,published_at,
+                   created_by,test_only
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                evaluation_id, rel["id"], cycle["id"], candidate.evaluation_as_of, candidate.policy_bundle_id,
+                candidate.attention.rating.value, candidate.attention.score,
+                candidate.attention.band_position.value if candidate.attention.band_position else None,
+                candidate.attention.coverage.value,
+                candidate.attention.confidence.value if candidate.attention.confidence else None,
+                candidate.attention.strongest_cluster_rating.value,
+                candidate.attention.reinforcement_state,
+                candidate.attention.primary_cluster_key,
+                json.dumps(candidate.attention.reason_codes, ensure_ascii=False),
+                candidate.urgency.rating.value, candidate.urgency.score,
+                candidate.urgency.band_position.value if candidate.urgency.band_position else None,
+                candidate.urgency.coverage.value,
+                candidate.urgency.confidence.value if candidate.urgency.confidence else None,
+                candidate.urgency.strongest_cluster_rating.value,
+                candidate.urgency.reinforcement_state,
+                candidate.urgency.primary_cluster_key,
+                json.dumps(candidate.urgency.reason_codes, ensure_ascii=False),
+                candidate.quadrant.quadrant.value if candidate.quadrant.quadrant else None,
+                candidate.quadrant.status.value,
+                json.dumps(candidate.quadrant.reason_codes, ensure_ascii=False),
+                candidate.source_fingerprint, source_snapshot_json, policy_snapshot_json, rule_versions_json,
+                int(bool(candidate.quality_gate_pass)),
+                json.dumps(candidate.quality_gate_reason_codes, ensure_ascii=False),
+                candidate.idempotency_key,
+                "VALIDATED", 1, now, now, None,
+                actor, int(bool(test_only)),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM attention_urgency_evaluation WHERE evaluation_id=?",
+            (evaluation_id,),
+        ).fetchone()
+        evaluation_db_id = row["id"]
+
+        _db_append_audit(
+            conn,
+            entity_type="AttentionUrgencyEvaluation",
+            entity_id=evaluation_id,
+            relationship_id=rel["id"],
+            event_type="ATTENTION_URGENCY_EVALUATION_CREATED",
+            actor=actor,
+            payload={
+                "quadrant": candidate.quadrant.quadrant.value if candidate.quadrant.quadrant else None,
+                "source_fingerprint": candidate.source_fingerprint,
+                "test_only": bool(test_only),
+            },
+        )
+        _db_append_audit(
+            conn,
+            entity_type="AttentionUrgencyEvaluation",
+            entity_id=evaluation_id,
+            relationship_id=rel["id"],
+            event_type="ATTENTION_URGENCY_EVALUATION_VALIDATED",
+            actor=actor,
+            payload={"quality_gate_pass": True},
+        )
+
+        for factor in candidate.factor_evaluations:
+            factor_id = _db_next_id(
+                conn, "attention_urgency_factor_evaluation", "factor_evaluation_id", "AUEF", width=6
+            )
+            conn.execute(
+                """INSERT INTO attention_urgency_factor_evaluation(
+                       factor_evaluation_id,evaluation_db_id,evaluation_id,axis,factor_code,factor_rating,
+                       domain,economic_episode_key,executive_relevance,source_kind,source_ids_json,
+                       reason_codes_json,confidence,binding_clock_type,binding_date,days_remaining,
+                       date_precision,created_at,test_only
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    factor_id,evaluation_db_id,evaluation_id,factor.axis.value,factor.factor_code,
+                    factor.factor_rating.value,factor.domain,factor.economic_episode_key,
+                    factor.executive_relevance.value,factor.source_kind.value,
+                    json.dumps(factor.source_ids,ensure_ascii=False),
+                    json.dumps(factor.reason_codes,ensure_ascii=False),
+                    factor.confidence.value,
+                    factor.binding_clock_type.value if factor.binding_clock_type else None,
+                    factor.binding_date.isoformat() if factor.binding_date else None,
+                    factor.days_remaining,
+                    factor.date_precision.value if factor.date_precision else None,
+                    now,int(bool(test_only)),
+                ),
+            )
+
+        for cluster in candidate.clusters:
+            cluster_id = _db_next_id(
+                conn, "attention_urgency_cluster", "cluster_evaluation_id", "AUCL", width=6
+            )
+            conn.execute(
+                """INSERT INTO attention_urgency_cluster(
+                       cluster_evaluation_id,evaluation_db_id,evaluation_id,axis,cluster_key,domain,
+                       economic_episode_key,cluster_rating,strongest_factor_rating,factor_codes_json,
+                       source_ids_json,reason_codes_json,confidence,internal_reinforcement,
+                       binding_clock_type,binding_date,days_remaining,created_at,test_only
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    cluster_id,evaluation_db_id,evaluation_id,cluster.axis.value,cluster.cluster_key,
+                    cluster.domain,cluster.economic_episode_key,cluster.cluster_rating.value,
+                    cluster.strongest_factor_rating.value,json.dumps(cluster.factor_codes,ensure_ascii=False),
+                    json.dumps(cluster.source_ids,ensure_ascii=False),
+                    json.dumps(cluster.reason_codes,ensure_ascii=False),cluster.confidence.value,
+                    int(bool(cluster.internal_reinforcement)),
+                    cluster.binding_clock_type.value if cluster.binding_clock_type else None,
+                    cluster.binding_date.isoformat() if cluster.binding_date else None,
+                    cluster.days_remaining,now,int(bool(test_only)),
+                ),
+            )
+
+        for snapshot in candidate.source_snapshot:
+            state = dict(snapshot.get("state") or {})
+            source_kind = str(snapshot.get("source_kind") or "UNKNOWN")
+            source_id = _db_stage1e5_source_object_id(source_kind, state)
+            canonical_state = json.dumps(
+                state, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+            )
+            state_hash = hashlib.sha256(canonical_state.encode("utf-8")).hexdigest()
+            snapshot_id = _db_next_id(
+                conn, "attention_urgency_source_snapshot", "source_snapshot_id", "AUS", width=6
+            )
+            conn.execute(
+                """INSERT INTO attention_urgency_source_snapshot(
+                       source_snapshot_id,evaluation_db_id,evaluation_id,source_kind,source_object_id,
+                       source_state_hash,source_state_json,created_at,test_only
+                   ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                (
+                    snapshot_id,evaluation_db_id,evaluation_id,source_kind,source_id,
+                    state_hash,canonical_state,now,int(bool(test_only)),
+                ),
+            )
+
+        # Publish only after the complete deterministic explanation tree exists.
+        conn.execute(
+            """UPDATE attention_urgency_evaluation
+               SET status='PUBLISHED',published_at=?
+               WHERE id=? AND status='VALIDATED'""",
+            (now, evaluation_db_id),
+        )
+        _db_append_audit(
+            conn,
+            entity_type="AttentionUrgencyEvaluation",
+            entity_id=evaluation_id,
+            relationship_id=rel["id"],
+            event_type="ATTENTION_URGENCY_EVALUATION_PUBLISHED",
+            actor=actor,
+            payload={
+                "attention_rating": candidate.attention.rating.value,
+                "urgency_rating": candidate.urgency.rating.value,
+                "quadrant": candidate.quadrant.quadrant.value if candidate.quadrant.quadrant else None,
+            },
+        )
+
+        published = conn.execute(
+            "SELECT * FROM attention_urgency_evaluation WHERE id=?",
+            (evaluation_db_id,),
+        ).fetchone()
+        result = _db_stage1e5_eval_summary_row(published)
+        result.update({
+            "Persistence Action": lifecycle.action.value,
+            "Reason Codes": list(lifecycle.reason_codes),
+        })
+        return result
+
+
+def _db_stage1e5_list_evaluations(*, include_test_only: bool = False, company: str | None = None) -> list[dict]:
+    conn = _db_connect()
+    try:
+        clauses, params = [], []
+        if not include_test_only:
+            clauses.append("aue.test_only=0")
+        if company:
+            rel = _db_relationship_row(conn, company)
+            clauses.append("aue.relationship_id=?")
+            params.append(rel["id"])
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = conn.execute(
+            f"""SELECT aue.*,r.name AS relationship_name,rc.review_cycle_id AS review_cycle_public_id
+                FROM attention_urgency_evaluation aue
+                JOIN relationship r ON r.id=aue.relationship_id
+                JOIN review_cycle rc ON rc.id=aue.review_cycle_id
+                {where}
+                ORDER BY aue.id DESC""",
+            tuple(params),
+        ).fetchall()
+        out = []
+        for r in rows:
+            out.append({
+                "Evaluation ID": r["evaluation_id"],
+                "Relationship": r["relationship_name"],
+                "Review Cycle": r["review_cycle_public_id"],
+                "Status": r["status"],
+                "Attention": r["attention_rating"],
+                "Attention Score": r["attention_score"],
+                "Urgency": r["urgency_rating"],
+                "Urgency Score": r["urgency_score"],
+                "Quadrant": r["quadrant"],
+                "Quadrant Status": r["quadrant_status"],
+                "Test Only": bool(r["test_only"]),
+                "Created": r["created_at"],
+            })
+        return out
+    finally:
+        conn.close()
+
+
+def _db_stage1e5_lineage(evaluation_id: str) -> dict:
+    conn = _db_connect()
+    try:
+        row = conn.execute(
+            """SELECT aue.*,r.name AS relationship_name,rc.review_cycle_id AS review_cycle_public_id
+               FROM attention_urgency_evaluation aue
+               JOIN relationship r ON r.id=aue.relationship_id
+               JOIN review_cycle rc ON rc.id=aue.review_cycle_id
+               WHERE aue.evaluation_id=?""",
+            (evaluation_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"AttentionUrgencyEvaluation {evaluation_id} not found.")
+        factors = conn.execute(
+            """SELECT * FROM attention_urgency_factor_evaluation
+               WHERE evaluation_db_id=? ORDER BY axis,id""",
+            (row["id"],),
+        ).fetchall()
+        clusters = conn.execute(
+            """SELECT * FROM attention_urgency_cluster
+               WHERE evaluation_db_id=? ORDER BY axis,id""",
+            (row["id"],),
+        ).fetchall()
+        snapshots = conn.execute(
+            """SELECT * FROM attention_urgency_source_snapshot
+               WHERE evaluation_db_id=? ORDER BY id""",
+            (row["id"],),
+        ).fetchall()
+        audits = conn.execute(
+            """SELECT audit_event_id,event_type,event_timestamp,actor,payload_json
+               FROM audit_event
+               WHERE entity_type='AttentionUrgencyEvaluation' AND entity_id=?
+               ORDER BY id""",
+            (evaluation_id,),
+        ).fetchall()
+
+        return {
+            "Evaluation": {
+                **_db_stage1e5_eval_summary_row(row),
+                "Relationship": row["relationship_name"],
+                "Review Cycle": row["review_cycle_public_id"],
+                "Evaluation As Of": row["evaluation_as_of"],
+                "Policy Bundle": row["policy_bundle_id"],
+                "Quality Gate PASS": bool(row["quality_gate_pass"]),
+                "Quality Gate Reasons": json.loads(row["quality_gate_reason_codes_json"] or "[]"),
+            },
+            "Factors": [
+                {
+                    "Factor ID": f["factor_evaluation_id"],
+                    "Axis": f["axis"], "Code": f["factor_code"], "Rating": f["factor_rating"],
+                    "Domain": f["domain"], "Episode": f["economic_episode_key"],
+                    "Executive Relevance": f["executive_relevance"],
+                    "Source Kind": f["source_kind"],
+                    "Source IDs": json.loads(f["source_ids_json"] or "[]"),
+                    "Reasons": json.loads(f["reason_codes_json"] or "[]"),
+                    "Confidence": f["confidence"],
+                    "Binding Clock": f["binding_clock_type"],
+                    "Binding Date": f["binding_date"],
+                    "Days Remaining": f["days_remaining"],
+                }
+                for f in factors
+            ],
+            "Clusters": [
+                {
+                    "Cluster ID": c["cluster_evaluation_id"],
+                    "Axis": c["axis"], "Cluster Key": c["cluster_key"],
+                    "Domain": c["domain"], "Episode": c["economic_episode_key"],
+                    "Rating": c["cluster_rating"],
+                    "Strongest Factor": c["strongest_factor_rating"],
+                    "Factor Codes": json.loads(c["factor_codes_json"] or "[]"),
+                    "Source IDs": json.loads(c["source_ids_json"] or "[]"),
+                    "Reasons": json.loads(c["reason_codes_json"] or "[]"),
+                    "Confidence": c["confidence"],
+                    "Internal Reinforcement": bool(c["internal_reinforcement"]),
+                    "Binding Clock": c["binding_clock_type"],
+                    "Binding Date": c["binding_date"],
+                    "Days Remaining": c["days_remaining"],
+                }
+                for c in clusters
+            ],
+            "Source Snapshots": [
+                {
+                    "Snapshot ID": s["source_snapshot_id"],
+                    "Source Kind": s["source_kind"],
+                    "Source Object ID": s["source_object_id"],
+                    "Source State Hash": s["source_state_hash"],
+                    "Source State": json.loads(s["source_state_json"] or "{}"),
+                }
+                for s in snapshots
+            ],
+            "Audit Events": [
+                {
+                    "Audit ID": a["audit_event_id"], "Event": a["event_type"],
+                    "At": a["event_timestamp"], "Actor": a["actor"],
+                    "Payload": json.loads(a["payload_json"] or "{}"),
+                }
+                for a in audits
+            ],
+        }
+    finally:
+        conn.close()
+
+
+def _db_stage1e5_build_validation_candidate(
+    conn: _DBConnection,
+    *,
+    binding_days: int,
+) -> tuple[ReviewContext, AttentionUrgencyCandidate]:
+    rel = _db_stage1e5_validation_relationship(conn)
+    cycle = _db_active_review_cycle(conn)
+    policy = default_policy_config()
+    policy_row = _db_stage1e5_ensure_review_policy(conn, cycle, policy, test_only=True)
+    as_of = date.fromisoformat(str(policy_row["evaluation_as_of"])[:10])
+
+    ctx = ReviewContext(
+        relationship_id=rel["relationship_id"],
+        review_cycle_id=cycle["review_cycle_id"],
+        evaluation_as_of=as_of,
+        review_cycle_frozen=(cycle["status"] != "Active"),
+        policy_bundle_id=policy.policy_bundle_id,
+    )
+    episode = "E5_VALIDATION_FINANCING_EPISODE"
+    opportunity = OpportunitySignalInput(
+        signal_id="E5-SYN-SIG-001",
+        relationship_id=rel["relationship_id"],
+        domain="LENDING",
+        signal_strength="HIGH",
+        signal_status="ACTIVE",
+        confidence=E5ConfidenceLevel.HIGH,
+        executive_relevance=ExecutiveRelevanceStatus.ELIGIBLE,
+        economic_episode_key=episode,
+        test_only=False,
+    )
+    deadline = date.fromordinal(as_of.toordinal() + int(binding_days))
+    window = UrgencyWindowInput(
+        window_id="E5-SYN-WIN-001",
+        relationship_id=rel["relationship_id"],
+        domain="LENDING",
+        factor_code=UrgencyFactorCode.DECISION_WINDOW,
+        clock_type=ClockType.DECISION_WINDOW,
+        confidence=E5ConfidenceLevel.HIGH,
+        executive_relevance=ExecutiveRelevanceStatus.ELIGIBLE,
+        actionability=ActionabilityStatus.ACTIONABLE,
+        economic_episode_key=episode,
+        binding_date=deadline,
+        date_precision=DatePrecision.DAY,
+        window_status="ACTIVE",
+        test_only=False,
+    )
+    inputs = EvaluationInputs(
+        opportunities=(opportunity,),
+        urgency_windows=(window,),
+    )
+    attention_coverage = AxisCoverageInput(
+        frozenset(x.value for x in AttentionFactorCode),
+        True,
+    )
+    urgency_coverage = AxisCoverageInput(
+        frozenset(x.value for x in UrgencyFactorCode),
+        True,
+    )
+    candidate = evaluate_attention_urgency(
+        ctx, inputs, attention_coverage, urgency_coverage, policy
+    )
+    return ctx, candidate
+
+
+def _db_stage1e5_run_persistence_smoke_test() -> dict:
+    """Controlled E.5.9 test-only persistence/supersession/idempotency validation."""
+    # Establish hidden relationship and determine whether the baseline fixture
+    # has ever been created for this review cycle.
+    with _db_transaction() as conn:
+        rel = _db_stage1e5_validation_relationship(conn)
+        cycle = _db_active_review_cycle(conn)
+        existing_count = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM attention_urgency_evaluation
+               WHERE relationship_id=? AND review_cycle_id=? AND test_only=1""",
+            (rel["id"], cycle["id"]),
+        ).fetchone()["n"])
+
+    baseline_result = None
+    if existing_count == 0:
+        conn = _db_connect()
+        try:
+            baseline_ctx, baseline_candidate = _db_stage1e5_build_validation_candidate(
+                conn, binding_days=45
+            )
+        finally:
+            conn.close()
+        baseline_result = _db_stage1e5_persist_candidate(
+            baseline_ctx, baseline_candidate,
+            actor="E5.9 Validation Harness", test_only=True,
+        )
+
+    conn = _db_connect()
+    try:
+        current_ctx, current_candidate = _db_stage1e5_build_validation_candidate(
+            conn, binding_days=15
+        )
+    finally:
+        conn.close()
+
+    first_current = _db_stage1e5_persist_candidate(
+        current_ctx, current_candidate,
+        actor="E5.9 Validation Harness", test_only=True,
+    )
+
+    with _db_transaction() as conn:
+        rel = _db_stage1e5_validation_relationship(conn)
+        cycle = _db_active_review_cycle(conn)
+        count_before_rerun = int(conn.execute(
+            """SELECT COUNT(*) AS n FROM attention_urgency_evaluation
+               WHERE relationship_id=? AND review_cycle_id=? AND test_only=1""",
+            (rel["id"], cycle["id"]),
+        ).fetchone()["n"])
+
+    second_current = _db_stage1e5_persist_candidate(
+        current_ctx, current_candidate,
+        actor="E5.9 Validation Harness", test_only=True,
+    )
+
+    with _db_transaction() as conn:
+        rel = _db_stage1e5_validation_relationship(conn)
+        cycle = _db_active_review_cycle(conn)
+        rows = conn.execute(
+            """SELECT * FROM attention_urgency_evaluation
+               WHERE relationship_id=? AND review_cycle_id=? AND test_only=1
+               ORDER BY id""",
+            (rel["id"], cycle["id"]),
+        ).fetchall()
+        count_after_rerun = len(rows)
+        published = [r for r in rows if r["status"] == "PUBLISHED"]
+        current = published[0] if len(published) == 1 else None
+        factor_count = cluster_count = snapshot_count = audit_count = 0
+        if current is not None:
+            factor_count = int(conn.execute(
+                "SELECT COUNT(*) AS n FROM attention_urgency_factor_evaluation WHERE evaluation_db_id=?",
+                (current["id"],),
+            ).fetchone()["n"])
+            cluster_count = int(conn.execute(
+                "SELECT COUNT(*) AS n FROM attention_urgency_cluster WHERE evaluation_db_id=?",
+                (current["id"],),
+            ).fetchone()["n"])
+            snapshot_count = int(conn.execute(
+                "SELECT COUNT(*) AS n FROM attention_urgency_source_snapshot WHERE evaluation_db_id=?",
+                (current["id"],),
+            ).fetchone()["n"])
+            audit_count = int(conn.execute(
+                """SELECT COUNT(*) AS n FROM audit_event
+                   WHERE entity_type='AttentionUrgencyEvaluation' AND entity_id=?""",
+                (current["evaluation_id"],),
+            ).fetchone()["n"])
+
+    current_id = current["evaluation_id"] if current is not None else None
+    pass_result = bool(
+        current is not None
+        and len(published) == 1
+        and current["attention_rating"] == "HIGH"
+        and current["urgency_rating"] == "HIGH"
+        and current["quadrant"] == "ACT_NOW"
+        and current["quadrant_status"] == "ASSIGNED"
+        and bool(current["quality_gate_pass"])
+        and bool(current["test_only"])
+        and second_current.get("Persistence Action") == EvaluationLifecycleAction.KEEP_EXISTING.value
+        and second_current.get("Evaluation ID") == current_id
+        and count_before_rerun == count_after_rerun
+        and factor_count >= 2
+        and cluster_count >= 2
+        and snapshot_count >= 2
+        and audit_count >= 3
+    )
+
+    return {
+        "Persistence Smoke PASS": pass_result,
+        "Baseline": baseline_result,
+        "First Current Evaluation": first_current,
+        "Current Evaluation ID": current_id,
+        "Current Attention": current["attention_rating"] if current is not None else None,
+        "Current Urgency": current["urgency_rating"] if current is not None else None,
+        "Current Quadrant": current["quadrant"] if current is not None else None,
+        "Current Status": current["status"] if current is not None else None,
+        "Published Count": len(published),
+        "Fixture Row Count Before Re-evaluation": count_before_rerun,
+        "Fixture Row Count After Re-evaluation": count_after_rerun,
+        "Re-evaluation Action": second_current.get("Persistence Action"),
+        "Factor Rows": factor_count,
+        "Cluster Rows": cluster_count,
+        "Source Snapshot Rows": snapshot_count,
+        "Audit Events": audit_count,
+        "All Outputs Test Only": bool(rows) and all(bool(r["test_only"]) for r in rows),
+    }
+
+
+def _db_stage1e5_validation_summary() -> dict:
+    rows = _db_stage1e5_list_evaluations(
+        include_test_only=True,
+        company=E5_VALIDATION_COMPANY,
+    )
+    return {
+        "Rows": rows,
+        "Current Published": next((r for r in rows if r.get("Status") == "PUBLISHED"), None),
+    }
+
+# END STAGE 1-E.5.9 — ATTENTION × URGENCY PERSISTENCE & APP INTEGRATION
+
+
 # =============================================================================
 # STAGE 1-E.4.9 — FINAL LIVE VALIDATION
 # =============================================================================
@@ -9485,13 +12199,14 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.4.9 v0.2",
+        "intelligence_release": "Stage 1-E.5.9 v0.1",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
         "opportunity_signal_release": "Stage 1-E.3.8 v1.0 LOCKED",
         "opportunity_signal_rule_version": "1.0",
         "change_event_release": "Stage 1-E.4.9 v0.2",
+        "attention_urgency_release": "Stage 1-E.5.9 v0.1",
         "change_event_rule_version": "1.0",
     }
     with _db_transaction() as conn:
@@ -10917,7 +13632,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.4.9 · Final Live Validation Hotfix v0.2 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.5.9 · Attention × Urgency Persistence v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -10978,7 +13693,7 @@ def render_stage_1c_sidebar():
             key="stage1e_load_persistence_diagnostics",
             help=(
                 "Off by default for fast page navigation. Enable only when inspecting "
-                "Wallet / OpportunitySignal persistence and lineage."
+                "Wallet / OpportunitySignal / ChangeEvent / Attention × Urgency persistence and lineage."
             ),
         )
         if not diagnostics_enabled:
@@ -11436,6 +14151,84 @@ def render_stage_1c_sidebar():
                 st.write(idem)
 
 
+
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.5.9 · Attention × Urgency Persistence**")
+            st.caption(
+                "Persistence integration smoke test only · hidden E5 validation relationship · "
+                "AUE/factor/cluster/source-snapshot rows are TEST-only and excluded from business UI."
+            )
+
+            if st.button(
+                "Run E.5.9 Attention × Urgency Persistence Smoke Test",
+                key="stage1e5_9_persistence_smoke",
+                use_container_width=True,
+            ):
+                try:
+                    smoke = _db_stage1e5_run_persistence_smoke_test()
+                    st.session_state["stage1e5_9_smoke_result"] = smoke
+                except Exception as exc:
+                    st.error(f"E.5.9 persistence smoke test failed: {exc}")
+
+            e59_smoke = st.session_state.get("stage1e5_9_smoke_result")
+            if e59_smoke:
+                if e59_smoke.get("Persistence Smoke PASS"):
+                    st.success(
+                        "E.5.9 Persistence PASS · AUE tree persisted transactionally, "
+                        "same-cycle source change superseded the prior evaluation, and exact rerun was idempotent."
+                    )
+                else:
+                    st.error("E.5.9 Persistence CHECK · inspect smoke-test output.")
+                st.write(e59_smoke)
+
+            try:
+                e59_summary = _db_stage1e5_validation_summary()
+            except Exception as exc:
+                e59_summary = None
+                st.error(f"E.5.9 evaluation reload failed: {exc}")
+
+            if e59_summary and e59_summary.get("Rows"):
+                st.dataframe(pd.DataFrame(e59_summary["Rows"]), use_container_width=True, hide_index=True)
+                current_e59 = e59_summary.get("Current Published")
+                if current_e59:
+                    current_id = current_e59.get("Evaluation ID")
+                    lineage_key = f"stage1e5_9_lineage::{current_id}"
+                    if st.button(
+                        f"Load {current_id} Attention × Urgency Lineage",
+                        key=f"stage1e5_9_load_lineage::{current_id}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            st.session_state[lineage_key] = _db_stage1e5_lineage(current_id)
+                        except Exception as exc:
+                            st.error(f"E.5.9 lineage load failed for {current_id}: {exc}")
+
+                    lineage = st.session_state.get(lineage_key)
+                    if lineage:
+                        factors = lineage.get("Factors", [])
+                        clusters = lineage.get("Clusters", [])
+                        snapshots = lineage.get("Source Snapshots", [])
+                        audits = lineage.get("Audit Events", [])
+                        audit_names = [a.get("Event", "") for a in audits]
+                        lineage_pass = bool(
+                            len(factors) >= 2
+                            and len(clusters) >= 2
+                            and len(snapshots) >= 2
+                            and "ATTENTION_URGENCY_EVALUATION_CREATED" in audit_names
+                            and "ATTENTION_URGENCY_EVALUATION_VALIDATED" in audit_names
+                            and "ATTENTION_URGENCY_EVALUATION_PUBLISHED" in audit_names
+                        )
+                        detail = (
+                            f"Factors {len(factors)} · Clusters {len(clusters)} · "
+                            f"Snapshots {len(snapshots)} · Audit {len(audits)}"
+                        )
+                        if lineage_pass:
+                            st.success(f"E.5.9 {current_id} Lineage PASS · {detail}")
+                        else:
+                            st.error(f"E.5.9 {current_id} Lineage CHECK · {detail}")
+                        with st.expander(f"Inspect {current_id} full Attention × Urgency lineage", expanded=False):
+                            st.json(lineage)
 
         if diagnostics_enabled:
             st.markdown("**Stage 1-E.4.9 · Final Live Validation**")
