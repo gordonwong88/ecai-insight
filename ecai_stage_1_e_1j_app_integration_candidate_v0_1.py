@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.5.10 Final Live Attention × Urgency Validation Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.5.10 Final Live Attention × Urgency Validation Hotfix v0.3
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1470,7 +1470,7 @@ ECAI_DB_PATH = os.environ.get(
 )
 ECAI_SCHEMA_VERSION = 10
 ECAI_PERSISTENCE_RUNTIME_VERSION = 12  # E.5.9: Attention × Urgency persistence integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.5.10 Final Live Attention × Urgency Validation v0.1"
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.5.10 Final Live Attention × Urgency Validation Hotfix v0.3"
 
 
 def _db_now() -> str:
@@ -2429,7 +2429,7 @@ def _db_list_relationship_registry(conn: _DBConnection | None = None) -> list[di
                       score,attention_rating,primary_driver,recommended_action,
                       created_at,updated_at
                FROM relationship
-               WHERE relationship_id NOT IN ('REL-EC-AI-E3-VALIDATION-CO','REL-EC-AI-E4-VALIDATION-CO','REL-EC-AI-E5-VALIDATION-CO')
+               WHERE relationship_id NOT IN ('REL-EC-AI-E3-VALIDATION-CO','REL-EC-AI-E4-VALIDATION-CO','REL-EC-AI-E5-VALIDATION-CO','REL-EC-AI-E5-FINAL-VALIDATION-CO')
                ORDER BY id"""
         ).fetchall()
         return [
@@ -12268,11 +12268,16 @@ def _db_stage1e5_10_run_final_validation() -> dict:
     )
     after_second = _db_stage1e5_10_validation_rows()
 
-    current = next(
+    current_list_row = next(
         (x for x in after_second if x.get("Status") == "PUBLISHED"),
         None,
     )
-    evaluation_id = current.get("Evaluation ID") if current else None
+    evaluation_id = current_list_row.get("Evaluation ID") if current_list_row else None
+
+    # The list view deliberately uses compact column labels ("Attention",
+    # "Urgency"). Final validation must read the authoritative persisted AUE
+    # summary, whose contract uses "Attention Rating" / "Urgency Rating".
+    current = _db_stage1e5_get_evaluation(evaluation_id) if evaluation_id else None
 
     lineage = _db_stage1e5_10_lineage(evaluation_id) if evaluation_id else {}
     lineage_pass = bool(lineage.get("Lineage PASS"))
@@ -12959,14 +12964,14 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.5.10 v0.1",
+        "intelligence_release": "Stage 1-E.5.10 v0.3",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
         "opportunity_signal_release": "Stage 1-E.3.8 v1.0 LOCKED",
         "opportunity_signal_rule_version": "1.0",
         "change_event_release": "Stage 1-E.4.9 v0.2",
-        "attention_urgency_release": "Stage 1-E.5.10 v0.1",
+        "attention_urgency_release": "Stage 1-E.5.10 v0.3",
         "change_event_rule_version": "1.0",
     }
     with _db_transaction() as conn:
@@ -14392,7 +14397,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.5.10 · Final Live Attention × Urgency Validation v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.5.10 · Final Live Attention × Urgency Validation Hotfix v0.3 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
