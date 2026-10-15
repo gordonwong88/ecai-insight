@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.5.9 Attention × Urgency Persistence Integration Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.5.9 Attention × Urgency Persistence Integration Hotfix v0.2
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1470,7 +1470,7 @@ ECAI_DB_PATH = os.environ.get(
 )
 ECAI_SCHEMA_VERSION = 10
 ECAI_PERSISTENCE_RUNTIME_VERSION = 12  # E.5.9: Attention × Urgency persistence integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.5.9 Attention × Urgency Persistence Integration v0.1"
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.5.9 Attention × Urgency Persistence Integration Hotfix v0.2"
 
 
 def _db_now() -> str:
@@ -8986,7 +8986,7 @@ def _db_stage1e4_run_persistence_smoke_test() -> dict:
 # The engine remains deterministic, side-effect-free and AI-independent.
 # =============================================================================
 
-"""
+_E58_ENGINE_DOCUMENTATION = """
 EC-AI Stage 1-E.5.8 — Deterministic Attention × Urgency Engine v1.0
 
 Standalone, deterministic, side-effect-free engine.
@@ -12199,14 +12199,14 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.5.9 v0.1",
+        "intelligence_release": "Stage 1-E.5.9 v0.2",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
         "opportunity_signal_release": "Stage 1-E.3.8 v1.0 LOCKED",
         "opportunity_signal_rule_version": "1.0",
         "change_event_release": "Stage 1-E.4.9 v0.2",
-        "attention_urgency_release": "Stage 1-E.5.9 v0.1",
+        "attention_urgency_release": "Stage 1-E.5.9 v0.2",
         "change_event_rule_version": "1.0",
     }
     with _db_transaction() as conn:
@@ -13632,7 +13632,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.5.9 · Attention × Urgency Persistence v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.5.9 · Attention × Urgency Persistence Hotfix v0.2 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
