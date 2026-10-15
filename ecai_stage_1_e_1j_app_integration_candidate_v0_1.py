@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.5.9 Attention × Urgency Persistence Integration Hotfix v0.2
+# EC-AI Executive Review Workspace — Stage 1-E.5.10 Final Live Attention × Urgency Validation Candidate v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1470,7 +1470,7 @@ ECAI_DB_PATH = os.environ.get(
 )
 ECAI_SCHEMA_VERSION = 10
 ECAI_PERSISTENCE_RUNTIME_VERSION = 12  # E.5.9: Attention × Urgency persistence integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.5.9 Attention × Urgency Persistence Integration Hotfix v0.2"
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.5.10 Final Live Attention × Urgency Validation v0.1"
 
 
 def _db_now() -> str:
@@ -11692,6 +11692,766 @@ def _db_stage1e5_validation_summary() -> dict:
 
 
 # =============================================================================
+# STAGE 1-E.5.10 — FINAL LIVE ATTENTION × URGENCY VALIDATION
+# =============================================================================
+
+E5_10_VALIDATION_COMPANY = "EC-AI E5 Final Validation Co"
+E5_10_VALIDATION_RELATIONSHIP_ID = "REL-EC-AI-E5-FINAL-VALIDATION-CO"
+E5_10_WALLET_PUBLICATION_MODE = "E5.10_VALIDATION"
+E5_10_SIGNAL_CONFIG_VERSION = "E5_FINAL_VALIDATION_LENDING_2026_10"
+E5_10_EVENT_CONFIG_VERSION = "E5_FINAL_VALIDATION_EVENT_2026_10"
+E5_10_TEMPORAL_CONFIG_VERSION = "E5_FINAL_VALIDATION_TEMPORAL_2026_10"
+E5_10_EPISODE_PREFIX = "E5.10-FINANCING"
+
+
+def _db_stage1e5_10_validation_relationship(conn: _DBConnection):
+    row = conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E5_10_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+    if row is not None:
+        return row
+
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO relationship(
+               relationship_id,name,country,sector,external_rating,outlook,score,
+               attention_rating,primary_driver,recommended_action,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            E5_10_VALIDATION_RELATIONSHIP_ID,
+            E5_10_VALIDATION_COMPANY,
+            "SYSTEM",
+            "VALIDATION",
+            None,
+            None,
+            None,
+            None,
+            "E5.10 controlled final validation fixture",
+            "Hidden from business UI; production-like upstream intelligence with TEST-only AUE output.",
+            now,
+            now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E5_10_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+
+
+def _db_stage1e5_10_seed_source_configs(conn: _DBConnection):
+    """Seed production-like configs scoped only to the hidden E.5.10 fixture."""
+    now = _db_now()
+
+    # OpportunitySignal threshold config.
+    existing = conn.execute(
+        """SELECT id FROM opportunity_signal_threshold_config
+           WHERE signal_type=? AND config_version=?""",
+        (E3SignalType.LENDING_WALLET_GAP.value, E5_10_SIGNAL_CONFIG_VERSION),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            """INSERT INTO opportunity_signal_threshold_config(
+                   config_version,signal_type,base_currency,minimum_gap_base_currency,
+                   maximum_penetration,high_gap_base_currency,very_low_penetration,
+                   status,test_only,effective_from,created_at,updated_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                E5_10_SIGNAL_CONFIG_VERSION,
+                E3SignalType.LENDING_WALLET_GAP.value,
+                "JPY",
+                50_000_000_000.0,
+                0.50,
+                200_000_000_000.0,
+                0.20,
+                "ACTIVE",
+                0,
+                "2026-10-15",
+                now,
+                now,
+            ),
+        )
+
+    e4_configs = [
+        (
+            E5_10_EVENT_CONFIG_VERSION,
+            "EVENT_MATERIALITY",
+            {
+                "base_currency": "JPY",
+                "absolute_thresholds": {
+                    "DEBT_MATURITY": 50_000_000_000.0,
+                    "FACILITY_MATURITY": 50_000_000_000.0,
+                    "CAPEX_ANNOUNCEMENT": 100_000_000_000.0,
+                    "ACQUISITION_EVENT": 100_000_000_000.0,
+                    "FINANCING_EVENT": 50_000_000_000.0,
+                    "ASSET_DISPOSAL_EVENT": 50_000_000_000.0,
+                    "LIQUIDITY_INFLOW_EVENT": 50_000_000_000.0,
+                    "LIQUIDITY_OUTFLOW_EVENT": 50_000_000_000.0,
+                },
+                "qualitative_material_types": ["TREASURY_EVENT"],
+            },
+        ),
+        (
+            E5_10_TEMPORAL_CONFIG_VERSION,
+            "TEMPORAL",
+            {
+                "timezone_basis": "Asia/Singapore",
+                "immediate_days": 7,
+                "near_term_days": 30,
+                "forward_days": 90,
+                "post_event_relevance_days": 60,
+                "recent_change_days": 30,
+            },
+        ),
+    ]
+    for version, config_type, payload in e4_configs:
+        existing = conn.execute(
+            "SELECT id FROM change_event_rule_config WHERE config_type=? AND config_version=?",
+            (config_type, version),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                """INSERT INTO change_event_rule_config(
+                       config_version,config_type,config_json,status,test_only,
+                       effective_from,created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    version,
+                    config_type,
+                    json.dumps(payload, sort_keys=True),
+                    "ACTIVE",
+                    0,
+                    "2026-10-15",
+                    now,
+                    now,
+                ),
+            )
+
+
+def _db_stage1e5_10_existing_wallet(conn: _DBConnection):
+    rel = _db_stage1e5_10_validation_relationship(conn)
+    return conn.execute(
+        """SELECT wa.*
+           FROM wallet_assessment wa
+           JOIN intelligence_methodology im ON im.id=wa.methodology_id
+           WHERE wa.relationship_id=?
+             AND im.methodology_code='STRUCTURAL_LENDING'
+             AND im.version='1.0'
+             AND wa.publication_mode=?
+             AND wa.status IN ('PUBLISHED','SUPERSEDED')
+             AND wa.publication_result='PUBLISH'
+             AND wa.test_only=0
+           ORDER BY wa.id DESC LIMIT 1""",
+        (rel["id"], E5_10_WALLET_PUBLICATION_MODE),
+    ).fetchone()
+
+
+def _db_stage1e5_10_publish_wallet(assessment_id: str):
+    conn = _db_connect()
+    try:
+        row = conn.execute(
+            """SELECT wa.*,r.relationship_id AS relationship_public_id
+               FROM wallet_assessment wa
+               JOIN relationship r ON r.id=wa.relationship_id
+               WHERE wa.assessment_id=?""",
+            (assessment_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        raise ValueError(f"E.5.10 WalletAssessment {assessment_id} not found.")
+    if row["relationship_public_id"] != E5_10_VALIDATION_RELATIONSHIP_ID:
+        raise ValueError("E.5.10 wallet publication refused outside hidden validation relationship.")
+    if bool(row["test_only"]):
+        raise ValueError("E.5.10 source WalletAssessment must be production-like non-test.")
+
+    if row["status"] == "PUBLISHED":
+        with _db_transaction() as conn:
+            conn.execute(
+                "UPDATE wallet_assessment SET publication_mode=? WHERE assessment_id=?",
+                (E5_10_WALLET_PUBLICATION_MODE, assessment_id),
+            )
+        return
+
+    if row["status"] != "VALIDATED" or row["publication_result"] != "PUBLISH":
+        raise ValueError(
+            f"E.5.10 WalletAssessment not publication-qualified: "
+            f"{row['status']} / {row['publication_result']}."
+        )
+    qg = json.loads(row["quality_gate_json"] or "{}")
+    if not bool(qg.get("production_publication_allowed")):
+        raise ValueError("E.5.10 source WalletAssessment failed the publication gate.")
+
+    _db_stage1e_publish_assessment(
+        assessment_id,
+        actor="E5.10 Validation Harness",
+    )
+    with _db_transaction() as conn:
+        conn.execute(
+            "UPDATE wallet_assessment SET publication_mode=? WHERE assessment_id=?",
+            (E5_10_WALLET_PUBLICATION_MODE, assessment_id),
+        )
+
+
+def _db_stage1e5_10_create_or_reuse_wallet() -> str:
+    with _db_transaction() as conn:
+        _db_stage1e5_10_validation_relationship(conn)
+        _db_stage1e5_10_seed_source_configs(conn)
+        existing = _db_stage1e5_10_existing_wallet(conn)
+        if existing is not None:
+            return existing["assessment_id"]
+
+    effective_date = "2026-10-15"
+    evidence = [
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX,
+            metric_name="Forecast Capex",
+            value_numeric=1_000_000_000_000.0,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E5_FINAL_VALIDATION_FIXTURE",
+            source_name="EC-AI E5.10 Final Validation",
+            source_reference="E5.10-FORECAST-CAPEX",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic production-like evidence used only for Stage 1-E.5.10 final validation.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX_DEBT_FUNDING_PCT,
+            metric_name="Forecast Capex Debt Funding %",
+            value_numeric=0.80,
+            unit="RATIO",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="E5_FINAL_VALIDATION_FIXTURE",
+            source_name="EC-AI E5.10 Final Validation",
+            source_reference="E5.10-DEBT-FUNDING",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Controlled governed assumption for the hidden E.5.10 validation fixture.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_BANK_CAPEX_SHARE,
+            metric_name="Forecast Bank Capex Share",
+            value_numeric=0.75,
+            unit="RATIO",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="E5_FINAL_VALIDATION_FIXTURE",
+            source_name="EC-AI E5.10 Final Validation",
+            source_reference="E5.10-BANK-SHARE",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Controlled governed assumption for the hidden E.5.10 validation fixture.",
+        ),
+        EvidenceItem(
+            metric_code=OUR_BANK_COMPARABLE_COMMITMENT,
+            metric_name="Our Bank Comparable Commitment",
+            value_numeric=60_000_000_000.0,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E5_FINAL_VALIDATION_FIXTURE",
+            source_name="EC-AI E5.10 Final Validation",
+            source_reference="E5.10-CAPTURE",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic comparable capture for Stage 1-E.5.10 final validation only.",
+        ),
+    ]
+
+    assessment_input = StructuralLendingAssessmentInput(
+        capex=StructuralLendingComponent(
+            base_amount=1_000_000_000_000.0,
+            funding_rate=0.80,
+            bank_share=0.75,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            time_horizon="1Y",
+            currency="JPY",
+            evidence_ids=(
+                "E5.10-FORECAST-CAPEX",
+                "E5.10-DEBT-FUNDING",
+                "E5.10-BANK-SHARE",
+            ),
+            estimation_method="Controlled E5.10 deterministic validation fixture",
+            rationale="Production-like Structural Lending wallet used only to validate the final Attention × Urgency chain.",
+            confidence="MEDIUM",
+            financing_need_ids=("E5.10-CAPEX-NEED",),
+            assessed=True,
+        ),
+        refinancing=None,
+        capture=StructuralLendingCapture(
+            comparable_commitment=60_000_000_000.0,
+            comparability_status=CaptureComparabilityStatus.COMPARABLE,
+            comparability_reason="Synthetic capture matches wallet perimeter, currency and horizon.",
+            evidence_ids=("E5.10-CAPTURE",),
+            verified_zero=False,
+        ),
+        test_only=False,
+    )
+
+    created = _db_stage1e2_create_structural_assessment(
+        E5_10_VALIDATION_COMPANY,
+        assessment_input,
+        evidence,
+        effective_date=effective_date,
+        currency="JPY",
+        geographic_scope="Global",
+        time_horizon="1Y",
+        actor="E5.10 Validation Harness",
+    )
+    assessment_id = created["Assessment ID"]
+    _db_stage1e5_10_publish_wallet(assessment_id)
+    return assessment_id
+
+
+def _db_stage1e5_10_create_or_reuse_signal(assessment_id: str) -> str:
+    with _db_transaction() as conn:
+        _db_stage1e5_10_seed_source_configs(conn)
+
+    result = _db_stage1e3_apply_lifecycle(
+        assessment_id,
+        E5_10_SIGNAL_CONFIG_VERSION,
+        actor="E5.10 Validation Harness",
+        persistence_test_only=False,
+    )
+    signal_id = result.get("Signal ID")
+    evaluation = result.get("Evaluation")
+    if (
+        not signal_id
+        or evaluation is None
+        or not evaluation.eligible
+        or not evaluation.qualifies
+    ):
+        raise ValueError(
+            "E.5.10 production-like OpportunitySignal did not qualify/persist."
+        )
+    return signal_id
+
+
+def _db_stage1e5_10_event_fixture() -> tuple[str, str, str]:
+    """Create/reuse one production-like material near-term corporate event."""
+    with _db_transaction() as conn:
+        rel = _db_stage1e5_10_validation_relationship(conn)
+        _db_stage1e5_10_seed_source_configs(conn)
+        cycle = _db_active_review_cycle(conn)
+        as_of = _db_stage1e5_review_as_of(cycle)
+        as_of_date = date.fromisoformat(as_of)
+        event_date = date.fromordinal(as_of_date.toordinal() + 15)
+        episode = f"{E5_10_EPISODE_PREFIX}-{cycle['review_cycle_id']}"
+        source_reference = f"E5.10-DEBT-MATURITY-{cycle['review_cycle_id']}"
+
+        existing_evidence = conn.execute(
+            """SELECT evidence_id FROM intelligence_evidence
+               WHERE relationship_id=? AND source_reference=?
+               ORDER BY id DESC LIMIT 1""",
+            (rel["id"], source_reference),
+        ).fetchone()
+        if existing_evidence is not None:
+            evidence_id = existing_evidence["evidence_id"]
+        else:
+            item = EvidenceItem(
+                metric_code="DEBT_MATURITY_EVENT",
+                metric_name="Scheduled Debt Maturity",
+                value_numeric=250_000_000_000.0,
+                unit="MONEY",
+                currency="JPY",
+                evidence_type=EvidenceType.FACT,
+                source_type="E5_FINAL_VALIDATION_FIXTURE",
+                source_name="EC-AI E5.10 Final Validation",
+                source_reference=source_reference,
+                effective_date=event_date.isoformat(),
+                as_of_date=as_of,
+                confidence=ConfidenceLevel.HIGH,
+                economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+                geographic_scope="Global",
+                time_basis="SCHEDULED",
+                rationale="Synthetic production-like debt maturity used only for Stage 1-E.5.10 final validation.",
+            )
+            evidence_id = _db_stage1e_persist_evidence(
+                conn,
+                relationship_db_id=rel["id"],
+                review_cycle_db_id=cycle["id"],
+                methodology_db_id=None,
+                item=item,
+            )
+
+    event = E4CorporateEventInput(
+        relationship_id=E5_10_VALIDATION_RELATIONSHIP_ID,
+        economic_episode_key=episode,
+        event_type=E4EventType.DEBT_MATURITY,
+        event_status=E4EventStatus.SCHEDULED,
+        authoritative=True,
+        test_only=False,
+        confidence=E4ConfidenceLevel.HIGH,
+        evidence_ids=(evidence_id,),
+        event_amount=250_000_000_000.0,
+        currency="JPY",
+        amount_status=E4AmountStatus.DISCLOSED,
+        observed_at=as_of,
+        announced_date=as_of,
+        expected_date_start=event_date.isoformat(),
+        expected_date_end=event_date.isoformat(),
+        date_precision=E4DatePrecision.DAY,
+        economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+        legal_entity="E5 Final Validation Co",
+        geographic_scope="Global",
+        impact_domains=("LENDING",),
+        impact_direction=E4Direction.UNKNOWN,
+        source_as_of=as_of,
+    )
+    result = _db_stage1e4_apply_event(
+        event,
+        E5_10_EVENT_CONFIG_VERSION,
+        E5_10_TEMPORAL_CONFIG_VERSION,
+        evaluation_as_of=as_of,
+        actor="E5.10 Validation Harness",
+        persistence_test_only=False,
+    )
+    event_id = result.get("ChangeEvent ID")
+    if not event_id or result.get("Persistence Blocked"):
+        raise ValueError(
+            "E.5.10 production-like CorporateEvent did not persist: "
+            + str(result.get("Persistence Blocked"))
+        )
+    return event_id, evidence_id, episode
+
+
+def _db_stage1e5_10_build_candidate(
+    signal_id: str,
+    event_id: str,
+    episode: str,
+) -> tuple[ReviewContext, AttentionUrgencyCandidate]:
+    conn = _db_connect()
+    try:
+        rel = _db_stage1e5_10_validation_relationship(conn)
+        cycle = _db_active_review_cycle(conn)
+        policy = default_policy_config()
+        policy_row = _db_stage1e5_ensure_review_policy(
+            conn, cycle, policy, test_only=True
+        )
+        as_of = date.fromisoformat(str(policy_row["evaluation_as_of"])[:10])
+
+        sig = conn.execute(
+            """SELECT os.*,r.relationship_id AS relationship_public_id
+               FROM opportunity_signal os
+               JOIN relationship r ON r.id=os.relationship_id
+               WHERE os.signal_id=?""",
+            (signal_id,),
+        ).fetchone()
+        evt = conn.execute(
+            """SELECT ce.*,r.relationship_id AS relationship_public_id
+               FROM change_event ce
+               JOIN relationship r ON r.id=ce.relationship_id
+               WHERE ce.change_event_id=? AND ce.object_kind='EVENT'""",
+            (event_id,),
+        ).fetchone()
+        temporal = conn.execute(
+            """SELECT * FROM change_event_temporal_evaluation
+               WHERE change_event_id=? AND evaluation_as_of=?
+               ORDER BY id DESC LIMIT 1""",
+            (event_id, as_of.isoformat()),
+        ).fetchone()
+
+        if sig is None or evt is None or temporal is None:
+            raise ValueError("E.5.10 governed upstream source state is incomplete.")
+        if (
+            bool(sig["test_only"])
+            or bool(evt["test_only"])
+            or bool(temporal["test_only"])
+        ):
+            raise ValueError("E.5.10 upstream sources must be production-like non-test.")
+
+        ctx = ReviewContext(
+            relationship_id=rel["relationship_id"],
+            review_cycle_id=cycle["review_cycle_id"],
+            evaluation_as_of=as_of,
+            review_cycle_frozen=(cycle["status"] != "Active"),
+            policy_bundle_id=policy.policy_bundle_id,
+        )
+
+        opportunity = OpportunitySignalInput(
+            signal_id=sig["signal_id"],
+            relationship_id=sig["relationship_public_id"],
+            domain="LENDING",
+            signal_strength=sig["signal_strength"],
+            signal_status=sig["signal_status"],
+            confidence=E5ConfidenceLevel(sig["confidence"]),
+            executive_relevance=ExecutiveRelevanceStatus.ELIGIBLE,
+            economic_episode_key=episode,
+            test_only=False,
+        )
+
+        impact_domains = json.loads(evt["impact_domains_json"] or "[]")
+        event_domain = impact_domains[0] if impact_domains else "LENDING"
+        event_input = CorporateEventInput(
+            event_id=evt["change_event_id"],
+            relationship_id=evt["relationship_public_id"],
+            domain=event_domain,
+            event_type=evt["change_event_type"],
+            event_status=evt["status"],
+            materiality=evt["materiality"],
+            temporal_state=TemporalState(temporal["temporal_state"]),
+            confidence=E5ConfidenceLevel(evt["confidence"]),
+            executive_relevance=ExecutiveRelevanceStatus.ELIGIBLE,
+            actionability=ActionabilityStatus.ACTIONABLE,
+            economic_episode_key=evt["economic_episode_key"] or episode,
+            event_group_id=evt["event_group_id"],
+            test_only=False,
+        )
+
+        inputs = EvaluationInputs(
+            opportunities=(opportunity,),
+            events=(event_input,),
+        )
+        attention_coverage = AxisCoverageInput(
+            frozenset(x.value for x in AttentionFactorCode),
+            True,
+        )
+        urgency_coverage = AxisCoverageInput(
+            frozenset(x.value for x in UrgencyFactorCode),
+            True,
+        )
+        candidate = evaluate_attention_urgency(
+            ctx,
+            inputs,
+            attention_coverage,
+            urgency_coverage,
+            policy,
+        )
+        return ctx, candidate
+    finally:
+        conn.close()
+
+
+def _db_stage1e5_10_validation_rows() -> list[dict]:
+    return _db_stage1e5_list_evaluations(
+        include_test_only=True,
+        company=E5_10_VALIDATION_COMPANY,
+    )
+
+
+def _db_stage1e5_10_run_final_validation() -> dict:
+    """End-to-end persisted source -> AUE -> reload -> idempotency validation."""
+    assessment_id = _db_stage1e5_10_create_or_reuse_wallet()
+    signal_id = _db_stage1e5_10_create_or_reuse_signal(assessment_id)
+    event_id, evidence_id, episode = _db_stage1e5_10_event_fixture()
+
+    before = _db_stage1e5_10_validation_rows()
+    ctx, candidate = _db_stage1e5_10_build_candidate(signal_id, event_id, episode)
+
+    first = _db_stage1e5_persist_candidate(
+        ctx,
+        candidate,
+        actor="E5.10 Validation Harness",
+        test_only=True,
+    )
+    after_first = _db_stage1e5_10_validation_rows()
+
+    second = _db_stage1e5_persist_candidate(
+        ctx,
+        candidate,
+        actor="E5.10 Validation Harness",
+        test_only=True,
+    )
+    after_second = _db_stage1e5_10_validation_rows()
+
+    current = next(
+        (x for x in after_second if x.get("Status") == "PUBLISHED"),
+        None,
+    )
+    evaluation_id = current.get("Evaluation ID") if current else None
+
+    lineage = _db_stage1e5_10_lineage(evaluation_id) if evaluation_id else {}
+    lineage_pass = bool(lineage.get("Lineage PASS"))
+
+    pass_result = bool(
+        assessment_id
+        and signal_id
+        and event_id
+        and evidence_id
+        and current
+        and current.get("Attention Rating") in ("HIGH", "VERY_HIGH")
+        and current.get("Urgency Rating") in ("HIGH", "VERY_HIGH")
+        and current.get("Quadrant") == "ACT_NOW"
+        and current.get("Quadrant Status") == "ASSIGNED"
+        and bool(current.get("Test Only"))
+        and second.get("Persistence Action") == EvaluationLifecycleAction.KEEP_EXISTING.value
+        and second.get("Evaluation ID") == evaluation_id
+        and len(after_second) == len(after_first)
+        and lineage_pass
+    )
+
+    return {
+        "E.5.10 Final Validation PASS": pass_result,
+        "Source WalletAssessment": assessment_id,
+        "Source OpportunitySignal": signal_id,
+        "Source CorporateEvent": event_id,
+        "Source Event Evidence": evidence_id,
+        "Economic Episode": episode,
+        "AttentionUrgencyEvaluation": evaluation_id,
+        "Attention Rating": current.get("Attention Rating") if current else None,
+        "Attention Score": current.get("Attention Score") if current else None,
+        "Urgency Rating": current.get("Urgency Rating") if current else None,
+        "Urgency Score": current.get("Urgency Score") if current else None,
+        "Quadrant": current.get("Quadrant") if current else None,
+        "Quadrant Status": current.get("Quadrant Status") if current else None,
+        "AUE Persistence Test Only": bool(current and current.get("Test Only")),
+        "Fixture Rows Before": len(before),
+        "Fixture Rows After First Evaluation": len(after_first),
+        "Fixture Rows After Re-evaluation": len(after_second),
+        "Re-evaluation Action": second.get("Persistence Action"),
+        "Re-evaluation Evaluation ID": second.get("Evaluation ID"),
+        "Why Important PASS": bool(lineage.get("Why Important PASS")),
+        "Why Now PASS": bool(lineage.get("Why Now PASS")),
+        "Lineage PASS": lineage_pass,
+    }
+
+
+def _db_stage1e5_10_lineage(evaluation_id: str | None) -> dict:
+    if not evaluation_id:
+        return {"Lineage PASS": False, "Reason": "EVALUATION_ID_MISSING"}
+
+    aue = _db_stage1e5_lineage(evaluation_id)
+    snapshots = aue.get("Source Snapshots", [])
+    signal_id = next(
+        (
+            x.get("Source Object ID")
+            for x in snapshots
+            if x.get("Source Kind") == "OPPORTUNITY_SIGNAL"
+        ),
+        None,
+    )
+    event_id = next(
+        (
+            x.get("Source Object ID")
+            for x in snapshots
+            if x.get("Source Kind") == "EVENT"
+        ),
+        None,
+    )
+
+    signal_lineage = _db_stage1e3_signal_lineage(signal_id) if signal_id else {}
+    event_lineage = _db_stage1e4_change_event_lineage(event_id) if event_id else {}
+
+    factors = aue.get("Factors", [])
+    clusters = aue.get("Clusters", [])
+    audits = aue.get("Audit Events", [])
+    audit_names = [x.get("Event", "") for x in audits]
+
+    attention_factors = [x for x in factors if x.get("Axis") == "ATTENTION"]
+    urgency_factors = [x for x in factors if x.get("Axis") == "URGENCY"]
+    attention_sources = {
+        sid
+        for f in attention_factors
+        for sid in (f.get("Source IDs") or [])
+    }
+    urgency_sources = {
+        sid
+        for f in urgency_factors
+        for sid in (f.get("Source IDs") or [])
+    }
+
+    wallet_lineage = signal_lineage.get("Wallet Assessment Lineage", {})
+    signal_evidence = len(wallet_lineage.get("Evidence", []))
+    signal_calculations = len(wallet_lineage.get("Calculations", []))
+    signal_audits = signal_lineage.get("Signal Audit Events", [])
+    signal_audit_names = [x.get("Event", "") for x in signal_audits]
+
+    event_direct_evidence = event_lineage.get("Direct Evidence", [])
+    event_temporal = event_lineage.get("Temporal Evaluations", [])
+    event_audits = event_lineage.get("Audit Events", [])
+    event_audit_names = [x.get("Event", "") for x in event_audits]
+
+    evaluation = aue.get("Evaluation", {})
+    why_important_pass = bool(
+        evaluation.get("Attention Rating") in ("HIGH", "VERY_HIGH")
+        and signal_id in attention_sources
+        and event_id in attention_sources
+        and signal_evidence >= 4
+        and signal_calculations >= 1
+        and "OPPORTUNITY_SIGNAL_CREATED" in signal_audit_names
+    )
+    why_now_pass = bool(
+        evaluation.get("Urgency Rating") in ("HIGH", "VERY_HIGH")
+        and event_id in urgency_sources
+        and len(event_direct_evidence) >= 1
+        and len(event_temporal) >= 1
+        and (
+            "CORPORATE_EVENT_CREATED" in event_audit_names
+            or "CORPORATE_EVENT_LIFECYCLE_UPDATED" in event_audit_names
+        )
+    )
+    aue_lineage_pass = bool(
+        len(factors) >= 3
+        and len(clusters) >= 2
+        and len(snapshots) >= 2
+        and "ATTENTION_URGENCY_EVALUATION_CREATED" in audit_names
+        and "ATTENTION_URGENCY_EVALUATION_VALIDATED" in audit_names
+        and "ATTENTION_URGENCY_EVALUATION_PUBLISHED" in audit_names
+    )
+    lineage_pass = bool(
+        aue_lineage_pass
+        and why_important_pass
+        and why_now_pass
+        and evaluation.get("Quadrant") == "ACT_NOW"
+    )
+
+    return {
+        "Lineage PASS": lineage_pass,
+        "Why Important PASS": why_important_pass,
+        "Why Now PASS": why_now_pass,
+        "AUE Lineage PASS": aue_lineage_pass,
+        "AUE": aue,
+        "OpportunitySignal Lineage": signal_lineage,
+        "CorporateEvent Lineage": event_lineage,
+        "Summary": {
+            "Evaluation ID": evaluation_id,
+            "Attention Rating": evaluation.get("Attention Rating"),
+            "Urgency Rating": evaluation.get("Urgency Rating"),
+            "Quadrant": evaluation.get("Quadrant"),
+            "AUE Factors": len(factors),
+            "AUE Clusters": len(clusters),
+            "AUE Source Snapshots": len(snapshots),
+            "AUE Audit Events": len(audits),
+            "OpportunitySignal": signal_id,
+            "Opportunity Wallet Evidence": signal_evidence,
+            "Opportunity Wallet Calculations": signal_calculations,
+            "OpportunitySignal Audit Events": len(signal_audits),
+            "CorporateEvent": event_id,
+            "CorporateEvent Direct Evidence": len(event_direct_evidence),
+            "CorporateEvent Temporal Evaluations": len(event_temporal),
+            "CorporateEvent Audit Events": len(event_audits),
+        },
+    }
+
+
+def _db_stage1e5_10_validation_summary() -> dict:
+    rows = _db_stage1e5_10_validation_rows()
+    return {
+        "Rows": rows,
+        "Current Published": next(
+            (x for x in rows if x.get("Status") == "PUBLISHED"),
+            None,
+        ),
+    }
+
+# END STAGE 1-E.5.10 — FINAL LIVE ATTENTION × URGENCY VALIDATION
+
+
+# =============================================================================
 # STAGE 1-E.4.9 — FINAL LIVE VALIDATION
 # =============================================================================
 
@@ -12199,14 +12959,14 @@ def _db_write_system_metadata():
         "persistence_runtime_version": str(ECAI_PERSISTENCE_RUNTIME_VERSION),
         "persistence_release": ECAI_PERSISTENCE_RELEASE,
         "database_backend": ECAI_DB_BACKEND,
-        "intelligence_release": "Stage 1-E.5.9 v0.2",
+        "intelligence_release": "Stage 1-E.5.10 v0.1",
         "lending_wallet_methodology": "LENDING_WALLET 0.1",
         "structural_lending_methodology": "STRUCTURAL_LENDING 1.0",
         "cash_liquidity_methodology": "CASH_LIQUIDITY_WALLET 1.0",
         "opportunity_signal_release": "Stage 1-E.3.8 v1.0 LOCKED",
         "opportunity_signal_rule_version": "1.0",
         "change_event_release": "Stage 1-E.4.9 v0.2",
-        "attention_urgency_release": "Stage 1-E.5.9 v0.2",
+        "attention_urgency_release": "Stage 1-E.5.10 v0.1",
         "change_event_rule_version": "1.0",
     }
     with _db_transaction() as conn:
@@ -13632,7 +14392,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.5.9 · Attention × Urgency Persistence Hotfix v0.2 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.5.10 · Final Live Attention × Urgency Validation v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -14152,6 +14912,87 @@ def render_stage_1c_sidebar():
 
 
 
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.5.10 · Final Live Attention × Urgency Validation**")
+            st.caption(
+                "End-to-end controlled validation · production-like persisted WalletAssessment → "
+                "OpportunitySignal + CorporateEvent/TemporalEvaluation → TEST-only AttentionUrgencyEvaluation · "
+                "hidden E5 final-validation relationship."
+            )
+
+            if st.button(
+                "Run E.5.10 Final Live Attention × Urgency Validation",
+                key="stage1e5_10_final_validation",
+                use_container_width=True,
+            ):
+                try:
+                    result = _db_stage1e5_10_run_final_validation()
+                    st.session_state["stage1e5_10_final_result"] = result
+                except Exception as exc:
+                    st.error(f"E.5.10 final validation failed: {exc}")
+
+            e510_result = st.session_state.get("stage1e5_10_final_result")
+            if e510_result:
+                if e510_result.get("E.5.10 Final Validation PASS"):
+                    st.success(
+                        "E.5.10 PASS · persisted OpportunitySignal established Why Important, "
+                        "persisted CorporateEvent established Why Now, ACT NOW AUE persisted TEST-only, "
+                        "reloaded and re-evaluated idempotently."
+                    )
+                else:
+                    st.error("E.5.10 CHECK · inspect final-validation output.")
+                st.write(e510_result)
+
+            try:
+                e510_summary = _db_stage1e5_10_validation_summary()
+            except Exception as exc:
+                e510_summary = None
+                st.error(f"E.5.10 reload summary failed: {exc}")
+
+            if e510_summary and e510_summary.get("Rows"):
+                st.dataframe(
+                    pd.DataFrame(e510_summary["Rows"]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                current_e510 = e510_summary.get("Current Published")
+                if current_e510:
+                    current_id = current_e510.get("Evaluation ID")
+                    lineage_key = f"stage1e5_10_lineage::{current_id}"
+                    if st.button(
+                        f"Load {current_id} Full Why Important / Why Now Lineage",
+                        key=f"stage1e5_10_load_lineage::{current_id}",
+                        use_container_width=True,
+                    ):
+                        try:
+                            st.session_state[lineage_key] = _db_stage1e5_10_lineage(current_id)
+                        except Exception as exc:
+                            st.error(f"E.5.10 lineage load failed for {current_id}: {exc}")
+
+                    lineage = st.session_state.get(lineage_key)
+                    if lineage:
+                        summary = lineage.get("Summary", {})
+                        if lineage.get("Lineage PASS"):
+                            st.success(
+                                f"E.5.10 {current_id} Lineage PASS · "
+                                f"Why Important PASS · Why Now PASS · "
+                                f"AUE Factors {summary.get('AUE Factors', 0)} · "
+                                f"Clusters {summary.get('AUE Clusters', 0)} · "
+                                f"Snapshots {summary.get('AUE Source Snapshots', 0)}"
+                            )
+                        else:
+                            st.error(
+                                f"E.5.10 {current_id} Lineage CHECK · "
+                                f"Why Important {'PASS' if lineage.get('Why Important PASS') else 'CHECK'} · "
+                                f"Why Now {'PASS' if lineage.get('Why Now PASS') else 'CHECK'}"
+                            )
+                        st.write(summary)
+                        with st.expander(
+                            f"Inspect {current_id} full E.5.10 lineage",
+                            expanded=False,
+                        ):
+                            st.json(lineage)
 
         if diagnostics_enabled:
             st.markdown("**Stage 1-E.5.9 · Attention × Urgency Persistence**")
