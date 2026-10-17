@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.5.10 Final Live Attention × Urgency Validation Hotfix v0.3
+# EC-AI Executive Review Workspace — Stage 1-E.6.8D Diagnostics Integration & Controlled Live Supabase Validation Candidate v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1468,9 +1468,9 @@ ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 10
-ECAI_PERSISTENCE_RUNTIME_VERSION = 12  # E.5.9: Attention × Urgency persistence integration
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.5.10 Final Live Attention × Urgency Validation Hotfix v0.3"
+ECAI_SCHEMA_VERSION = 13
+ECAI_PERSISTENCE_RUNTIME_VERSION = 15  # E.6.8D: diagnostics integration + controlled live validation
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8D Diagnostics Integration & Controlled Live Supabase Validation Candidate v0.1"
 
 
 def _db_now() -> str:
@@ -2319,6 +2319,7 @@ def _db_init_schema_uncached():
             _db_stage1e3_migrate_schema(conn)
             _db_stage1e4_migrate_schema(conn)
             _db_stage1e5_migrate_schema(conn)
+            _db_stage1e6_migrate_schema(conn)
             if conn.backend == "sqlite":
                 conn.execute(f"PRAGMA user_version = {ECAI_SCHEMA_VERSION}")
             conn.commit()
@@ -2429,7 +2430,7 @@ def _db_list_relationship_registry(conn: _DBConnection | None = None) -> list[di
                       score,attention_rating,primary_driver,recommended_action,
                       created_at,updated_at
                FROM relationship
-               WHERE relationship_id NOT IN ('REL-EC-AI-E3-VALIDATION-CO','REL-EC-AI-E4-VALIDATION-CO','REL-EC-AI-E5-VALIDATION-CO','REL-EC-AI-E5-FINAL-VALIDATION-CO')
+               WHERE relationship_id NOT IN ('REL-EC-AI-E3-VALIDATION-CO','REL-EC-AI-E4-VALIDATION-CO','REL-EC-AI-E5-VALIDATION-CO','REL-EC-AI-E5-FINAL-VALIDATION-CO','REL-EC-AI-E6-VALIDATION-CO')
                ORDER BY id"""
         ).fetchall()
         return [
@@ -2464,13 +2465,23 @@ def _db_append_audit(
     event_type: str,
     actor: str | None,
     payload: dict | None = None,
+    idempotency_key: str | None = None,
 ):
+    # Stage 1-E.6.8C extends AuditEvent with an optional idempotency key. Existing
+    # Stage 1-D/E callers remain unchanged; E.6 exact reruns can now be truly quiet.
+    if idempotency_key:
+        existing = conn.execute(
+            "SELECT audit_event_id FROM audit_event WHERE idempotency_key=?",
+            (idempotency_key,),
+        ).fetchone()
+        if existing is not None:
+            return existing[0]
     audit_id = _db_next_id(conn, "audit_event", "audit_event_id", "AUD", width=6)
     conn.execute(
         """INSERT INTO audit_event(
                audit_event_id, entity_type, entity_id, relationship_id,
-               event_type, event_timestamp, actor, payload_json
-           ) VALUES (?,?,?,?,?,?,?,?)""",
+               event_type, event_timestamp, actor, payload_json, idempotency_key
+           ) VALUES (?,?,?,?,?,?,?,?,?)""",
         (
             audit_id,
             entity_type,
@@ -2480,8 +2491,10 @@ def _db_append_audit(
             _db_now(),
             actor or "EC-AI",
             json.dumps(payload or {}, ensure_ascii=False, default=str),
+            idempotency_key,
         ),
     )
+    return audit_id
 
 
 # =============================================================================
@@ -12457,6 +12470,4644 @@ def _db_stage1e5_10_validation_summary() -> dict:
 
 
 # =============================================================================
+# STAGE 1-E.6.8D — EMBEDDED LOCKED E.6.7 DETERMINISTIC ENGINE
+# =============================================================================
+import sys as _e6_sys
+import types as _e6_types
+_E6_ENGINE_SOURCE = r'''"""
+EC-AI Stage 1-E.6.7 — Deterministic ReviewItem Engine v1.0 · Code Red-Team Hotfix v0.3
+
+Standalone, deterministic, side-effect-free engine.
+No Streamlit dependency. No database writes. No AI judgement.
+
+Purpose
+-------
+Translate one governed management-situation candidate, its persisted
+AttentionUrgencyEvaluation (AUE) cluster lineage, authority context, equivalent
+ReviewItem state, governing Decision state and frozen ReviewCycle policy into:
+
+1. DecisionRequirementEvaluation
+2. ReviewPromotionEvaluation
+3. DecisionContextChangeEvaluation
+4. ReviewItemCandidate when CREATE_NEW / CREATE_RECURRENCE is warranted
+
+Governing invariants
+--------------------
+- AUE != DecisionRequirement != Promotion != Agenda Decision != Management Decision.
+- Relationship-level AUE is not blanket authority to create arbitrary questions;
+  every automatic question must trace to a governed AUE cluster / economic episode.
+- Quadrant informs context and reason codes; it never directly determines promotion.
+- UNKNOWN / NOT_ASSESSED != NOT_REQUIRED / DO_NOT_PROMOTE.
+- Contract violations and policy defects are errors, not business uncertainty.
+- Decision Requirement requires a genuine unresolved management choice.
+- Question identity uses governed semantic codes, never wording.
+- Authoritative question wording is template-generated; AI does not establish it.
+- New AUE != new ReviewItem; new ReviewCycle != new ReviewItem.
+- One distinct unresolved management question <= one active ReviewItem.
+- Exact evaluation idempotency != active-question reuse != recurrence.
+- Hash inequality != material decision-context change.
+- Recurrence requires a governed material context change after a terminal item.
+- ReviewItemCandidate is emitted only for CREATE_NEW / CREATE_RECURRENCE.
+- Any test-only upstream state can only produce test-only downstream output.
+- The engine never assigns database IDs and performs no persistence side effects.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass, fields, is_dataclass
+from datetime import date, datetime
+from enum import Enum
+from hashlib import sha256
+import json
+import re
+from string import Formatter
+from typing import Any, Mapping, Optional, Sequence
+from urllib.parse import quote
+
+
+ENGINE_VERSION = "1.0-hotfix-v0.3"
+DECISION_REQUIREMENT_RULE_VERSION = "1.0"
+PROMOTION_RULE_VERSION = "1.0"
+QUESTION_IDENTITY_RULE_VERSION = "1.0"
+RECURRENCE_RULE_VERSION = "1.0"
+FINGERPRINT_RULE_VERSION = "1.0"
+
+AUE_RATING_VALUES = frozenset({"VERY_HIGH", "HIGH", "MODERATE", "LOW", "NONE", "NOT_ASSESSED"})
+
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+
+class ReviewItemEngineError(Exception):
+    """Base error for deterministic E.6 engine failures."""
+
+
+class ReviewItemInputValidationError(ReviewItemEngineError):
+    """The supplied input contract is internally inconsistent or malformed."""
+
+
+class ReviewItemPolicyConfigurationError(ReviewItemEngineError):
+    """The supplied governed policy bundle is invalid or ambiguous."""
+
+
+class ReviewItemInvariantError(ReviewItemEngineError):
+    """Persisted institutional state violates a deterministic invariant."""
+
+
+# ---------------------------------------------------------------------------
+# Enumerations
+# ---------------------------------------------------------------------------
+
+
+class DecisionRequirement(str, Enum):
+    REQUIRED = "REQUIRED"
+    NOT_REQUIRED = "NOT_REQUIRED"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class DecisionFamily(str, Enum):
+    COMMERCIAL = "COMMERCIAL"
+    RISK = "RISK"
+    RELATIONSHIP_COVERAGE = "RELATIONSHIP_COVERAGE"
+    STRATEGIC_RESOURCE_ALLOCATION = "STRATEGIC_RESOURCE_ALLOCATION"
+
+
+class ManagementQuestionType(str, Enum):
+    PURSUE_OPPORTUNITY = "PURSUE_OPPORTUNITY"
+    ALLOCATE_CAPACITY = "ALLOCATE_CAPACITY"
+    CHANGE_COVERAGE = "CHANGE_COVERAGE"
+    ESCALATE_RISK = "ESCALATE_RISK"
+    PROTECT_RELATIONSHIP = "PROTECT_RELATIONSHIP"
+    REVIEW_STRATEGIC_INVESTMENT = "REVIEW_STRATEGIC_INVESTMENT"
+    RESOLVE_EXCEPTION = "RESOLVE_EXCEPTION"
+    RECONSIDER_PRIOR_DECISION = "RECONSIDER_PRIOR_DECISION"
+
+
+class DecisionAuthority(str, Enum):
+    RM = "RM"
+    TEAM_HEAD = "TEAM_HEAD"
+    REGIONAL_MANAGEMENT = "REGIONAL_MANAGEMENT"
+    EXECUTIVE = "EXECUTIVE"
+    UNKNOWN = "UNKNOWN"
+
+
+class ManagementActionability(str, Enum):
+    ACTIONABLE = "ACTIONABLE"
+    NOT_ACTIONABLE = "NOT_ACTIONABLE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class QuestionResolutionState(str, Enum):
+    UNRESOLVED = "UNRESOLVED"
+    ALREADY_UNDER_REVIEW = "ALREADY_UNDER_REVIEW"
+    ALREADY_DECIDED = "ALREADY_DECIDED"
+    NO_REMAINING_CHOICE = "NO_REMAINING_CHOICE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class ExecutiveRelevanceStatus(str, Enum):
+    ELIGIBLE = "ELIGIBLE"
+    NOT_ELIGIBLE = "NOT_ELIGIBLE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class ReviewPromotionResult(str, Enum):
+    PROMOTE = "PROMOTE"
+    DO_NOT_PROMOTE = "DO_NOT_PROMOTE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class ReviewItemPersistenceAction(str, Enum):
+    CREATE_NEW = "CREATE_NEW"
+    KEEP_EXISTING = "KEEP_EXISTING"
+    REUSE_EXISTING = "REUSE_EXISTING"
+    CREATE_RECURRENCE = "CREATE_RECURRENCE"
+    NO_ACTION = "NO_ACTION"
+
+
+class ReviewItemLifecycle(str, Enum):
+    OPEN = "OPEN"
+    RESOLVED = "RESOLVED"
+    WITHDRAWN = "WITHDRAWN"
+
+
+class ReviewItemValidity(str, Enum):
+    VALID = "VALID"
+    INVALIDATED = "INVALIDATED"
+
+
+class QuestionResolutionEffect(str, Enum):
+    RESOLVES = "RESOLVES"
+    DOES_NOT_RESOLVE = "DOES_NOT_RESOLVE"
+    CREATES_SUCCESSOR_QUESTION = "CREATES_SUCCESSOR_QUESTION"
+
+
+class DecisionContextChange(str, Enum):
+    UNCHANGED = "UNCHANGED"
+    MATERIAL_CHANGE = "MATERIAL_CHANGE"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class Quadrant(str, Enum):
+    ACT_NOW = "ACT_NOW"
+    STRATEGIC_PRIORITY = "STRATEGIC_PRIORITY"
+    URGENT_REVIEW = "URGENT_REVIEW"
+    MONITOR = "MONITOR"
+
+
+class QuadrantStatus(str, Enum):
+    ASSIGNED = "ASSIGNED"
+    NOT_ASSIGNED = "NOT_ASSIGNED"
+
+
+class CoverageStatus(str, Enum):
+    COMPLETE = "COMPLETE"
+    PARTIAL = "PARTIAL"
+    NOT_ASSESSED = "NOT_ASSESSED"
+
+
+class AUEValidity(str, Enum):
+    VALID = "VALID"
+    INVALIDATED = "INVALIDATED"
+
+
+class AUEClusterValidity(str, Enum):
+    VALID = "VALID"
+    INVALIDATED = "INVALIDATED"
+
+
+class CreationBasis(str, Enum):
+    SYSTEM_PROMOTION = "SYSTEM_PROMOTION"
+    MANAGEMENT_INITIATED = "MANAGEMENT_INITIATED"
+
+
+class PriorReviewRelationshipType(str, Enum):
+    RECURRENCE = "RECURRENCE"
+    QUESTION_REFRAME = "QUESTION_REFRAME"
+    ESCALATION_SUCCESSOR = "ESCALATION_SUCCESSOR"
+
+
+# ---------------------------------------------------------------------------
+# Input contracts
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReviewContext:
+    relationship_id: str
+    review_cycle_id: str
+    evaluation_as_of: date
+    review_cycle_frozen: bool = False
+    policy_bundle_id: str = "E6_POLICY_1.0"
+    test_only: bool = False
+
+
+@dataclass(frozen=True)
+class AttentionUrgencyInput:
+    evaluation_id: str
+    relationship_id: str
+    review_cycle_id: str
+    attention_rating: str
+    urgency_rating: str
+    quadrant: Optional[Quadrant]
+    quadrant_status: QuadrantStatus
+    attention_coverage: CoverageStatus
+    urgency_coverage: CoverageStatus
+    validity_status: AUEValidity
+    current_status: str
+    source_fingerprint: str
+    test_only: bool = False
+
+
+@dataclass(frozen=True)
+class AUEClusterContextInput:
+    cluster_id: str
+    source_aue_id: str
+    relationship_id: str
+    economic_episode_key: str
+    domain: str
+    driver_codes: tuple[str, ...]
+    source_object_ids: tuple[str, ...]
+    lineage_complete: bool
+    validity_status: AUEClusterValidity = AUEClusterValidity.VALID
+    test_only: bool = False
+
+
+@dataclass(frozen=True)
+class GovernedTemplateParameter:
+    code: str
+    value: str
+    source_object_id: str
+
+
+@dataclass(frozen=True)
+class ManagementSituationInput:
+    economic_episode_key: str
+    source_cluster_id: str
+    domain: str
+    primary_driver_code: str
+    countervailing_driver_codes: tuple[str, ...]
+    governed_question_type_hint: Optional[ManagementQuestionType]
+    decision_scope_code: str
+    question_subject_code: str
+    question_subject_label: str
+    template_parameters: tuple[GovernedTemplateParameter, ...]
+    meaningful_choice_exists: Optional[bool]
+    choice_still_open: Optional[bool]
+    actionability: ManagementActionability
+    executive_relevance: ExecutiveRelevanceStatus
+    choice_set_codes: tuple[str, ...]
+    material_context_codes: tuple[str, ...]
+    source_object_ids: tuple[str, ...]
+    lineage_complete: bool
+    test_only: bool = False
+
+
+@dataclass(frozen=True)
+class DecisionAuthorityInput:
+    lineage_complete: bool
+    governed_authority_override: Optional[DecisionAuthority] = None
+    override_reason_code: Optional[str] = None
+    test_only: bool = False
+
+
+@dataclass(frozen=True)
+class MaterialDecisionContextState:
+    required_authority: DecisionAuthority
+    choice_set_codes: tuple[str, ...]
+    actionability: ManagementActionability
+    material_context_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ExistingReviewItemSnapshot:
+    review_item_id: str
+    relationship_id: str
+    economic_episode_key: str
+    management_question_key: str
+    lifecycle_status: ReviewItemLifecycle
+    validity_status: ReviewItemValidity
+    origin_aue_id: Optional[str]
+    current_aue_id: Optional[str]
+    material_context_state: Optional[MaterialDecisionContextState]
+    test_only: bool = False
+    ended_at: Optional[datetime] = None
+
+
+@dataclass(frozen=True)
+class EquivalentReviewStateInput:
+    active_equivalent_items: tuple[ExistingReviewItemSnapshot, ...] = ()
+    latest_terminal_equivalent_item: Optional[ExistingReviewItemSnapshot] = None
+
+
+@dataclass(frozen=True)
+class GoverningDecisionStateInput:
+    decision_id: Optional[str] = None
+    management_question_key: Optional[str] = None
+    resolution_effect: Optional[QuestionResolutionEffect] = None
+    lineage_complete: bool = True
+    material_context_state: Optional[MaterialDecisionContextState] = None
+    test_only: bool = False
+
+
+@dataclass(frozen=True)
+class ExistingEvaluationStateInput:
+    prior_decision_requirement_evaluation_id: Optional[str] = None
+    prior_decision_requirement_fingerprint: Optional[str] = None
+    prior_promotion_evaluation_id: Optional[str] = None
+    prior_promotion_fingerprint: Optional[str] = None
+    prior_downstream_state_fingerprint: Optional[str] = None
+    prior_resulting_review_item_id: Optional[str] = None
+    prior_proposed_persistence_action: Optional[ReviewItemPersistenceAction] = None
+
+
+@dataclass(frozen=True)
+class QuestionRule:
+    question_type: ManagementQuestionType
+    decision_family: DecisionFamily
+    primary_driver_codes: tuple[str, ...]
+    allowed_scope_codes: tuple[str, ...]
+    required_authority: DecisionAuthority
+    template: str
+    required_template_parameters: tuple[str, ...] = ("subject",)
+
+
+@dataclass(frozen=True)
+class ReviewItemPolicyConfig:
+    policy_bundle_id: str
+    version: str
+    eligible_aue_statuses: tuple[str, ...]
+    authority_rank: Mapping[str, int]
+    review_forum_minimum_authority: DecisionAuthority
+    question_rules: tuple[QuestionRule, ...]
+    material_recurrence_reason_codes: tuple[str, ...]
+    quadrant_reason_mapping: Mapping[str, str]
+    forbidden_template_terms: tuple[str, ...] = (
+        "attractive",
+        "obvious",
+        "compelling",
+        "clearly should",
+    )
+
+
+@dataclass(frozen=True)
+class ReviewItemEvaluationInput:
+    review_context: ReviewContext
+    aue: AttentionUrgencyInput
+    aue_cluster: AUEClusterContextInput
+    management_situation: ManagementSituationInput
+    authority_context: DecisionAuthorityInput
+    equivalent_review_state: EquivalentReviewStateInput
+    governing_decision_state: GoverningDecisionStateInput
+    existing_evaluation_state: ExistingEvaluationStateInput
+    policy: ReviewItemPolicyConfig
+
+
+# ---------------------------------------------------------------------------
+# Output contracts
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class DecisionContextChangeEvaluation:
+    change: DecisionContextChange
+    primary_reason_code: str
+    reason_codes: tuple[str, ...]
+    current_context_fingerprint: str
+    prior_context_fingerprint: Optional[str]
+
+
+@dataclass(frozen=True)
+class DecisionRequirementEvaluation:
+    relationship_id: str
+    review_cycle_id: str
+    source_aue_id: str
+    source_cluster_id: str
+    economic_episode_key: str
+    decision_requirement: DecisionRequirement
+    decision_family: Optional[DecisionFamily]
+    question_type: Optional[ManagementQuestionType]
+    management_question_key: Optional[str]
+    management_question_text: Optional[str]
+    decision_scope_code: Optional[str]
+    required_authority: DecisionAuthority
+    actionability_status: ManagementActionability
+    resolution_state: QuestionResolutionState
+    question_specificity_pass: Optional[bool]
+    primary_reason_code: str
+    reason_codes: tuple[str, ...]
+    coverage_status: CoverageStatus
+    source_fingerprint: str
+    decision_requirement_fingerprint: str
+    policy_bundle_id: str
+    rule_version: str
+    config_version: str
+    test_only: bool
+
+
+@dataclass(frozen=True)
+class ReviewPromotionEvaluation:
+    relationship_id: str
+    review_cycle_id: str
+    source_aue_id: str
+    source_cluster_id: str
+    economic_episode_key: str
+    management_question_key: Optional[str]
+    decision_context_fingerprint: Optional[str]
+    promotion_result: ReviewPromotionResult
+    primary_reason_code: str
+    reason_codes: tuple[str, ...]
+    proposed_persistence_action: ReviewItemPersistenceAction
+    existing_review_item_id: Optional[str]
+    prior_review_item_id: Optional[str]
+    decision_requirement_fingerprint: str
+    promotion_fingerprint: str
+    downstream_state_fingerprint: str
+    policy_bundle_id: str
+    rule_version: str
+    config_version: str
+    test_only: bool
+
+
+@dataclass(frozen=True)
+class ReviewItemCandidate:
+    relationship_id: str
+    economic_episode_key: str
+    management_question_key: str
+    management_question_text: str
+    question_type: ManagementQuestionType
+    decision_family: DecisionFamily
+    decision_scope_code: str
+    creation_basis: CreationBasis
+    origin_aue_id: Optional[str]
+    origin_cluster_id: Optional[str]
+    origin_decision_context_fingerprint: Optional[str]
+    created_in_review_cycle_id: str
+    prior_review_item_id: Optional[str]
+    prior_relationship_type: Optional[PriorReviewRelationshipType]
+    lifecycle_status: ReviewItemLifecycle
+    validity_status: ReviewItemValidity
+    test_only: bool
+
+
+@dataclass(frozen=True)
+class ReviewItemEvaluationResult:
+    decision_requirement: DecisionRequirementEvaluation
+    promotion: ReviewPromotionEvaluation
+    decision_context_change: DecisionContextChangeEvaluation
+    candidate: Optional[ReviewItemCandidate]
+
+
+# ---------------------------------------------------------------------------
+# Default governed policy
+# ---------------------------------------------------------------------------
+
+
+def default_policy_config() -> ReviewItemPolicyConfig:
+    rules = (
+        QuestionRule(
+            ManagementQuestionType.PURSUE_OPPORTUNITY,
+            DecisionFamily.COMMERCIAL,
+            ("LENDING_WALLET_GAP", "LIQUIDITY_WALLET_GAP", "FINANCING_OPPORTUNITY"),
+            ("LENDING", "LIQUIDITY", "FINANCING"),
+            DecisionAuthority.REGIONAL_MANAGEMENT,
+            "Should management pursue the identified {subject}?",
+        ),
+        QuestionRule(
+            ManagementQuestionType.ALLOCATE_CAPACITY,
+            DecisionFamily.STRATEGIC_RESOURCE_ALLOCATION,
+            ("CAPACITY_ALLOCATION", "BALANCE_SHEET_ALLOCATION"),
+            ("BALANCE_SHEET", "CAPITAL", "LENDING_HOLD"),
+            DecisionAuthority.EXECUTIVE,
+            "Should management allocate additional {subject}?",
+        ),
+        QuestionRule(
+            ManagementQuestionType.CHANGE_COVERAGE,
+            DecisionFamily.RELATIONSHIP_COVERAGE,
+            ("COVERAGE_GAP", "COVERAGE_ENHANCEMENT"),
+            ("COVERAGE",),
+            DecisionAuthority.REGIONAL_MANAGEMENT,
+            "Should management change the coverage approach for {subject}?",
+        ),
+        QuestionRule(
+            ManagementQuestionType.ESCALATE_RISK,
+            DecisionFamily.RISK,
+            ("RISK_RELATIONSHIP_CONCERN", "CREDIT_RISK_CONCERN"),
+            ("RISK", "CREDIT"),
+            DecisionAuthority.REGIONAL_MANAGEMENT,
+            "Should management escalate the identified {subject}?",
+        ),
+        QuestionRule(
+            ManagementQuestionType.PROTECT_RELATIONSHIP,
+            DecisionFamily.RELATIONSHIP_COVERAGE,
+            ("RELATIONSHIP_RETENTION_RISK", "DEPOSIT_RETENTION_RISK"),
+            ("RELATIONSHIP", "DEPOSIT"),
+            DecisionAuthority.REGIONAL_MANAGEMENT,
+            "Should management take action to protect the relationship in response to {subject}?",
+        ),
+        QuestionRule(
+            ManagementQuestionType.REVIEW_STRATEGIC_INVESTMENT,
+            DecisionFamily.STRATEGIC_RESOURCE_ALLOCATION,
+            ("STRATEGIC_RELEVANCE", "STRATEGIC_INVESTMENT"),
+            ("RELATIONSHIP", "STRATEGIC"),
+            DecisionAuthority.EXECUTIVE,
+            "Should management increase strategic relationship investment in {subject}?",
+        ),
+        QuestionRule(
+            ManagementQuestionType.RESOLVE_EXCEPTION,
+            DecisionFamily.STRATEGIC_RESOURCE_ALLOCATION,
+            ("EXECUTION_EXCEPTION", "POLICY_EXCEPTION"),
+            ("EXCEPTION",),
+            DecisionAuthority.EXECUTIVE,
+            "What position should management take on the identified {subject}?",
+        ),
+        QuestionRule(
+            ManagementQuestionType.RECONSIDER_PRIOR_DECISION,
+            DecisionFamily.STRATEGIC_RESOURCE_ALLOCATION,
+            ("MATERIAL_DECISION_CHANGE",),
+            ("PRIOR_DECISION",),
+            DecisionAuthority.EXECUTIVE,
+            "Should management reconsider the prior decision in light of {subject}?",
+        ),
+    )
+    return ReviewItemPolicyConfig(
+        policy_bundle_id="E6_POLICY_1.0",
+        version="1.0",
+        eligible_aue_statuses=("PUBLISHED",),
+        authority_rank={
+            DecisionAuthority.RM.value: 10,
+            DecisionAuthority.TEAM_HEAD.value: 20,
+            DecisionAuthority.REGIONAL_MANAGEMENT.value: 30,
+            DecisionAuthority.EXECUTIVE.value: 40,
+            DecisionAuthority.UNKNOWN.value: -1,
+        },
+        review_forum_minimum_authority=DecisionAuthority.REGIONAL_MANAGEMENT,
+        question_rules=rules,
+        material_recurrence_reason_codes=(
+            "AUTHORITY_REQUIREMENT_CHANGED",
+            "CHOICE_SET_CHANGED",
+            "ACTIONABILITY_REOPENED",
+            "MATERIAL_CONTEXT_CODES_CHANGED",
+        ),
+        quadrant_reason_mapping={
+            Quadrant.ACT_NOW.value: "HIGH_ATTENTION_HIGH_URGENCY",
+            Quadrant.STRATEGIC_PRIORITY.value: "STRATEGIC_PRIORITY_CONTEXT",
+            Quadrant.URGENT_REVIEW.value: "TIME_SENSITIVE_REVIEW_CONTEXT",
+            Quadrant.MONITOR.value: "MONITOR_CONTEXT",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Canonicalization / fingerprint helpers
+# ---------------------------------------------------------------------------
+
+
+def _canonicalize(value: Any) -> Any:
+    # E.6 semantic collections are normalized here so harmless tuple ordering
+    # cannot break idempotency or create false source-state changes.
+    if isinstance(value, MaterialDecisionContextState):
+        return {
+            "required_authority": value.required_authority.value,
+            "choice_set_codes": sorted(set(value.choice_set_codes)),
+            "actionability": value.actionability.value,
+            "material_context_codes": sorted(set(value.material_context_codes)),
+        }
+    if isinstance(value, AUEClusterContextInput):
+        return {
+            "cluster_id": value.cluster_id,
+            "source_aue_id": value.source_aue_id,
+            "relationship_id": value.relationship_id,
+            "economic_episode_key": value.economic_episode_key,
+            "domain": value.domain,
+            "driver_codes": sorted(set(value.driver_codes)),
+            "source_object_ids": sorted(set(value.source_object_ids)),
+            "lineage_complete": value.lineage_complete,
+            "validity_status": value.validity_status.value,
+            "test_only": value.test_only,
+        }
+    if isinstance(value, ManagementSituationInput):
+        params = sorted(
+            (
+                {
+                    "code": p.code,
+                    "value": p.value,
+                    "source_object_id": p.source_object_id,
+                }
+                for p in value.template_parameters
+            ),
+            key=lambda x: (x["code"], x["source_object_id"], x["value"]),
+        )
+        return {
+            "economic_episode_key": value.economic_episode_key,
+            "source_cluster_id": value.source_cluster_id,
+            "domain": value.domain,
+            "primary_driver_code": value.primary_driver_code,
+            "countervailing_driver_codes": sorted(set(value.countervailing_driver_codes)),
+            "governed_question_type_hint": _canonicalize(value.governed_question_type_hint),
+            "decision_scope_code": value.decision_scope_code,
+            "question_subject_code": value.question_subject_code,
+            "question_subject_label": value.question_subject_label,
+            "template_parameters": params,
+            "meaningful_choice_exists": value.meaningful_choice_exists,
+            "choice_still_open": value.choice_still_open,
+            "actionability": value.actionability.value,
+            "executive_relevance": value.executive_relevance.value,
+            "choice_set_codes": sorted(set(value.choice_set_codes)),
+            "material_context_codes": sorted(set(value.material_context_codes)),
+            "source_object_ids": sorted(set(value.source_object_ids)),
+            "lineage_complete": value.lineage_complete,
+            "test_only": value.test_only,
+        }
+    if isinstance(value, QuestionRule):
+        return {
+            "question_type": value.question_type.value,
+            "decision_family": value.decision_family.value,
+            "primary_driver_codes": sorted(set(value.primary_driver_codes)),
+            "allowed_scope_codes": sorted(set(value.allowed_scope_codes)),
+            "required_authority": value.required_authority.value,
+            "template": value.template,
+            "required_template_parameters": sorted(set(value.required_template_parameters)),
+        }
+    if isinstance(value, ReviewItemPolicyConfig):
+        return {
+            "policy_bundle_id": value.policy_bundle_id,
+            "version": value.version,
+            "eligible_aue_statuses": sorted(set(value.eligible_aue_statuses)),
+            "authority_rank": _canonicalize(value.authority_rank),
+            "review_forum_minimum_authority": value.review_forum_minimum_authority.value,
+            "question_rules": sorted(
+                (_canonicalize(r) for r in value.question_rules),
+                key=lambda x: x["question_type"],
+            ),
+            "material_recurrence_reason_codes": sorted(set(value.material_recurrence_reason_codes)),
+            "quadrant_reason_mapping": _canonicalize(value.quadrant_reason_mapping),
+            "forbidden_template_terms": sorted(set(value.forbidden_template_terms)),
+        }
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if is_dataclass(value):
+        return {f.name: _canonicalize(getattr(value, f.name)) for f in fields(value)}
+    if isinstance(value, Mapping):
+        return {str(k): _canonicalize(value[k]) for k in sorted(value, key=lambda x: str(x))}
+    if isinstance(value, (set, frozenset)):
+        return sorted((_canonicalize(v) for v in value), key=lambda x: json.dumps(x, sort_keys=True))
+    if isinstance(value, tuple):
+        return [_canonicalize(v) for v in value]
+    if isinstance(value, list):
+        return [_canonicalize(v) for v in value]
+    return value
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(_canonicalize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def fingerprint(value: Any) -> str:
+    return sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _sorted_unique(values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(sorted(set(values)))
+
+
+def _nonblank(value: Optional[str]) -> bool:
+    return value is not None and bool(str(value).strip())
+
+
+def build_management_question_key(
+    relationship_id: str,
+    economic_episode_key: str,
+    question_type: ManagementQuestionType,
+    decision_scope_code: str,
+) -> str:
+    parts = (
+        relationship_id,
+        economic_episode_key,
+        question_type.value,
+        decision_scope_code,
+    )
+    return "|".join(quote(str(p), safe="") for p in parts)
+
+
+def build_material_context_state(
+    required_authority: DecisionAuthority,
+    situation: ManagementSituationInput,
+) -> MaterialDecisionContextState:
+    return MaterialDecisionContextState(
+        required_authority=required_authority,
+        choice_set_codes=_sorted_unique(situation.choice_set_codes),
+        actionability=situation.actionability,
+        material_context_codes=_sorted_unique(situation.material_context_codes),
+    )
+
+
+def build_full_source_state_fingerprint(inp: ReviewItemEvaluationInput) -> str:
+    return fingerprint(
+        {
+            "engine_version": ENGINE_VERSION,
+            "review_context": inp.review_context,
+            "aue": inp.aue,
+            "aue_cluster": inp.aue_cluster,
+            "management_situation": inp.management_situation,
+            "authority_context": inp.authority_context,
+            "governing_decision_state": inp.governing_decision_state,
+            "policy_bundle_id": inp.policy.policy_bundle_id,
+            "policy_version": inp.policy.version,
+            "policy_fingerprint": fingerprint(inp.policy),
+        }
+    )
+
+
+def build_downstream_state_fingerprint(
+    equivalent_review_state: EquivalentReviewStateInput,
+    governing_decision_state: GoverningDecisionStateInput,
+) -> str:
+    return fingerprint(
+        {
+            "active_equivalent_items": equivalent_review_state.active_equivalent_items,
+            "latest_terminal_equivalent_item": equivalent_review_state.latest_terminal_equivalent_item,
+            "governing_decision_state": governing_decision_state,
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Policy validation
+# ---------------------------------------------------------------------------
+
+
+def validate_policy(policy: ReviewItemPolicyConfig) -> None:
+    if not _nonblank(policy.policy_bundle_id):
+        raise ReviewItemPolicyConfigurationError("POLICY_BUNDLE_ID_MISSING")
+    if not _nonblank(policy.version):
+        raise ReviewItemPolicyConfigurationError("POLICY_VERSION_MISSING")
+    if not policy.eligible_aue_statuses:
+        raise ReviewItemPolicyConfigurationError("ELIGIBLE_AUE_STATUSES_EMPTY")
+    if len(set(policy.eligible_aue_statuses)) != len(policy.eligible_aue_statuses) or any(
+        not _nonblank(x) for x in policy.eligible_aue_statuses
+    ):
+        raise ReviewItemPolicyConfigurationError("ELIGIBLE_AUE_STATUSES_INVALID")
+
+    expected_authorities = {x.value for x in DecisionAuthority}
+    rank_keys = set(policy.authority_rank.keys())
+    if rank_keys != expected_authorities:
+        raise ReviewItemPolicyConfigurationError("AUTHORITY_RANK_INCOMPLETE")
+    if any(
+        not isinstance(v, int) or isinstance(v, bool)
+        for v in policy.authority_rank.values()
+    ):
+        raise ReviewItemPolicyConfigurationError("AUTHORITY_RANK_NOT_INTEGER")
+    rank_values = [policy.authority_rank[x.value] for x in DecisionAuthority if x != DecisionAuthority.UNKNOWN]
+    if len(set(rank_values)) != len(rank_values):
+        raise ReviewItemPolicyConfigurationError("AUTHORITY_RANK_DUPLICATED")
+    if policy.authority_rank[DecisionAuthority.UNKNOWN.value] >= 0:
+        raise ReviewItemPolicyConfigurationError("UNKNOWN_AUTHORITY_MUST_NOT_QUALIFY")
+    if policy.review_forum_minimum_authority == DecisionAuthority.UNKNOWN:
+        raise ReviewItemPolicyConfigurationError("REVIEW_FORUM_AUTHORITY_UNKNOWN")
+
+    seen_types: set[ManagementQuestionType] = set()
+    seen_drivers: set[str] = set()
+    formatter = Formatter()
+    forbidden = tuple(term.lower() for term in policy.forbidden_template_terms)
+
+    for rule in policy.question_rules:
+        if rule.question_type in seen_types:
+            raise ReviewItemPolicyConfigurationError("DUPLICATE_QUESTION_RULE")
+        seen_types.add(rule.question_type)
+        if rule.required_authority == DecisionAuthority.UNKNOWN:
+            raise ReviewItemPolicyConfigurationError("QUESTION_RULE_AUTHORITY_UNKNOWN")
+        if not isinstance(rule.question_type, ManagementQuestionType) or not isinstance(rule.decision_family, DecisionFamily):
+            raise ReviewItemPolicyConfigurationError("QUESTION_RULE_ENUM_INVALID")
+        if not rule.primary_driver_codes:
+            raise ReviewItemPolicyConfigurationError("QUESTION_RULE_DRIVER_EMPTY")
+        if not rule.allowed_scope_codes:
+            raise ReviewItemPolicyConfigurationError("QUESTION_RULE_SCOPE_EMPTY")
+        if len(set(rule.allowed_scope_codes)) != len(rule.allowed_scope_codes) or any(
+            not _nonblank(x) for x in rule.allowed_scope_codes
+        ):
+            raise ReviewItemPolicyConfigurationError("QUESTION_RULE_SCOPE_INVALID")
+        if len(set(rule.required_template_parameters)) != len(rule.required_template_parameters) or any(
+            not _nonblank(x) for x in rule.required_template_parameters
+        ):
+            raise ReviewItemPolicyConfigurationError("QUESTION_TEMPLATE_PARAMETERS_INVALID")
+        for driver in rule.primary_driver_codes:
+            if not _nonblank(driver):
+                raise ReviewItemPolicyConfigurationError("QUESTION_RULE_DRIVER_BLANK")
+            if driver in seen_drivers:
+                raise ReviewItemPolicyConfigurationError("AMBIGUOUS_DRIVER_MAPPING")
+            seen_drivers.add(driver)
+
+        if not _nonblank(rule.template) or "?" not in rule.template:
+            raise ReviewItemPolicyConfigurationError("QUESTION_TEMPLATE_INVALID")
+        lower_template = rule.template.lower()
+        if any(term in lower_template for term in forbidden):
+            raise ReviewItemPolicyConfigurationError("QUESTION_TEMPLATE_NOT_NEUTRAL")
+        placeholders = {name for _, name, _, _ in formatter.parse(rule.template) if name}
+        required = set(rule.required_template_parameters)
+        if placeholders != required:
+            raise ReviewItemPolicyConfigurationError("QUESTION_TEMPLATE_PLACEHOLDER_MISMATCH")
+
+    if seen_types != set(ManagementQuestionType):
+        raise ReviewItemPolicyConfigurationError("QUESTION_TYPE_COVERAGE_INCOMPLETE")
+
+    valid_quad_keys = {q.value for q in Quadrant}
+    if set(policy.quadrant_reason_mapping.keys()) != valid_quad_keys:
+        raise ReviewItemPolicyConfigurationError("QUADRANT_REASON_MAPPING_INCOMPLETE")
+    if any(not _nonblank(v) for v in policy.quadrant_reason_mapping.values()):
+        raise ReviewItemPolicyConfigurationError("QUADRANT_REASON_MAPPING_INVALID")
+
+    allowed_recurrence = {
+        "AUTHORITY_REQUIREMENT_CHANGED",
+        "CHOICE_SET_CHANGED",
+        "ACTIONABILITY_REOPENED",
+        "MATERIAL_CONTEXT_CODES_CHANGED",
+    }
+    if len(set(policy.material_recurrence_reason_codes)) != len(policy.material_recurrence_reason_codes) or any(
+        not _nonblank(x) for x in policy.material_recurrence_reason_codes
+    ):
+        raise ReviewItemPolicyConfigurationError("RECURRENCE_REASON_CODE_INVALID")
+    if not set(policy.material_recurrence_reason_codes).issubset(allowed_recurrence):
+        raise ReviewItemPolicyConfigurationError("RECURRENCE_REASON_CODE_UNGOVERNED")
+
+
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+
+def _require_enum(value: Any, enum_type: type[Enum], code: str, *, allow_none: bool = False) -> None:
+    if value is None and allow_none:
+        return
+    if not isinstance(value, enum_type):
+        raise ReviewItemInputValidationError(code)
+
+
+def _validate_review_item_snapshot(item: ExistingReviewItemSnapshot, expected_active: bool) -> None:
+    _require_enum(item.lifecycle_status, ReviewItemLifecycle, "REVIEW_ITEM_LIFECYCLE_ENUM_INVALID")
+    _require_enum(item.validity_status, ReviewItemValidity, "REVIEW_ITEM_VALIDITY_ENUM_INVALID")
+    required_strings = (
+        item.review_item_id,
+        item.relationship_id,
+        item.economic_episode_key,
+        item.management_question_key,
+    )
+    if not all(_nonblank(v) for v in required_strings):
+        raise ReviewItemInputValidationError("REVIEW_ITEM_SNAPSHOT_REQUIRED_FIELD_MISSING")
+    if expected_active and item.lifecycle_status != ReviewItemLifecycle.OPEN:
+        raise ReviewItemInputValidationError("ACTIVE_REVIEW_ITEM_NOT_OPEN")
+    if not expected_active and item.lifecycle_status == ReviewItemLifecycle.OPEN:
+        raise ReviewItemInputValidationError("TERMINAL_REVIEW_ITEM_IS_OPEN")
+
+
+def validate_input_contract(inp: ReviewItemEvaluationInput) -> None:
+    ctx = inp.review_context
+    aue = inp.aue
+    cluster = inp.aue_cluster
+    s = inp.management_situation
+
+    _require_enum(aue.quadrant, Quadrant, "AUE_QUADRANT_ENUM_INVALID", allow_none=True)
+    _require_enum(aue.quadrant_status, QuadrantStatus, "AUE_QUADRANT_STATUS_ENUM_INVALID")
+    _require_enum(aue.attention_coverage, CoverageStatus, "AUE_ATTENTION_COVERAGE_ENUM_INVALID")
+    _require_enum(aue.urgency_coverage, CoverageStatus, "AUE_URGENCY_COVERAGE_ENUM_INVALID")
+    _require_enum(aue.validity_status, AUEValidity, "AUE_VALIDITY_ENUM_INVALID")
+    _require_enum(cluster.validity_status, AUEClusterValidity, "AUE_CLUSTER_VALIDITY_ENUM_INVALID")
+    _require_enum(s.actionability, ManagementActionability, "ACTIONABILITY_ENUM_INVALID")
+    _require_enum(s.executive_relevance, ExecutiveRelevanceStatus, "EXECUTIVE_RELEVANCE_ENUM_INVALID")
+    _require_enum(s.governed_question_type_hint, ManagementQuestionType, "QUESTION_TYPE_HINT_ENUM_INVALID", allow_none=True)
+    _require_enum(inp.authority_context.governed_authority_override, DecisionAuthority, "AUTHORITY_OVERRIDE_ENUM_INVALID", allow_none=True)
+
+    required_strings = (
+        ctx.relationship_id,
+        ctx.review_cycle_id,
+        aue.evaluation_id,
+        aue.relationship_id,
+        aue.review_cycle_id,
+        aue.source_fingerprint,
+        cluster.cluster_id,
+        cluster.source_aue_id,
+        cluster.relationship_id,
+        cluster.economic_episode_key,
+        cluster.domain,
+        s.economic_episode_key,
+        s.source_cluster_id,
+        s.domain,
+        s.primary_driver_code,
+        s.decision_scope_code,
+        s.question_subject_code,
+        s.question_subject_label,
+    )
+    if not all(_nonblank(v) for v in required_strings):
+        raise ReviewItemInputValidationError("REQUIRED_FIELD_MISSING")
+    if aue.attention_rating not in AUE_RATING_VALUES or aue.urgency_rating not in AUE_RATING_VALUES:
+        raise ReviewItemInputValidationError("AUE_RATING_INVALID")
+    if not _nonblank(aue.current_status):
+        raise ReviewItemInputValidationError("AUE_CURRENT_STATUS_MISSING")
+    if aue.quadrant_status == QuadrantStatus.ASSIGNED:
+        if aue.quadrant is None:
+            raise ReviewItemInputValidationError("AUE_ASSIGNED_QUADRANT_MISSING")
+        if (
+            aue.attention_rating == "NOT_ASSESSED"
+            or aue.urgency_rating == "NOT_ASSESSED"
+            or aue.attention_coverage == CoverageStatus.NOT_ASSESSED
+            or aue.urgency_coverage == CoverageStatus.NOT_ASSESSED
+        ):
+            raise ReviewItemInputValidationError("AUE_ASSIGNED_WITH_UNRESOLVED_AXIS")
+    elif aue.quadrant is not None:
+        raise ReviewItemInputValidationError("AUE_NOT_ASSIGNED_WITH_QUADRANT")
+
+    if aue.quadrant_status == QuadrantStatus.ASSIGNED:
+        high = {"HIGH", "VERY_HIGH"}
+        lower = {"NONE", "LOW", "MODERATE"}
+        expected = {
+            Quadrant.ACT_NOW: aue.attention_rating in high and aue.urgency_rating in high,
+            Quadrant.STRATEGIC_PRIORITY: aue.attention_rating in high and aue.urgency_rating in lower,
+            Quadrant.URGENT_REVIEW: aue.attention_rating in lower and aue.urgency_rating in high,
+            Quadrant.MONITOR: aue.attention_rating in lower and aue.urgency_rating in lower,
+        }
+        if not expected.get(aue.quadrant, False):
+            raise ReviewItemInputValidationError("AUE_QUADRANT_RATING_CONTRADICTION")
+
+    if not cluster.driver_codes or len(set(cluster.driver_codes)) != len(cluster.driver_codes) or any(
+        not _nonblank(x) for x in cluster.driver_codes
+    ):
+        raise ReviewItemInputValidationError("AUE_CLUSTER_DRIVER_CODES_INVALID")
+    if not cluster.source_object_ids or len(set(cluster.source_object_ids)) != len(cluster.source_object_ids) or any(
+        not _nonblank(x) for x in cluster.source_object_ids
+    ):
+        raise ReviewItemInputValidationError("AUE_CLUSTER_SOURCE_OBJECTS_INVALID")
+    if not s.source_object_ids or len(set(s.source_object_ids)) != len(s.source_object_ids) or any(
+        not _nonblank(x) for x in s.source_object_ids
+    ):
+        raise ReviewItemInputValidationError("MANAGEMENT_SITUATION_SOURCE_OBJECTS_INVALID")
+
+    if aue.relationship_id != ctx.relationship_id:
+        raise ReviewItemInputValidationError("AUE_RELATIONSHIP_MISMATCH")
+    if aue.review_cycle_id != ctx.review_cycle_id:
+        raise ReviewItemInputValidationError("AUE_REVIEW_CYCLE_MISMATCH")
+    if cluster.source_aue_id != aue.evaluation_id:
+        raise ReviewItemInputValidationError("AUE_CLUSTER_SOURCE_MISMATCH")
+    if cluster.relationship_id != ctx.relationship_id:
+        raise ReviewItemInputValidationError("AUE_CLUSTER_RELATIONSHIP_MISMATCH")
+    if s.source_cluster_id != cluster.cluster_id:
+        raise ReviewItemInputValidationError("MANAGEMENT_SITUATION_CLUSTER_MISMATCH")
+    if s.economic_episode_key != cluster.economic_episode_key:
+        raise ReviewItemInputValidationError("ECONOMIC_EPISODE_MISMATCH")
+    if s.domain != cluster.domain:
+        raise ReviewItemInputValidationError("DOMAIN_MISMATCH")
+    if s.primary_driver_code not in set(cluster.driver_codes):
+        raise ReviewItemInputValidationError("PRIMARY_DRIVER_NOT_IN_AUE_CLUSTER")
+    if not set(s.source_object_ids).issubset(set(cluster.source_object_ids)):
+        raise ReviewItemInputValidationError("SITUATION_SOURCE_NOT_IN_AUE_CLUSTER")
+    if len(set(s.countervailing_driver_codes)) != len(s.countervailing_driver_codes) or any(
+        not _nonblank(x) for x in s.countervailing_driver_codes
+    ):
+        raise ReviewItemInputValidationError("COUNTERVAILING_DRIVER_CODES_INVALID")
+    if not set(s.countervailing_driver_codes).issubset(set(cluster.driver_codes)):
+        raise ReviewItemInputValidationError("COUNTERVAILING_DRIVER_NOT_IN_AUE_CLUSTER")
+    if s.primary_driver_code in set(s.countervailing_driver_codes):
+        raise ReviewItemInputValidationError("PRIMARY_DRIVER_CANNOT_BE_COUNTERVAILING")
+
+    if s.meaningful_choice_exists is False and s.choice_still_open is True:
+        raise ReviewItemInputValidationError("CHOICE_STATE_CONTRADICTION")
+    if s.actionability == ManagementActionability.NOT_ACTIONABLE and s.choice_still_open is True:
+        raise ReviewItemInputValidationError("ACTIONABILITY_CHOICE_CONTRADICTION")
+    if len(set(s.choice_set_codes)) != len(s.choice_set_codes):
+        raise ReviewItemInputValidationError("CHOICE_SET_DUPLICATED")
+    if any(not _nonblank(x) for x in s.choice_set_codes):
+        raise ReviewItemInputValidationError("CHOICE_SET_BLANK")
+    if s.meaningful_choice_exists is True and len(s.choice_set_codes) < 2:
+        raise ReviewItemInputValidationError("MEANINGFUL_CHOICE_REQUIRES_MULTIPLE_PATHS")
+    if len(set(s.material_context_codes)) != len(s.material_context_codes):
+        raise ReviewItemInputValidationError("MATERIAL_CONTEXT_CODE_DUPLICATED")
+    if any(not _nonblank(x) for x in s.material_context_codes):
+        raise ReviewItemInputValidationError("MATERIAL_CONTEXT_CODE_BLANK")
+
+    parameter_codes = [p.code for p in s.template_parameters]
+    if len(set(parameter_codes)) != len(parameter_codes):
+        raise ReviewItemInputValidationError("TEMPLATE_PARAMETER_DUPLICATED")
+    if any(not _nonblank(p.code) or not _nonblank(p.value) or not _nonblank(p.source_object_id) for p in s.template_parameters):
+        raise ReviewItemInputValidationError("TEMPLATE_PARAMETER_INVALID")
+    if any(p.source_object_id not in set(s.source_object_ids) for p in s.template_parameters):
+        raise ReviewItemInputValidationError("TEMPLATE_PARAMETER_SOURCE_NOT_GOVERNED")
+    subject_params = [p for p in s.template_parameters if p.code == "subject"]
+    if subject_params and subject_params[0].value != s.question_subject_label:
+        raise ReviewItemInputValidationError("QUESTION_SUBJECT_LABEL_PARAMETER_MISMATCH")
+
+    override = inp.authority_context.governed_authority_override
+    override_reason = inp.authority_context.override_reason_code
+    if override is not None and not _nonblank(override_reason):
+        raise ReviewItemInputValidationError("AUTHORITY_OVERRIDE_REASON_MISSING")
+    if override is None and override_reason is not None:
+        raise ReviewItemInputValidationError("AUTHORITY_OVERRIDE_REASON_WITHOUT_OVERRIDE")
+
+    active_items = inp.equivalent_review_state.active_equivalent_items
+    if len(active_items) > 1:
+        raise ReviewItemInvariantError("MULTIPLE_ACTIVE_EQUIVALENT_REVIEW_ITEMS")
+    for item in active_items:
+        _validate_review_item_snapshot(item, expected_active=True)
+    terminal = inp.equivalent_review_state.latest_terminal_equivalent_item
+    if terminal is not None:
+        _validate_review_item_snapshot(terminal, expected_active=False)
+    if active_items and terminal and active_items[0].review_item_id == terminal.review_item_id:
+        raise ReviewItemInputValidationError("ACTIVE_AND_TERMINAL_REVIEW_ITEM_SAME_ID")
+
+    gd = inp.governing_decision_state
+    if gd.decision_id is None:
+        if gd.management_question_key is not None or gd.resolution_effect is not None or gd.material_context_state is not None:
+            raise ReviewItemInputValidationError("DECISION_STATE_WITHOUT_DECISION_ID")
+    else:
+        if not _nonblank(gd.decision_id) or gd.resolution_effect is None or not _nonblank(gd.management_question_key):
+            raise ReviewItemInputValidationError("DECISION_STATE_INCOMPLETE")
+        _require_enum(gd.resolution_effect, QuestionResolutionEffect, "DECISION_RESOLUTION_EFFECT_ENUM_INVALID")
+
+    ev = inp.existing_evaluation_state
+    if ev.prior_proposed_persistence_action is not None:
+        _require_enum(ev.prior_proposed_persistence_action, ReviewItemPersistenceAction, "PRIOR_PERSISTENCE_ACTION_ENUM_INVALID")
+    promotion_state_values = (
+        ev.prior_promotion_fingerprint,
+        ev.prior_downstream_state_fingerprint,
+        ev.prior_resulting_review_item_id,
+        ev.prior_proposed_persistence_action,
+    )
+    if ev.prior_promotion_evaluation_id is None:
+        if any(v is not None for v in promotion_state_values):
+            raise ReviewItemInputValidationError("PRIOR_PROMOTION_STATE_WITHOUT_EVALUATION_ID")
+    else:
+        if not _nonblank(ev.prior_promotion_evaluation_id) or not _nonblank(ev.prior_promotion_fingerprint) or not _nonblank(ev.prior_downstream_state_fingerprint) or ev.prior_proposed_persistence_action is None:
+            raise ReviewItemInputValidationError("PRIOR_PROMOTION_STATE_INCOMPLETE")
+        if ev.prior_proposed_persistence_action in {
+            ReviewItemPersistenceAction.CREATE_NEW,
+            ReviewItemPersistenceAction.CREATE_RECURRENCE,
+            ReviewItemPersistenceAction.REUSE_EXISTING,
+        } and not _nonblank(ev.prior_resulting_review_item_id):
+            raise ReviewItemInvariantError("PRIOR_REVIEWITEM_WRITE_NOT_COMPLETED")
+        if ev.prior_proposed_persistence_action == ReviewItemPersistenceAction.NO_ACTION and ev.prior_resulting_review_item_id is not None:
+            raise ReviewItemInvariantError("NO_ACTION_WITH_RESULTING_REVIEW_ITEM")
+    if (ev.prior_decision_requirement_evaluation_id is None) != (ev.prior_decision_requirement_fingerprint is None):
+        raise ReviewItemInputValidationError("PRIOR_DRE_STATE_INCOMPLETE")
+
+    if inp.policy.policy_bundle_id != ctx.policy_bundle_id:
+        raise ReviewItemInputValidationError("POLICY_BUNDLE_REVIEW_CYCLE_MISMATCH")
+
+    upstream_test_flags = [
+        ctx.test_only,
+        aue.test_only,
+        cluster.test_only,
+        s.test_only,
+        inp.authority_context.test_only,
+        gd.test_only,
+    ]
+    upstream_test_flags.extend(item.test_only for item in active_items)
+    if terminal is not None:
+        upstream_test_flags.append(terminal.test_only)
+    if not ctx.test_only and any(upstream_test_flags[1:]):
+        raise ReviewItemInputValidationError("TEST_ONLY_SOURCE_IN_PRODUCTION_CONTEXT")
+
+
+# ---------------------------------------------------------------------------
+# Rule resolution helpers
+# ---------------------------------------------------------------------------
+
+
+def _question_rule_for_driver(policy: ReviewItemPolicyConfig, driver_code: str) -> Optional[QuestionRule]:
+    matches = [r for r in policy.question_rules if driver_code in r.primary_driver_codes]
+    if len(matches) > 1:
+        raise ReviewItemPolicyConfigurationError("AMBIGUOUS_DRIVER_MAPPING")
+    return matches[0] if matches else None
+
+
+def _resolve_question_rule(inp: ReviewItemEvaluationInput) -> Optional[QuestionRule]:
+    rule = _question_rule_for_driver(inp.policy, inp.management_situation.primary_driver_code)
+    hint = inp.management_situation.governed_question_type_hint
+    if rule is not None and hint is not None and hint != rule.question_type:
+        raise ReviewItemInputValidationError("GOVERNED_QUESTION_HINT_CONFLICT")
+    if rule is None:
+        return None
+    if inp.management_situation.decision_scope_code not in rule.allowed_scope_codes:
+        raise ReviewItemInputValidationError("DECISION_SCOPE_NOT_ALLOWED_FOR_QUESTION_TYPE")
+    return rule
+
+
+def _resolve_authority(
+    rule: QuestionRule,
+    authority_context: DecisionAuthorityInput,
+) -> DecisionAuthority:
+    if not authority_context.lineage_complete:
+        return DecisionAuthority.UNKNOWN
+    return authority_context.governed_authority_override or rule.required_authority
+
+
+def _authority_qualifies(policy: ReviewItemPolicyConfig, authority: DecisionAuthority) -> bool:
+    if authority == DecisionAuthority.UNKNOWN:
+        return False
+    minimum = policy.authority_rank[policy.review_forum_minimum_authority.value]
+    return policy.authority_rank[authority.value] >= minimum
+
+
+def _template_parameter_map(situation: ManagementSituationInput) -> dict[str, str]:
+    # Authoritative wording may use only explicitly governed parameters with
+    # source-object provenance; there is no free-text fallback.
+    return {p.code: p.value for p in situation.template_parameters}
+
+
+def _render_question(rule: QuestionRule, situation: ManagementSituationInput) -> str:
+    params = _template_parameter_map(situation)
+    missing = [p for p in rule.required_template_parameters if not _nonblank(params.get(p))]
+    if missing:
+        raise ReviewItemInputValidationError("QUESTION_TEMPLATE_PARAMETER_MISSING")
+    try:
+        text = rule.template.format(**params).strip()
+    except (KeyError, ValueError) as exc:
+        raise ReviewItemPolicyConfigurationError("QUESTION_TEMPLATE_RENDER_FAILED") from exc
+    if len(text) < 18 or not text.endswith("?"):
+        raise ReviewItemPolicyConfigurationError("QUESTION_TEMPLATE_NOT_SPECIFIC")
+    return text
+
+
+def _question_specificity_pass(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text.strip()).lower()
+    vague = {
+        "review relationship?",
+        "discuss relationship?",
+        "determine strategy?",
+        "what should management do?",
+    }
+    return len(normalized) >= 18 and normalized not in vague and normalized.endswith("?")
+
+
+def _question_neutrality_pass(text: str, policy: ReviewItemPolicyConfig) -> bool:
+    normalized = re.sub(r"\s+", " ", text.strip()).lower()
+    return not any(term.lower() in normalized for term in policy.forbidden_template_terms)
+
+
+def _coverage_status(inp: ReviewItemEvaluationInput) -> CoverageStatus:
+    decision_lineage_unresolved = (
+        inp.governing_decision_state.decision_id is not None
+        and not inp.governing_decision_state.lineage_complete
+    )
+    if (
+        inp.aue.attention_coverage == CoverageStatus.NOT_ASSESSED
+        or inp.aue.urgency_coverage == CoverageStatus.NOT_ASSESSED
+        or not inp.aue_cluster.lineage_complete
+        or not inp.management_situation.lineage_complete
+        or not inp.authority_context.lineage_complete
+        or inp.management_situation.meaningful_choice_exists is None
+        or inp.management_situation.choice_still_open is None
+        or inp.management_situation.actionability == ManagementActionability.NOT_ASSESSED
+        or decision_lineage_unresolved
+    ):
+        return CoverageStatus.NOT_ASSESSED
+    if (
+        inp.aue.attention_coverage == CoverageStatus.PARTIAL
+        or inp.aue.urgency_coverage == CoverageStatus.PARTIAL
+    ):
+        return CoverageStatus.PARTIAL
+    return CoverageStatus.COMPLETE
+
+
+def _output_test_only(inp: ReviewItemEvaluationInput) -> bool:
+    flags = [
+        inp.review_context.test_only,
+        inp.aue.test_only,
+        inp.aue_cluster.test_only,
+        inp.management_situation.test_only,
+        inp.authority_context.test_only,
+        inp.governing_decision_state.test_only,
+    ]
+    flags.extend(i.test_only for i in inp.equivalent_review_state.active_equivalent_items)
+    terminal = inp.equivalent_review_state.latest_terminal_equivalent_item
+    if terminal is not None:
+        flags.append(terminal.test_only)
+    return any(flags)
+
+
+def _decision_context_change(
+    current: MaterialDecisionContextState,
+    prior: Optional[MaterialDecisionContextState],
+    policy: ReviewItemPolicyConfig,
+) -> DecisionContextChangeEvaluation:
+    current_fp = fingerprint(current)
+    if prior is None:
+        return DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "PRIOR_DECISION_CONTEXT_UNAVAILABLE",
+            ("PRIOR_DECISION_CONTEXT_UNAVAILABLE",),
+            current_fp,
+            None,
+        )
+
+    if (
+        prior.required_authority == DecisionAuthority.UNKNOWN
+        or prior.actionability == ManagementActionability.NOT_ASSESSED
+        or len(_sorted_unique(prior.choice_set_codes)) < 2
+    ):
+        return DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "PRIOR_DECISION_CONTEXT_NOT_ASSESSED",
+            ("PRIOR_DECISION_CONTEXT_NOT_ASSESSED",),
+            current_fp,
+            fingerprint(prior),
+        )
+
+    reasons: list[str] = []
+    if current.required_authority != prior.required_authority:
+        reasons.append("AUTHORITY_REQUIREMENT_CHANGED")
+    if _sorted_unique(current.choice_set_codes) != _sorted_unique(prior.choice_set_codes):
+        reasons.append("CHOICE_SET_CHANGED")
+    if (
+        prior.actionability == ManagementActionability.NOT_ACTIONABLE
+        and current.actionability == ManagementActionability.ACTIONABLE
+    ):
+        reasons.append("ACTIONABILITY_REOPENED")
+    if _sorted_unique(current.material_context_codes) != _sorted_unique(prior.material_context_codes):
+        reasons.append("MATERIAL_CONTEXT_CODES_CHANGED")
+
+    governed_reasons = [r for r in reasons if r in set(policy.material_recurrence_reason_codes)]
+    if governed_reasons:
+        return DecisionContextChangeEvaluation(
+            DecisionContextChange.MATERIAL_CHANGE,
+            governed_reasons[0],
+            tuple(governed_reasons),
+            current_fp,
+            fingerprint(prior),
+        )
+    return DecisionContextChangeEvaluation(
+        DecisionContextChange.UNCHANGED,
+        "DECISION_CONTEXT_UNCHANGED",
+        ("DECISION_CONTEXT_UNCHANGED",),
+        current_fp,
+        fingerprint(prior),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Decision Requirement evaluation
+# ---------------------------------------------------------------------------
+
+
+def _dre_result(
+    inp: ReviewItemEvaluationInput,
+    *,
+    requirement: DecisionRequirement,
+    rule: Optional[QuestionRule],
+    question_key: Optional[str],
+    question_text: Optional[str],
+    authority: DecisionAuthority,
+    resolution_state: QuestionResolutionState,
+    specificity: Optional[bool],
+    primary_reason: str,
+    reason_codes: Sequence[str],
+    current_material_context: Optional[MaterialDecisionContextState],
+) -> DecisionRequirementEvaluation:
+    source_fp = build_full_source_state_fingerprint(inp)
+    payload = {
+        "review_cycle_id": inp.review_context.review_cycle_id,
+        "source_aue_id": inp.aue.evaluation_id,
+        "source_cluster_id": inp.aue_cluster.cluster_id,
+        "economic_episode_key": inp.management_situation.economic_episode_key,
+        "requirement": requirement.value,
+        "question_type": rule.question_type.value if rule else None,
+        "question_key": question_key,
+        "decision_scope_code": inp.management_situation.decision_scope_code if rule else None,
+        "required_authority": authority.value,
+        "resolution_state": resolution_state.value,
+        "current_material_context": current_material_context,
+        "source_fingerprint": source_fp,
+        "policy_bundle_id": inp.policy.policy_bundle_id,
+        "policy_version": inp.policy.version,
+        "rule_version": DECISION_REQUIREMENT_RULE_VERSION,
+    }
+    return DecisionRequirementEvaluation(
+        relationship_id=inp.review_context.relationship_id,
+        review_cycle_id=inp.review_context.review_cycle_id,
+        source_aue_id=inp.aue.evaluation_id,
+        source_cluster_id=inp.aue_cluster.cluster_id,
+        economic_episode_key=inp.management_situation.economic_episode_key,
+        decision_requirement=requirement,
+        decision_family=rule.decision_family if rule else None,
+        question_type=rule.question_type if rule else None,
+        management_question_key=question_key,
+        management_question_text=question_text,
+        decision_scope_code=inp.management_situation.decision_scope_code if rule else None,
+        required_authority=authority,
+        actionability_status=inp.management_situation.actionability,
+        resolution_state=resolution_state,
+        question_specificity_pass=specificity,
+        primary_reason_code=primary_reason,
+        reason_codes=tuple(reason_codes),
+        coverage_status=_coverage_status(inp),
+        source_fingerprint=source_fp,
+        decision_requirement_fingerprint=fingerprint(payload),
+        policy_bundle_id=inp.policy.policy_bundle_id,
+        rule_version=DECISION_REQUIREMENT_RULE_VERSION,
+        config_version=inp.policy.version,
+        test_only=_output_test_only(inp),
+    )
+
+
+def evaluate_decision_requirement(inp: ReviewItemEvaluationInput) -> tuple[DecisionRequirementEvaluation, Optional[QuestionRule], Optional[MaterialDecisionContextState], DecisionContextChangeEvaluation]:
+    validate_policy(inp.policy)
+    validate_input_contract(inp)
+
+    if inp.review_context.review_cycle_frozen:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=None,
+            question_key=None,
+            question_text=None,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=None,
+            primary_reason="REVIEW_CYCLE_NOT_EVALUABLE",
+            reason_codes=("REVIEW_CYCLE_NOT_EVALUABLE",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, None, None, cc
+
+    if inp.aue.validity_status != AUEValidity.VALID:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=None,
+            question_key=None,
+            question_text=None,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=None,
+            primary_reason="AUE_INVALIDATED",
+            reason_codes=("AUE_INVALIDATED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, None, None, cc
+
+    if inp.aue.current_status not in set(inp.policy.eligible_aue_statuses):
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=None,
+            question_key=None,
+            question_text=None,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=None,
+            primary_reason="AUE_NOT_CURRENT_AUTHORITATIVE",
+            reason_codes=("AUE_NOT_CURRENT_AUTHORITATIVE",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, None, None, cc
+
+    if inp.aue.quadrant_status != QuadrantStatus.ASSIGNED or inp.aue.quadrant is None:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=None,
+            question_key=None,
+            question_text=None,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=None,
+            primary_reason="AUE_QUADRANT_NOT_ASSIGNED",
+            reason_codes=("AUE_QUADRANT_NOT_ASSIGNED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, None, None, cc
+
+    if inp.aue_cluster.validity_status != AUEClusterValidity.VALID:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=None,
+            question_key=None,
+            question_text=None,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=None,
+            primary_reason="AUE_CLUSTER_INVALIDATED",
+            reason_codes=("AUE_CLUSTER_INVALIDATED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, None, None, cc
+
+    if not inp.aue_cluster.lineage_complete or not inp.management_situation.lineage_complete:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=None,
+            question_key=None,
+            question_text=None,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=None,
+            primary_reason="INCOMPLETE_ANALYTICAL_LINEAGE",
+            reason_codes=("INCOMPLETE_ANALYTICAL_LINEAGE",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, None, None, cc
+
+    rule = _resolve_question_rule(inp)
+    if rule is None:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=None,
+            question_key=None,
+            question_text=None,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=None,
+            primary_reason="QUESTION_TYPE_NOT_GOVERNED",
+            reason_codes=("QUESTION_TYPE_NOT_GOVERNED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, None, None, cc
+
+    question_key = build_management_question_key(
+        inp.review_context.relationship_id,
+        inp.management_situation.economic_episode_key,
+        rule.question_type,
+        inp.management_situation.decision_scope_code,
+    )
+
+    try:
+        question_text = _render_question(rule, inp.management_situation)
+    except ReviewItemInputValidationError:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=rule,
+            question_key=question_key,
+            question_text=None,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=False,
+            primary_reason="QUESTION_SUBJECT_NOT_GOVERNED",
+            reason_codes=("QUESTION_SUBJECT_NOT_GOVERNED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    specificity = _question_specificity_pass(question_text)
+    if not specificity:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=False,
+            primary_reason="QUESTION_NOT_SPECIFIC",
+            reason_codes=("QUESTION_NOT_SPECIFIC",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    if not _question_neutrality_pass(question_text, inp.policy):
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=True,
+            primary_reason="QUESTION_NOT_NEUTRAL",
+            reason_codes=("QUESTION_NOT_NEUTRAL",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    if inp.management_situation.meaningful_choice_exists is None:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=True,
+            primary_reason="MANAGEMENT_CHOICE_NOT_ASSESSED",
+            reason_codes=("MANAGEMENT_CHOICE_NOT_ASSESSED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    if inp.management_situation.meaningful_choice_exists is False:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_REQUIRED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NO_REMAINING_CHOICE,
+            specificity=True,
+            primary_reason="NO_GENUINE_MANAGEMENT_CHOICE",
+            reason_codes=("NO_GENUINE_MANAGEMENT_CHOICE",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    if inp.management_situation.choice_still_open is None:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=True,
+            primary_reason="CHOICE_OPEN_STATE_NOT_ASSESSED",
+            reason_codes=("CHOICE_OPEN_STATE_NOT_ASSESSED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    if inp.management_situation.choice_still_open is False:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_REQUIRED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NO_REMAINING_CHOICE,
+            specificity=True,
+            primary_reason="NO_REMAINING_MANAGEMENT_CHOICE",
+            reason_codes=("NO_REMAINING_MANAGEMENT_CHOICE",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    if inp.management_situation.actionability == ManagementActionability.NOT_ASSESSED:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=True,
+            primary_reason="ACTIONABILITY_NOT_ASSESSED",
+            reason_codes=("ACTIONABILITY_NOT_ASSESSED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    if inp.management_situation.actionability == ManagementActionability.NOT_ACTIONABLE:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_REQUIRED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NO_REMAINING_CHOICE,
+            specificity=True,
+            primary_reason="NO_REMAINING_MANAGEMENT_CHOICE",
+            reason_codes=("NO_REMAINING_MANAGEMENT_CHOICE",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    if not inp.authority_context.lineage_complete:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=DecisionAuthority.UNKNOWN,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=True,
+            primary_reason="DECISION_AUTHORITY_UNRESOLVED",
+            reason_codes=("DECISION_AUTHORITY_UNRESOLVED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    authority = _resolve_authority(rule, inp.authority_context)
+    if authority == DecisionAuthority.UNKNOWN:
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_ASSESSED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=authority,
+            resolution_state=QuestionResolutionState.NOT_ASSESSED,
+            specificity=True,
+            primary_reason="DECISION_AUTHORITY_UNRESOLVED",
+            reason_codes=("DECISION_AUTHORITY_UNRESOLVED",),
+            current_material_context=None,
+        )
+        cc = DecisionContextChangeEvaluation(
+            DecisionContextChange.NOT_ASSESSED,
+            "CURRENT_DECISION_CONTEXT_UNAVAILABLE",
+            ("CURRENT_DECISION_CONTEXT_UNAVAILABLE",),
+            fingerprint({"unavailable": True}),
+            None,
+        )
+        return dre, rule, None, cc
+
+    current_material_context = build_material_context_state(authority, inp.management_situation)
+
+    prior_context_for_change: Optional[MaterialDecisionContextState] = None
+    if inp.governing_decision_state.decision_id is not None:
+        prior_context_for_change = inp.governing_decision_state.material_context_state
+    elif inp.equivalent_review_state.latest_terminal_equivalent_item is not None:
+        prior_context_for_change = inp.equivalent_review_state.latest_terminal_equivalent_item.material_context_state
+    context_change = _decision_context_change(current_material_context, prior_context_for_change, inp.policy)
+
+    if not _authority_qualifies(inp.policy, authority):
+        dre = _dre_result(
+            inp,
+            requirement=DecisionRequirement.NOT_REQUIRED,
+            rule=rule,
+            question_key=question_key,
+            question_text=question_text,
+            authority=authority,
+            resolution_state=QuestionResolutionState.UNRESOLVED,
+            specificity=True,
+            primary_reason="DECISION_DELEGATED_BELOW_REVIEW_FORUM",
+            reason_codes=("DECISION_DELEGATED_BELOW_REVIEW_FORUM",),
+            current_material_context=current_material_context,
+        )
+        return dre, rule, current_material_context, context_change
+
+    gd = inp.governing_decision_state
+    if gd.decision_id is not None:
+        if not gd.lineage_complete:
+            dre = _dre_result(
+                inp,
+                requirement=DecisionRequirement.NOT_ASSESSED,
+                rule=rule,
+                question_key=question_key,
+                question_text=question_text,
+                authority=authority,
+                resolution_state=QuestionResolutionState.NOT_ASSESSED,
+                specificity=True,
+                primary_reason="GOVERNING_DECISION_STATE_UNRESOLVED",
+                reason_codes=("GOVERNING_DECISION_STATE_UNRESOLVED",),
+                current_material_context=current_material_context,
+            )
+            return dre, rule, current_material_context, context_change
+        if gd.management_question_key != question_key:
+            raise ReviewItemInputValidationError("GOVERNING_DECISION_QUESTION_MISMATCH")
+        if gd.resolution_effect == QuestionResolutionEffect.RESOLVES:
+            if context_change.change == DecisionContextChange.UNCHANGED:
+                dre = _dre_result(
+                    inp,
+                    requirement=DecisionRequirement.NOT_REQUIRED,
+                    rule=rule,
+                    question_key=question_key,
+                    question_text=question_text,
+                    authority=authority,
+                    resolution_state=QuestionResolutionState.ALREADY_DECIDED,
+                    specificity=True,
+                    primary_reason="CURRENT_QUESTION_ALREADY_DECIDED",
+                    reason_codes=("CURRENT_QUESTION_ALREADY_DECIDED",),
+                    current_material_context=current_material_context,
+                )
+                return dre, rule, current_material_context, context_change
+            if context_change.change == DecisionContextChange.NOT_ASSESSED:
+                dre = _dre_result(
+                    inp,
+                    requirement=DecisionRequirement.NOT_ASSESSED,
+                    rule=rule,
+                    question_key=question_key,
+                    question_text=question_text,
+                    authority=authority,
+                    resolution_state=QuestionResolutionState.NOT_ASSESSED,
+                    specificity=True,
+                    primary_reason="PRIOR_DECISION_CONTEXT_NOT_ASSESSED",
+                    reason_codes=("PRIOR_DECISION_CONTEXT_NOT_ASSESSED",),
+                    current_material_context=current_material_context,
+                )
+                return dre, rule, current_material_context, context_change
+        elif gd.resolution_effect == QuestionResolutionEffect.CREATES_SUCCESSOR_QUESTION:
+            dre = _dre_result(
+                inp,
+                requirement=DecisionRequirement.NOT_REQUIRED,
+                rule=rule,
+                question_key=question_key,
+                question_text=question_text,
+                authority=authority,
+                resolution_state=QuestionResolutionState.ALREADY_DECIDED,
+                specificity=True,
+                primary_reason="CURRENT_QUESTION_SUPERSEDED_BY_SUCCESSOR",
+                reason_codes=("CURRENT_QUESTION_SUPERSEDED_BY_SUCCESSOR",),
+                current_material_context=current_material_context,
+            )
+            return dre, rule, current_material_context, context_change
+
+    active_items = inp.equivalent_review_state.active_equivalent_items
+    resolution_state = (
+        QuestionResolutionState.ALREADY_UNDER_REVIEW
+        if active_items
+        else QuestionResolutionState.UNRESOLVED
+    )
+    reasons = ["EXECUTIVE_DECISION_REQUIRED"]
+    if inp.aue.quadrant is not None:
+        quad_reason = inp.policy.quadrant_reason_mapping.get(inp.aue.quadrant.value)
+        if quad_reason:
+            reasons.append(quad_reason)
+    if inp.management_situation.countervailing_driver_codes:
+        reasons.append("COUNTERVAILING_DRIVERS_PRESENT")
+
+    dre = _dre_result(
+        inp,
+        requirement=DecisionRequirement.REQUIRED,
+        rule=rule,
+        question_key=question_key,
+        question_text=question_text,
+        authority=authority,
+        resolution_state=resolution_state,
+        specificity=True,
+        primary_reason="EXECUTIVE_DECISION_REQUIRED",
+        reason_codes=tuple(reasons),
+        current_material_context=current_material_context,
+    )
+    return dre, rule, current_material_context, context_change
+
+
+# ---------------------------------------------------------------------------
+# Promotion / persistence action evaluation
+# ---------------------------------------------------------------------------
+
+
+def _promotion_fingerprint(
+    inp: ReviewItemEvaluationInput,
+    dre: DecisionRequirementEvaluation,
+    context_change: DecisionContextChangeEvaluation,
+) -> str:
+    return fingerprint(
+        {
+            "review_cycle_id": inp.review_context.review_cycle_id,
+            "decision_requirement_fingerprint": dre.decision_requirement_fingerprint,
+            "executive_relevance": inp.management_situation.executive_relevance,
+            "question_specificity_pass": dre.question_specificity_pass,
+            "context_change": context_change,
+            "policy_bundle_id": inp.policy.policy_bundle_id,
+            "policy_version": inp.policy.version,
+            "rule_version": PROMOTION_RULE_VERSION,
+        }
+    )
+
+
+def _validate_equivalent_state_identity(
+    inp: ReviewItemEvaluationInput,
+    question_key: str,
+) -> None:
+    rel = inp.review_context.relationship_id
+    episode = inp.management_situation.economic_episode_key
+    for item in inp.equivalent_review_state.active_equivalent_items:
+        if (
+            item.relationship_id != rel
+            or item.economic_episode_key != episode
+            or item.management_question_key != question_key
+        ):
+            raise ReviewItemInputValidationError("ACTIVE_EQUIVALENT_ITEM_IDENTITY_MISMATCH")
+    terminal = inp.equivalent_review_state.latest_terminal_equivalent_item
+    if terminal is not None and (
+        terminal.relationship_id != rel
+        or terminal.economic_episode_key != episode
+        or terminal.management_question_key != question_key
+    ):
+        raise ReviewItemInputValidationError("TERMINAL_EQUIVALENT_ITEM_IDENTITY_MISMATCH")
+
+
+def _select_persistence_action(
+    inp: ReviewItemEvaluationInput,
+    dre: DecisionRequirementEvaluation,
+    promotion_result: ReviewPromotionResult,
+    promotion_fp: str,
+    context_change: DecisionContextChangeEvaluation,
+    downstream_fp: str,
+) -> tuple[ReviewItemPersistenceAction, Optional[str], Optional[str], tuple[str, ...]]:
+    if promotion_result != ReviewPromotionResult.PROMOTE:
+        return ReviewItemPersistenceAction.NO_ACTION, None, None, ("NO_REVIEWITEM_WRITE",)
+
+    if dre.management_question_key is None:
+        raise ReviewItemInvariantError("PROMOTE_WITHOUT_MANAGEMENT_QUESTION_KEY")
+    _validate_equivalent_state_identity(inp, dre.management_question_key)
+
+    ev = inp.existing_evaluation_state
+    active_items = inp.equivalent_review_state.active_equivalent_items
+    terminal = inp.equivalent_review_state.latest_terminal_equivalent_item
+
+    if (
+        ev.prior_promotion_evaluation_id
+        and ev.prior_promotion_fingerprint == promotion_fp
+        and ev.prior_downstream_state_fingerprint == downstream_fp
+    ):
+        expected_review_item_id = ev.prior_resulting_review_item_id
+        current_active_id = active_items[0].review_item_id if active_items else None
+        if expected_review_item_id is None or expected_review_item_id == current_active_id:
+            return (
+                ReviewItemPersistenceAction.KEEP_EXISTING,
+                current_active_id,
+                terminal.review_item_id if terminal else None,
+                ("EXACT_PROMOTION_STATE_ALREADY_PROCESSED",),
+            )
+
+    if active_items:
+        active = active_items[0]
+        if active.validity_status != ReviewItemValidity.VALID:
+            raise ReviewItemInvariantError("ACTIVE_EQUIVALENT_REVIEW_ITEM_INVALIDATED")
+        return (
+            ReviewItemPersistenceAction.REUSE_EXISTING,
+            active.review_item_id,
+            terminal.review_item_id if terminal else None,
+            ("ACTIVE_EQUIVALENT_REVIEW_ITEM_REUSED",),
+        )
+
+    if terminal is not None:
+        if terminal.validity_status == ReviewItemValidity.INVALIDATED:
+            return (
+                ReviewItemPersistenceAction.NO_ACTION,
+                None,
+                terminal.review_item_id,
+                ("PRIOR_TERMINAL_REVIEW_ITEM_INVALIDATED_REQUIRES_REMEDIATION",),
+            )
+        if context_change.change == DecisionContextChange.MATERIAL_CHANGE:
+            return (
+                ReviewItemPersistenceAction.CREATE_RECURRENCE,
+                None,
+                terminal.review_item_id,
+                ("MATERIAL_DECISION_CONTEXT_RECURRENCE",) + context_change.reason_codes,
+            )
+        if context_change.change == DecisionContextChange.NOT_ASSESSED:
+            return (
+                ReviewItemPersistenceAction.NO_ACTION,
+                None,
+                terminal.review_item_id,
+                ("RECURRENCE_CONTEXT_NOT_ASSESSED",),
+            )
+        return (
+            ReviewItemPersistenceAction.NO_ACTION,
+            None,
+            terminal.review_item_id,
+            ("PRIOR_TERMINAL_QUESTION_CONTEXT_UNCHANGED",),
+        )
+
+    return (
+        ReviewItemPersistenceAction.CREATE_NEW,
+        None,
+        None,
+        ("NEW_UNRESOLVED_MANAGEMENT_QUESTION",),
+    )
+
+
+def evaluate_review_item_candidate(inp: ReviewItemEvaluationInput) -> ReviewItemEvaluationResult:
+    """Evaluate one governed candidate management situation deterministically."""
+    dre, rule, current_material_context, context_change = evaluate_decision_requirement(inp)
+
+    promotion_reasons: list[str] = []
+    if dre.decision_requirement == DecisionRequirement.NOT_ASSESSED:
+        promotion_result = ReviewPromotionResult.NOT_ASSESSED
+        promotion_reasons = [dre.primary_reason_code]
+    elif dre.decision_requirement == DecisionRequirement.NOT_REQUIRED:
+        promotion_result = ReviewPromotionResult.DO_NOT_PROMOTE
+        promotion_reasons = [dre.primary_reason_code]
+    else:
+        if inp.management_situation.executive_relevance == ExecutiveRelevanceStatus.NOT_ASSESSED:
+            promotion_result = ReviewPromotionResult.NOT_ASSESSED
+            promotion_reasons = ["EXECUTIVE_RELEVANCE_NOT_ASSESSED"]
+        elif inp.management_situation.executive_relevance == ExecutiveRelevanceStatus.NOT_ELIGIBLE:
+            promotion_result = ReviewPromotionResult.DO_NOT_PROMOTE
+            promotion_reasons = ["NOT_EXECUTIVE_RELEVANT"]
+        elif not dre.question_specificity_pass:
+            promotion_result = ReviewPromotionResult.NOT_ASSESSED
+            promotion_reasons = ["QUESTION_NOT_SPECIFIC"]
+        else:
+            promotion_result = ReviewPromotionResult.PROMOTE
+            promotion_reasons = ["EXECUTIVE_REVIEW_PROMOTION_ELIGIBLE"]
+            if inp.aue.quadrant is not None:
+                qr = inp.policy.quadrant_reason_mapping.get(inp.aue.quadrant.value)
+                if qr:
+                    promotion_reasons.append(qr)
+
+    promotion_fp = _promotion_fingerprint(inp, dre, context_change)
+    downstream_fp = build_downstream_state_fingerprint(
+        inp.equivalent_review_state,
+        inp.governing_decision_state,
+    )
+    action, existing_id, prior_id, action_reasons = _select_persistence_action(
+        inp,
+        dre,
+        promotion_result,
+        promotion_fp,
+        context_change,
+        downstream_fp,
+    )
+    all_promotion_reasons = tuple(promotion_reasons + list(action_reasons))
+
+    promotion = ReviewPromotionEvaluation(
+        relationship_id=inp.review_context.relationship_id,
+        review_cycle_id=inp.review_context.review_cycle_id,
+        source_aue_id=inp.aue.evaluation_id,
+        source_cluster_id=inp.aue_cluster.cluster_id,
+        economic_episode_key=inp.management_situation.economic_episode_key,
+        management_question_key=dre.management_question_key,
+        decision_context_fingerprint=(
+            fingerprint(current_material_context) if current_material_context is not None else None
+        ),
+        promotion_result=promotion_result,
+        primary_reason_code=promotion_reasons[0],
+        reason_codes=all_promotion_reasons,
+        proposed_persistence_action=action,
+        existing_review_item_id=existing_id,
+        prior_review_item_id=prior_id,
+        decision_requirement_fingerprint=dre.decision_requirement_fingerprint,
+        promotion_fingerprint=promotion_fp,
+        downstream_state_fingerprint=downstream_fp,
+        policy_bundle_id=inp.policy.policy_bundle_id,
+        rule_version=PROMOTION_RULE_VERSION,
+        config_version=inp.policy.version,
+        test_only=_output_test_only(inp),
+    )
+
+    candidate: Optional[ReviewItemCandidate] = None
+    if action in (
+        ReviewItemPersistenceAction.CREATE_NEW,
+        ReviewItemPersistenceAction.CREATE_RECURRENCE,
+    ):
+        if (
+            rule is None
+            or dre.management_question_key is None
+            or dre.management_question_text is None
+            or current_material_context is None
+        ):
+            raise ReviewItemInvariantError("CANDIDATE_REQUIRED_FIELDS_MISSING")
+        candidate = ReviewItemCandidate(
+            relationship_id=inp.review_context.relationship_id,
+            economic_episode_key=inp.management_situation.economic_episode_key,
+            management_question_key=dre.management_question_key,
+            management_question_text=dre.management_question_text,
+            question_type=rule.question_type,
+            decision_family=rule.decision_family,
+            decision_scope_code=inp.management_situation.decision_scope_code,
+            creation_basis=CreationBasis.SYSTEM_PROMOTION,
+            origin_aue_id=inp.aue.evaluation_id,
+            origin_cluster_id=inp.aue_cluster.cluster_id,
+            origin_decision_context_fingerprint=fingerprint(current_material_context),
+            created_in_review_cycle_id=inp.review_context.review_cycle_id,
+            prior_review_item_id=prior_id,
+            prior_relationship_type=(
+                PriorReviewRelationshipType.RECURRENCE
+                if action == ReviewItemPersistenceAction.CREATE_RECURRENCE
+                else None
+            ),
+            lifecycle_status=ReviewItemLifecycle.OPEN,
+            validity_status=ReviewItemValidity.VALID,
+            test_only=_output_test_only(inp),
+        )
+
+    if (candidate is not None) != (
+        action
+        in (
+            ReviewItemPersistenceAction.CREATE_NEW,
+            ReviewItemPersistenceAction.CREATE_RECURRENCE,
+        )
+    ):
+        raise ReviewItemInvariantError("REVIEWITEM_CANDIDATE_ACTION_INVARIANT_FAILED")
+
+    if promotion_result == ReviewPromotionResult.PROMOTE and dre.decision_requirement != DecisionRequirement.REQUIRED:
+        raise ReviewItemInvariantError("PROMOTE_WITHOUT_REQUIRED_DECISION")
+
+    return ReviewItemEvaluationResult(
+        decision_requirement=dre,
+        promotion=promotion,
+        decision_context_change=context_change,
+        candidate=candidate,
+    )
+
+
+def evaluate_review_item_candidates(
+    inputs: Sequence[ReviewItemEvaluationInput],
+) -> tuple[ReviewItemEvaluationResult, ...]:
+    """Evaluate 0..n governed candidate situations independently and deterministically."""
+    results = [evaluate_review_item_candidate(inp) for inp in inputs]
+    return tuple(results)
+
+
+# ---------------------------------------------------------------------------
+# Manual management initiation validator (separate from automatic promotion)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ManagementInitiatedReviewInput:
+    relationship_id: str
+    review_cycle_id: str
+    economic_episode_key: str
+    question_type: ManagementQuestionType
+    decision_family: DecisionFamily
+    decision_scope_code: str
+    management_question_key: str
+    management_question_text: str
+    management_initiator: str
+    management_reason: str
+    review_cycle_frozen: bool = False
+    policy_bundle_id: str = "E6_POLICY_1.0"
+    existing_active_equivalent_review_item_id: Optional[str] = None
+    test_only: bool = False
+
+
+def validate_management_initiated_review(
+    manual: ManagementInitiatedReviewInput,
+    policy: Optional[ReviewItemPolicyConfig] = None,
+) -> ReviewItemCandidate:
+    policy = policy or default_policy_config()
+    validate_policy(policy)
+    required = (
+        manual.relationship_id,
+        manual.review_cycle_id,
+        manual.economic_episode_key,
+        manual.decision_scope_code,
+        manual.management_question_key,
+        manual.management_question_text,
+        manual.management_initiator,
+        manual.management_reason,
+    )
+    if not all(_nonblank(v) for v in required):
+        raise ReviewItemInputValidationError("MANAGEMENT_INITIATED_REQUIRED_FIELD_MISSING")
+    if manual.review_cycle_frozen:
+        raise ReviewItemInputValidationError("MANAGEMENT_INITIATED_REVIEW_CYCLE_FROZEN")
+    if manual.policy_bundle_id != policy.policy_bundle_id:
+        raise ReviewItemInputValidationError("MANAGEMENT_INITIATED_POLICY_BUNDLE_MISMATCH")
+    _require_enum(manual.question_type, ManagementQuestionType, "MANAGEMENT_INITIATED_QUESTION_TYPE_ENUM_INVALID")
+    _require_enum(manual.decision_family, DecisionFamily, "MANAGEMENT_INITIATED_DECISION_FAMILY_ENUM_INVALID")
+    if manual.existing_active_equivalent_review_item_id:
+        raise ReviewItemInvariantError("MANAGEMENT_INITIATED_DUPLICATES_ACTIVE_REVIEW_ITEM")
+
+    rules = [r for r in policy.question_rules if r.question_type == manual.question_type]
+    if len(rules) != 1:
+        raise ReviewItemPolicyConfigurationError("MANAGEMENT_INITIATED_QUESTION_RULE_UNAVAILABLE")
+    rule = rules[0]
+    if manual.decision_family != rule.decision_family:
+        raise ReviewItemInputValidationError("MANAGEMENT_INITIATED_DECISION_FAMILY_MISMATCH")
+    if manual.decision_scope_code not in rule.allowed_scope_codes:
+        raise ReviewItemInputValidationError("MANAGEMENT_INITIATED_DECISION_SCOPE_NOT_ALLOWED")
+    expected_key = build_management_question_key(
+        manual.relationship_id,
+        manual.economic_episode_key,
+        manual.question_type,
+        manual.decision_scope_code,
+    )
+    if manual.management_question_key != expected_key:
+        raise ReviewItemInputValidationError("MANAGEMENT_INITIATED_QUESTION_KEY_MISMATCH")
+    if not _question_specificity_pass(manual.management_question_text):
+        raise ReviewItemInputValidationError("MANAGEMENT_INITIATED_QUESTION_NOT_SPECIFIC")
+    if not _question_neutrality_pass(manual.management_question_text, policy):
+        raise ReviewItemInputValidationError("MANAGEMENT_INITIATED_QUESTION_NOT_NEUTRAL")
+
+    return ReviewItemCandidate(
+        relationship_id=manual.relationship_id,
+        economic_episode_key=manual.economic_episode_key,
+        management_question_key=manual.management_question_key,
+        management_question_text=manual.management_question_text,
+        question_type=manual.question_type,
+        decision_family=manual.decision_family,
+        decision_scope_code=manual.decision_scope_code,
+        creation_basis=CreationBasis.MANAGEMENT_INITIATED,
+        origin_aue_id=None,
+        origin_cluster_id=None,
+        origin_decision_context_fingerprint=None,
+        created_in_review_cycle_id=manual.review_cycle_id,
+        prior_review_item_id=None,
+        prior_relationship_type=None,
+        lifecycle_status=ReviewItemLifecycle.OPEN,
+        validity_status=ReviewItemValidity.VALID,
+        test_only=manual.test_only,
+    )
+
+
+__all__ = [
+    # Errors
+    "ReviewItemEngineError",
+    "ReviewItemInputValidationError",
+    "ReviewItemPolicyConfigurationError",
+    "ReviewItemInvariantError",
+    # Enums
+    "DecisionRequirement",
+    "DecisionFamily",
+    "ManagementQuestionType",
+    "DecisionAuthority",
+    "ManagementActionability",
+    "QuestionResolutionState",
+    "ExecutiveRelevanceStatus",
+    "ReviewPromotionResult",
+    "ReviewItemPersistenceAction",
+    "ReviewItemLifecycle",
+    "ReviewItemValidity",
+    "QuestionResolutionEffect",
+    "DecisionContextChange",
+    "Quadrant",
+    "QuadrantStatus",
+    "CoverageStatus",
+    "AUEValidity",
+    "AUEClusterValidity",
+    "CreationBasis",
+    "PriorReviewRelationshipType",
+    # Inputs
+    "ReviewContext",
+    "AttentionUrgencyInput",
+    "AUEClusterContextInput",
+    "GovernedTemplateParameter",
+    "ManagementSituationInput",
+    "DecisionAuthorityInput",
+    "MaterialDecisionContextState",
+    "ExistingReviewItemSnapshot",
+    "EquivalentReviewStateInput",
+    "GoverningDecisionStateInput",
+    "ExistingEvaluationStateInput",
+    "QuestionRule",
+    "ReviewItemPolicyConfig",
+    "ReviewItemEvaluationInput",
+    "ManagementInitiatedReviewInput",
+    # Outputs
+    "DecisionContextChangeEvaluation",
+    "DecisionRequirementEvaluation",
+    "ReviewPromotionEvaluation",
+    "ReviewItemCandidate",
+    "ReviewItemEvaluationResult",
+    # Functions
+    "default_policy_config",
+    "validate_policy",
+    "validate_input_contract",
+    "canonical_json",
+    "fingerprint",
+    "build_management_question_key",
+    "build_material_context_state",
+    "build_full_source_state_fingerprint",
+    "build_downstream_state_fingerprint",
+    "evaluate_decision_requirement",
+    "evaluate_review_item_candidate",
+    "evaluate_review_item_candidates",
+    "validate_management_initiated_review",
+]
+'''
+_E6 = _e6_types.ModuleType('ecai_e67_embedded')
+_e6_sys.modules['ecai_e67_embedded'] = _E6
+exec(compile(_E6_ENGINE_SOURCE, '<ecai-e6.7-embedded>', 'exec'), _E6.__dict__)
+# END EMBEDDED LOCKED E.6.7 ENGINE
+
+# =============================================================================
+# STAGE 1-E.6.8C — REVIEWITEM PERSISTENCE FOUNDATION IMPLEMENTATION
+# =============================================================================
+
+E6_SCHEMA_VERSION = 3
+E6_REVIEW_AUTHORITY_MODE_DEFAULT = "LEGACY"
+E6_VALIDATION_COMPANY = "EC-AI E6 Validation Co"
+E6_VALIDATION_RELATIONSHIP_ID = "REL-EC-AI-E6-VALIDATION-CO"
+E6_REVIEW_SOURCE = "E6 Governed Review"
+E6_MANAGEMENT_SOURCE = "Management Initiated"
+
+
+def _db_stage1e6_jsonable(value):
+    """Canonical JSON-compatible representation without depending on E.6 engine imports."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _db_stage1e6_jsonable(v) for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        converted = [_db_stage1e6_jsonable(v) for v in value]
+        # Collections in governed engine snapshots are semantically unordered unless
+        # their contract explicitly carries order. Canonicalize safely for persistence.
+        try:
+            return sorted(converted, key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True, default=str))
+        except Exception:
+            return converted
+    try:
+        return _db_stage1e6_jsonable(asdict(value))
+    except Exception:
+        if hasattr(value, "__dict__"):
+            return _db_stage1e6_jsonable(vars(value))
+    return str(value)
+
+
+def _db_stage1e6_canonical_json(value) -> str:
+    return json.dumps(
+        _db_stage1e6_jsonable(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _db_stage1e6_hash(value) -> str:
+    return hashlib.sha256(_db_stage1e6_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _db_stage1e6_enum_value(value):
+    return value.value if isinstance(value, Enum) else value
+
+
+def _db_stage1e6_attr(obj, name: str, default=None):
+    return getattr(obj, name, default)
+
+
+def _db_stage1e6_add_column(conn: _DBConnection, table: str, name: str, ddl: str):
+    if conn.backend == "sqlite":
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    else:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {ddl}")
+
+
+def _db_stage1e6_metadata_upsert(conn: _DBConnection, key: str, value: str):
+    now = _db_now()
+    if conn.backend == "sqlite":
+        conn.execute(
+            """INSERT INTO ecai_system_metadata(metadata_key,metadata_value,updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(metadata_key) DO UPDATE SET metadata_value=excluded.metadata_value,updated_at=excluded.updated_at""",
+            (key, value, now),
+        )
+    else:
+        conn.execute(
+            """INSERT INTO ecai_system_metadata(metadata_key,metadata_value,updated_at)
+               VALUES (?,?,?)
+               ON CONFLICT(metadata_key) DO UPDATE SET metadata_value=EXCLUDED.metadata_value,updated_at=EXCLUDED.updated_at""",
+            (key, value, now),
+        )
+
+
+def _db_stage1e6_migrate_schema(conn: _DBConnection):
+    """Add the E.6 persistence foundation without switching Review authority.
+
+    Legacy Stage 1-D ReviewItems stay readable/writable by the existing application.
+    E.6 rows use a separate creation basis and child objects. No historical E.6
+    lineage is fabricated for legacy rows.
+    """
+    id_type = "INTEGER PRIMARY KEY AUTOINCREMENT" if conn.backend == "sqlite" else "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+    fk_type = "INTEGER" if conn.backend == "sqlite" else "BIGINT"
+    bool_type = "INTEGER NOT NULL DEFAULT 0" if conn.backend == "sqlite" else "SMALLINT NOT NULL DEFAULT 0"
+
+    # Existing ReviewItem evolves additively. The default is deliberately legacy
+    # so old code can continue inserting safely until the explicit E.6 cutover.
+    review_columns = [
+        ("creation_basis", "TEXT NOT NULL DEFAULT 'LEGACY_STAGE_1D'"),
+        ("economic_episode_key", "TEXT"),
+        ("management_question_key", "TEXT"),
+        ("question_type", "TEXT"),
+        ("decision_family", "TEXT"),
+        ("decision_scope_code", "TEXT"),
+        ("lifecycle_status", "TEXT"),
+        ("validity_status", "TEXT"),
+        ("origin_aue_id", "TEXT"),
+        ("origin_dre_id", "TEXT"),
+        ("origin_rpe_id", "TEXT"),
+        ("origin_decision_context_fingerprint", "TEXT"),
+        ("created_in_review_cycle_id", fk_type),
+        ("prior_review_item_id", "TEXT"),
+        ("prior_review_item_relationship_type", "TEXT"),
+        ("resolution_decision_id", "TEXT"),
+        ("resolution_reason", "TEXT"),
+        ("resolved_at", "TEXT"),
+        ("withdrawal_reason", "TEXT"),
+        ("withdrawn_at", "TEXT"),
+        ("invalidation_reason", "TEXT"),
+        ("invalidated_at", "TEXT"),
+        ("management_initiator", "TEXT"),
+        ("management_reason", "TEXT"),
+        ("test_only", bool_type),
+    ]
+    for name, ddl in review_columns:
+        _db_stage1e6_add_column(conn, "review_item", name, ddl)
+
+    _db_stage1e6_add_column(conn, "decision", "question_resolution_effect", "TEXT")
+    _db_stage1e6_add_column(conn, "decision", "decision_context_fingerprint", "TEXT")
+    _db_stage1e6_add_column(conn, "audit_event", "idempotency_key", "TEXT")
+
+    # Existing rows are explicitly legacy. No synthetic episode/question/AUE lineage.
+    conn.execute(
+        """UPDATE review_item
+           SET creation_basis='LEGACY_STAGE_1D'
+           WHERE creation_basis IS NULL OR TRIM(creation_basis)=''"""
+    )
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS ecai_public_id_counter (
+        prefix TEXT PRIMARY KEY,
+        next_value INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS review_item_policy_bundle (
+        id {id_type},
+        policy_bundle_id TEXT NOT NULL UNIQUE,
+        version TEXT NOT NULL,
+        config_json TEXT NOT NULL,
+        content_fingerprint TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS review_cycle_e6_policy (
+        id {id_type},
+        review_cycle_id {fk_type} NOT NULL REFERENCES review_cycle(id),
+        policy_bundle_db_id {fk_type} NOT NULL REFERENCES review_item_policy_bundle(id),
+        policy_bundle_id TEXT NOT NULL,
+        content_fingerprint TEXT NOT NULL,
+        bound_at TEXT NOT NULL,
+        frozen_at TEXT,
+        UNIQUE(review_cycle_id)
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS decision_requirement_evaluation (
+        id {id_type},
+        evaluation_id TEXT NOT NULL UNIQUE,
+        relationship_id {fk_type} NOT NULL REFERENCES relationship(id),
+        review_cycle_id {fk_type} NOT NULL REFERENCES review_cycle(id),
+        source_aue_id TEXT NOT NULL,
+        source_aue_cluster_id TEXT NOT NULL,
+        management_situation_key TEXT NOT NULL,
+        economic_episode_key TEXT NOT NULL,
+        decision_requirement TEXT NOT NULL,
+        decision_family TEXT,
+        question_type TEXT,
+        management_question_key TEXT,
+        management_question_text TEXT,
+        decision_scope_code TEXT,
+        required_authority TEXT NOT NULL,
+        actionability_status TEXT NOT NULL,
+        resolution_state TEXT NOT NULL,
+        decision_context_fingerprint TEXT,
+        full_source_state_fingerprint TEXT NOT NULL,
+        evaluation_fingerprint TEXT NOT NULL,
+        primary_reason_code TEXT NOT NULL,
+        reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        coverage_status TEXT NOT NULL,
+        rule_version TEXT NOT NULL,
+        config_version TEXT NOT NULL,
+        policy_bundle_id TEXT NOT NULL,
+        lifecycle_status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        published_at TEXT,
+        superseded_at TEXT,
+        invalidated_at TEXT,
+        invalidation_reason TEXT,
+        created_by TEXT NOT NULL,
+        test_only {bool_type}
+    )""")
+
+    # E.6.8D v3: persist the material decision-context ingredients needed
+    # to reconstruct equivalent ReviewItem / governing Decision state.
+    _db_stage1e6_add_column(conn, "decision_requirement_evaluation", "choice_set_codes_json", "TEXT NOT NULL DEFAULT '[]'")
+    _db_stage1e6_add_column(conn, "decision_requirement_evaluation", "material_context_codes_json", "TEXT NOT NULL DEFAULT '[]'")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS review_promotion_evaluation (
+        id {id_type},
+        promotion_evaluation_id TEXT NOT NULL UNIQUE,
+        decision_requirement_evaluation_db_id {fk_type} NOT NULL REFERENCES decision_requirement_evaluation(id),
+        decision_requirement_evaluation_id TEXT NOT NULL,
+        relationship_id {fk_type} NOT NULL REFERENCES relationship(id),
+        review_cycle_id {fk_type} NOT NULL REFERENCES review_cycle(id),
+        source_aue_id TEXT NOT NULL,
+        source_aue_cluster_id TEXT NOT NULL,
+        management_situation_key TEXT NOT NULL,
+        economic_episode_key TEXT NOT NULL,
+        management_question_key TEXT,
+        decision_context_fingerprint TEXT,
+        promotion_result TEXT NOT NULL,
+        primary_reason_code TEXT NOT NULL,
+        reason_codes_json TEXT NOT NULL DEFAULT '[]',
+        proposed_persistence_action TEXT NOT NULL,
+        existing_review_item_id TEXT,
+        prior_review_item_id TEXT,
+        decision_requirement_fingerprint TEXT NOT NULL,
+        promotion_fingerprint TEXT NOT NULL,
+        downstream_state_fingerprint TEXT NOT NULL,
+        persistence_action_fingerprint TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        rule_version TEXT NOT NULL,
+        config_version TEXT NOT NULL,
+        policy_bundle_id TEXT NOT NULL,
+        lifecycle_status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        published_at TEXT,
+        superseded_at TEXT,
+        invalidated_at TEXT,
+        invalidation_reason TEXT,
+        created_by TEXT NOT NULL,
+        test_only {bool_type}
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS review_promotion_application (
+        id {id_type},
+        application_id TEXT NOT NULL UNIQUE,
+        promotion_evaluation_db_id {fk_type} NOT NULL REFERENCES review_promotion_evaluation(id),
+        promotion_evaluation_id TEXT NOT NULL,
+        proposed_action TEXT NOT NULL,
+        actual_action TEXT NOT NULL,
+        review_item_id TEXT,
+        prior_review_item_id TEXT,
+        application_fingerprint TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        concurrency_resolution_code TEXT,
+        status TEXT NOT NULL,
+        test_only {bool_type},
+        created_at TEXT NOT NULL
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS review_item_question_revision (
+        id {id_type},
+        revision_id TEXT NOT NULL UNIQUE,
+        review_item_db_id {fk_type} NOT NULL REFERENCES review_item(id),
+        review_item_id TEXT NOT NULL,
+        revision_number INTEGER NOT NULL,
+        question_text TEXT NOT NULL,
+        revision_type TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        test_only {bool_type},
+        created_at TEXT NOT NULL,
+        UNIQUE(review_item_db_id,revision_number)
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS review_item_cycle_link (
+        id {id_type},
+        link_id TEXT NOT NULL UNIQUE,
+        review_item_db_id {fk_type} NOT NULL REFERENCES review_item(id),
+        review_item_id TEXT NOT NULL,
+        review_cycle_id {fk_type} NOT NULL REFERENCES review_cycle(id),
+        association_basis TEXT NOT NULL,
+        question_revision_db_id {fk_type} REFERENCES review_item_question_revision(id),
+        question_revision_id TEXT,
+        current_aue_id TEXT,
+        decision_requirement_evaluation_id TEXT,
+        promotion_evaluation_id TEXT,
+        source_state_fingerprint TEXT NOT NULL,
+        policy_bundle_id TEXT NOT NULL,
+        frozen_at TEXT,
+        test_only {bool_type},
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(review_item_db_id,review_cycle_id)
+    )""")
+
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS review_item_intelligence_link (
+        id {id_type},
+        link_id TEXT NOT NULL UNIQUE,
+        review_item_db_id {fk_type} NOT NULL REFERENCES review_item(id),
+        review_item_id TEXT NOT NULL,
+        source_object_type TEXT NOT NULL,
+        source_object_id TEXT NOT NULL,
+        link_role TEXT NOT NULL,
+        review_cycle_id {fk_type} REFERENCES review_cycle(id),
+        source_state_fingerprint TEXT NOT NULL,
+        test_only {bool_type},
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
+
+    # Explicit published-state/idempotency integrity. v2 deliberately removes
+    # `test_only` from DRE/RPE business uniqueness: validation must use the hidden
+    # validation relationship rather than coexist as a second truth for a real client.
+    for index_name in (
+        'ux_e6_dre_one_published','ux_e6_dre_active_fingerprint',
+        'ux_e6_rpe_one_published','ux_e6_rpe_active_idempotency',
+    ):
+        conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+    conn.execute(
+        """CREATE UNIQUE INDEX ux_e6_dre_one_published
+           ON decision_requirement_evaluation(relationship_id,review_cycle_id,management_situation_key)
+           WHERE lifecycle_status='PUBLISHED'"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX ux_e6_dre_active_fingerprint
+           ON decision_requirement_evaluation(relationship_id,review_cycle_id,management_situation_key,evaluation_fingerprint)
+           WHERE lifecycle_status IN ('VALIDATED','PUBLISHED')"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX ux_e6_rpe_one_published
+           ON review_promotion_evaluation(relationship_id,review_cycle_id,management_situation_key)
+           WHERE lifecycle_status='PUBLISHED'"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX ux_e6_rpe_active_idempotency
+           ON review_promotion_evaluation(relationship_id,review_cycle_id,management_situation_key,idempotency_key)
+           WHERE lifecycle_status IN ('VALIDATED','PUBLISHED')"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_review_item_e6_active_question
+           ON review_item(relationship_id,economic_episode_key,management_question_key)
+           WHERE lifecycle_status='OPEN' AND validity_status='VALID'
+             AND creation_basis IN ('SYSTEM_PROMOTION','MANAGEMENT_INITIATED')"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_review_item_e6_current_aue
+           ON review_item_intelligence_link(review_item_db_id)
+           WHERE link_role='CURRENT_CONTEXT' AND source_object_type='AUE'"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS ix_e6_dre_relationship_cycle
+           ON decision_requirement_evaluation(relationship_id,review_cycle_id,id DESC)"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS ix_e6_rpe_relationship_cycle
+           ON review_promotion_evaluation(relationship_id,review_cycle_id,id DESC)"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS ix_e6_rpa_promotion
+           ON review_promotion_application(promotion_evaluation_db_id,id DESC)"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS ix_e6_cycle_link_cycle
+           ON review_item_cycle_link(review_cycle_id,id DESC)"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS ix_e6_intelligence_link_review
+           ON review_item_intelligence_link(review_item_db_id,link_role,id DESC)"""
+    )
+    conn.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_event_idempotency
+           ON audit_event(idempotency_key)
+           WHERE idempotency_key IS NOT NULL"""
+    )
+    conn.execute(
+        """CREATE INDEX IF NOT EXISTS ix_e6_policy_content_fingerprint
+           ON review_item_policy_bundle(content_fingerprint)"""
+    )
+
+    # Freeze metadata follows the authoritative ReviewCycle state even when a
+    # legacy/future workflow closes the cycle outside the E.6 adapter. Historical
+    # cycle links remain immutable because all E.6 writers also lock/check the
+    # parent ReviewCycle in-transaction.
+    if conn.backend == "sqlite":
+        conn.execute(
+            """CREATE TRIGGER IF NOT EXISTS trg_e6_review_cycle_freeze
+               AFTER UPDATE OF status ON review_cycle
+               WHEN OLD.status='Active' AND NEW.status<>'Active'
+               BEGIN
+                 UPDATE review_item_cycle_link
+                    SET frozen_at=COALESCE(frozen_at,NEW.closed_at,datetime('now'))
+                  WHERE review_cycle_id=NEW.id AND frozen_at IS NULL;
+                 UPDATE review_cycle_e6_policy
+                    SET frozen_at=COALESCE(frozen_at,NEW.closed_at,datetime('now'))
+                  WHERE review_cycle_id=NEW.id AND frozen_at IS NULL;
+               END"""
+        )
+    else:
+        conn.execute(
+            """CREATE OR REPLACE FUNCTION ecai_e6_freeze_review_cycle_artifacts()
+               RETURNS trigger AS $$
+               BEGIN
+                 IF OLD.status='Active' AND NEW.status<>'Active' THEN
+                   UPDATE review_item_cycle_link
+                      SET frozen_at=COALESCE(frozen_at,NEW.closed_at,CURRENT_TIMESTAMP::text)
+                    WHERE review_cycle_id=NEW.id AND frozen_at IS NULL;
+                   UPDATE review_cycle_e6_policy
+                      SET frozen_at=COALESCE(frozen_at,NEW.closed_at,CURRENT_TIMESTAMP::text)
+                    WHERE review_cycle_id=NEW.id AND frozen_at IS NULL;
+                 END IF;
+                 RETURN NEW;
+               END;
+               $$ LANGUAGE plpgsql"""
+        )
+        conn.execute("DROP TRIGGER IF EXISTS trg_e6_review_cycle_freeze ON review_cycle")
+        conn.execute(
+            """CREATE TRIGGER trg_e6_review_cycle_freeze
+               AFTER UPDATE OF status ON review_cycle
+               FOR EACH ROW EXECUTE FUNCTION ecai_e6_freeze_review_cycle_artifacts()"""
+        )
+
+    # Schema/authority metadata are explicit rollback/cutover controls.
+    _db_stage1e6_metadata_upsert(conn, "E6_SCHEMA_VERSION", str(E6_SCHEMA_VERSION))
+    existing_mode = conn.execute(
+        "SELECT metadata_value FROM ecai_system_metadata WHERE metadata_key='REVIEW_ITEM_AUTHORITY_MODE'"
+    ).fetchone()
+    if existing_mode is None:
+        _db_stage1e6_metadata_upsert(conn, "REVIEW_ITEM_AUTHORITY_MODE", E6_REVIEW_AUTHORITY_MODE_DEFAULT)
+
+
+def _db_stage1e6_schema_ready(conn: _DBConnection | None = None) -> bool:
+    owns = conn is None
+    if owns:
+        conn = _db_connect()
+    try:
+        row = conn.execute(
+            "SELECT metadata_value FROM ecai_system_metadata WHERE metadata_key='E6_SCHEMA_VERSION'"
+        ).fetchone()
+        if not row or int(row[0]) < E6_SCHEMA_VERSION:
+            return False
+        mode = conn.execute(
+            "SELECT metadata_value FROM ecai_system_metadata WHERE metadata_key='REVIEW_ITEM_AUTHORITY_MODE'"
+        ).fetchone()
+        if not mode or str(mode[0]) not in ('LEGACY','E6'):
+            return False
+        # Metadata alone is insufficient: verify the critical tables/columns that
+        # an E.6 write needs. This catches partial/manual migrations safely.
+        for table in (
+            'review_item_policy_bundle','review_cycle_e6_policy',
+            'decision_requirement_evaluation','review_promotion_evaluation',
+            'review_promotion_application','review_item_question_revision',
+            'review_item_cycle_link','review_item_intelligence_link',
+            'ecai_public_id_counter',
+        ):
+            conn.execute(f"SELECT 1 FROM {table} WHERE 1=0")
+        conn.execute(
+            "SELECT creation_basis,economic_episode_key,management_question_key,lifecycle_status,validity_status,test_only "
+            "FROM review_item WHERE 1=0"
+        )
+        conn.execute(
+            "SELECT choice_set_codes_json,material_context_codes_json "
+            "FROM decision_requirement_evaluation WHERE 1=0"
+        )
+        return True
+    except Exception:
+        return False
+    finally:
+        if owns:
+            conn.close()
+
+
+def _db_stage1e6_review_authority_mode(conn: _DBConnection | None = None) -> str:
+    owns = conn is None
+    if owns:
+        conn = _db_connect()
+    try:
+        row = conn.execute(
+            "SELECT metadata_value FROM ecai_system_metadata WHERE metadata_key='REVIEW_ITEM_AUTHORITY_MODE'"
+        ).fetchone()
+        mode = str(row[0]) if row else E6_REVIEW_AUTHORITY_MODE_DEFAULT
+        if mode not in ('LEGACY','E6'):
+            raise RuntimeError(f"E6_INVALID_REVIEW_AUTHORITY_MODE:{mode}")
+        return mode
+    finally:
+        if owns:
+            conn.close()
+
+
+def _db_stage1e6_next_public_id(
+    conn: _DBConnection,
+    *,
+    prefix: str,
+    table: str,
+    column: str,
+    width: int = 4,
+) -> str:
+    """Concurrency-safe allocator that coexists with legacy `_db_next_id`.
+
+    During E.6 diagnostics the legacy ReviewItem creator is still authoritative for
+    normal relationships. Both allocators therefore share the exact same PostgreSQL
+    advisory lock namespace, and the counter is reconciled against the live table
+    before every allocation. This prevents a legacy REV insert from overtaking a
+    previously seeded E.6 counter. SQLite is serialized by BEGIN IMMEDIATE.
+    """
+    if conn.backend == 'postgresql':
+        lock_name = f"ecai-public-id:{table}:{column}:{prefix}"
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (lock_name,))
+
+    rows = conn.execute(
+        f"SELECT {column} FROM {table} WHERE {column} LIKE ?",
+        (f"{prefix}-%",),
+    ).fetchall()
+    highest = 0
+    for existing in rows:
+        match = re.match(rf"^{re.escape(prefix)}-(\d+)$", str(existing[0]))
+        if match:
+            highest = max(highest, int(match.group(1)))
+
+    counter = conn.execute(
+        "SELECT next_value FROM ecai_public_id_counter WHERE prefix=?",
+        (prefix,),
+    ).fetchone()
+    minimum_next = highest + 1
+    now = _db_now()
+    if counter is None:
+        if conn.backend == 'sqlite':
+            conn.execute(
+                "INSERT OR IGNORE INTO ecai_public_id_counter(prefix,next_value,updated_at) VALUES (?,?,?)",
+                (prefix, minimum_next, now),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO ecai_public_id_counter(prefix,next_value,updated_at)
+                   VALUES (?,?,?) ON CONFLICT(prefix) DO NOTHING""",
+                (prefix, minimum_next, now),
+            )
+
+    if conn.backend == 'postgresql':
+        row = conn.execute(
+            "SELECT next_value FROM ecai_public_id_counter WHERE prefix=? FOR UPDATE",
+            (prefix,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT next_value FROM ecai_public_id_counter WHERE prefix=?",
+            (prefix,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError(f"E6_PUBLIC_ID_COUNTER_NOT_INITIALIZED:{prefix}")
+
+    value = max(int(row[0]), minimum_next)
+    conn.execute(
+        "UPDATE ecai_public_id_counter SET next_value=?,updated_at=? WHERE prefix=?",
+        (value + 1, now, prefix),
+    )
+    return f"{prefix}-{value:0{width}d}"
+
+
+def _db_stage1e6_management_situation_key(inp) -> str:
+    """Stable candidate identity across successive AUE versions.
+
+    `cluster_id` is persisted lineage and changes when a new AUE is published, so it
+    must never define the management-situation identity. The key uses governed
+    semantic dimensions instead.
+    """
+    ctx = _db_stage1e6_attr(inp, 'review_context')
+    situation = _db_stage1e6_attr(inp, 'management_situation')
+    question_hint = _db_stage1e6_enum_value(
+        _db_stage1e6_attr(situation, 'governed_question_type_hint')
+    )
+    semantic_anchor = question_hint or f"DRIVER:{_db_stage1e6_attr(situation, 'primary_driver_code')}"
+    payload = {
+        'relationship_id': _db_stage1e6_attr(ctx, 'relationship_id'),
+        'economic_episode_key': _db_stage1e6_attr(situation, 'economic_episode_key'),
+        'domain': _db_stage1e6_attr(situation, 'domain'),
+        'semantic_anchor': semantic_anchor,
+        'decision_scope_code': _db_stage1e6_attr(situation, 'decision_scope_code'),
+    }
+    return 'MSK-' + _db_stage1e6_hash(payload)[:24].upper()
+
+
+
+def _db_stage1e6_validate_write_authority(conn: _DBConnection, *, relationship_public_id: str, output_test_only: bool):
+    """Keep legacy and E.6 automatic creators from owning the same business scope."""
+    mode = _db_stage1e6_review_authority_mode(conn)
+    if mode == 'LEGACY':
+        if relationship_public_id != E6_VALIDATION_RELATIONSHIP_ID or not output_test_only:
+            raise RuntimeError('E6_LEGACY_MODE_VALIDATION_SCOPE_ONLY')
+    elif mode == 'E6':
+        if relationship_public_id == E6_VALIDATION_RELATIONSHIP_ID and not output_test_only:
+            raise RuntimeError('E6_VALIDATION_RELATIONSHIP_MUST_REMAIN_TEST_ONLY')
+        if output_test_only and relationship_public_id != E6_VALIDATION_RELATIONSHIP_ID:
+            raise RuntimeError('E6_TEST_OUTPUT_REQUIRES_VALIDATION_RELATIONSHIP')
+
+
+def _db_stage1e6_validate_result_contract(inp, result):
+    """Persistence-level sanity checks for the locked E.6.7 engine contract."""
+    ctx = inp.review_context
+    dre = result.decision_requirement
+    promotion = result.promotion
+    candidate = result.candidate
+
+    if dre.relationship_id != ctx.relationship_id or promotion.relationship_id != ctx.relationship_id:
+        raise RuntimeError('E6_RESULT_RELATIONSHIP_MISMATCH')
+    if dre.review_cycle_id != ctx.review_cycle_id or promotion.review_cycle_id != ctx.review_cycle_id:
+        raise RuntimeError('E6_RESULT_REVIEW_CYCLE_MISMATCH')
+    if dre.source_aue_id != promotion.source_aue_id or dre.source_cluster_id != promotion.source_cluster_id:
+        raise RuntimeError('E6_RESULT_SOURCE_LINEAGE_MISMATCH')
+    if dre.economic_episode_key != promotion.economic_episode_key:
+        raise RuntimeError('E6_RESULT_EPISODE_MISMATCH')
+    if dre.policy_bundle_id != promotion.policy_bundle_id or dre.policy_bundle_id != inp.policy.policy_bundle_id:
+        raise RuntimeError('E6_RESULT_POLICY_BUNDLE_MISMATCH')
+    if bool(dre.test_only) != bool(promotion.test_only):
+        raise RuntimeError('E6_RESULT_TEST_ISOLATION_MISMATCH')
+
+    proposed = str(_db_stage1e6_enum_value(promotion.proposed_persistence_action))
+    needs_candidate = proposed in ('CREATE_NEW','CREATE_RECURRENCE')
+    if needs_candidate != (candidate is not None):
+        raise RuntimeError('E6_RESULT_CANDIDATE_ACTION_CONTRADICTION')
+    if candidate is not None:
+        if str(_db_stage1e6_enum_value(candidate.creation_basis)) != 'SYSTEM_PROMOTION':
+            raise RuntimeError('E6_AUTOMATIC_PATH_REQUIRES_SYSTEM_PROMOTION')
+        if candidate.relationship_id != ctx.relationship_id:
+            raise RuntimeError('E6_CANDIDATE_RELATIONSHIP_MISMATCH')
+        if candidate.created_in_review_cycle_id != ctx.review_cycle_id:
+            raise RuntimeError('E6_CANDIDATE_REVIEW_CYCLE_MISMATCH')
+        if candidate.economic_episode_key != promotion.economic_episode_key:
+            raise RuntimeError('E6_CANDIDATE_EPISODE_MISMATCH')
+        if candidate.management_question_key != promotion.management_question_key:
+            raise RuntimeError('E6_CANDIDATE_QUESTION_KEY_MISMATCH')
+        if candidate.origin_aue_id != promotion.source_aue_id or candidate.origin_cluster_id != promotion.source_cluster_id:
+            raise RuntimeError('E6_CANDIDATE_ORIGIN_LINEAGE_MISMATCH')
+        if bool(candidate.test_only) != bool(promotion.test_only):
+            raise RuntimeError('E6_CANDIDATE_TEST_ISOLATION_MISMATCH')
+        if proposed == 'CREATE_RECURRENCE':
+            if not candidate.prior_review_item_id or str(_db_stage1e6_enum_value(candidate.prior_relationship_type)) != 'RECURRENCE':
+                raise RuntimeError('E6_RECURRENCE_CANDIDATE_LINEAGE_INVALID')
+        elif candidate.prior_review_item_id is not None:
+            raise RuntimeError('E6_CREATE_NEW_CANNOT_REFERENCE_PRIOR_REVIEWITEM')
+
+
+def _db_stage1e6_validate_aue_lineage(conn: _DBConnection, *, inp, rel, cycle):
+    """Verify that the engine result points to the actual persisted current AUE tree."""
+    aue_id = str(_db_stage1e6_attr(inp.aue, 'evaluation_id') or '')
+    cluster_id = str(_db_stage1e6_attr(inp.aue_cluster, 'cluster_id') or '')
+    if not aue_id or not cluster_id:
+        raise RuntimeError('E6_AUE_LINEAGE_ID_MISSING')
+    aue = conn.execute(
+        """SELECT * FROM attention_urgency_evaluation
+           WHERE evaluation_id=?""",
+        (aue_id,),
+    ).fetchone()
+    if aue is None:
+        raise RuntimeError('E6_SOURCE_AUE_NOT_PERSISTED')
+    if aue['relationship_id'] != rel['id'] or aue['review_cycle_id'] != cycle['id']:
+        raise RuntimeError('E6_SOURCE_AUE_CONTEXT_MISMATCH')
+    if aue['status'] != 'PUBLISHED':
+        raise RuntimeError('E6_SOURCE_AUE_NOT_CURRENT_PUBLISHED')
+    if str(aue['source_fingerprint']) != str(_db_stage1e6_attr(inp.aue, 'source_fingerprint')):
+        raise RuntimeError('E6_SOURCE_AUE_FINGERPRINT_MISMATCH')
+    if int(bool(aue['test_only'])) != int(bool(_db_stage1e6_attr(inp.aue, 'test_only', False))):
+        raise RuntimeError('E6_SOURCE_AUE_TEST_ISOLATION_MISMATCH')
+
+    cluster = conn.execute(
+        """SELECT * FROM attention_urgency_cluster
+           WHERE cluster_evaluation_id=?""",
+        (cluster_id,),
+    ).fetchone()
+    if cluster is None:
+        raise RuntimeError('E6_SOURCE_AUE_CLUSTER_NOT_PERSISTED')
+    if cluster['evaluation_db_id'] != aue['id'] or cluster['evaluation_id'] != aue_id:
+        raise RuntimeError('E6_SOURCE_AUE_CLUSTER_PARENT_MISMATCH')
+    if str(cluster['economic_episode_key']) != str(_db_stage1e6_attr(inp.management_situation, 'economic_episode_key')):
+        raise RuntimeError('E6_SOURCE_AUE_CLUSTER_EPISODE_MISMATCH')
+    if str(cluster['domain']) != str(_db_stage1e6_attr(inp.management_situation, 'domain')):
+        raise RuntimeError('E6_SOURCE_AUE_CLUSTER_DOMAIN_MISMATCH')
+    if int(bool(cluster['test_only'])) != int(bool(_db_stage1e6_attr(inp.aue_cluster, 'test_only', False))):
+        raise RuntimeError('E6_SOURCE_AUE_CLUSTER_TEST_ISOLATION_MISMATCH')
+    return aue, cluster
+
+
+def _db_stage1e6_policy_payload(policy) -> tuple[str, str, str]:
+    snapshot = _db_stage1e6_canonical_json(policy)
+    content_fingerprint = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+    policy_bundle_id = str(_db_stage1e6_attr(policy, "policy_bundle_id") or "")
+    if not policy_bundle_id:
+        raise ValueError("E6_POLICY_BUNDLE_ID_MISSING")
+    version = str(_db_stage1e6_attr(policy, "version") or "")
+    if not version:
+        raise ValueError("E6_POLICY_VERSION_MISSING")
+    return snapshot, content_fingerprint, version
+
+
+def _db_stage1e6_ensure_policy_binding(conn: _DBConnection, cycle, policy):
+    snapshot, content_fingerprint, version = _db_stage1e6_policy_payload(policy)
+    bundle_id = str(_db_stage1e6_attr(policy, "policy_bundle_id"))
+    now = _db_now()
+    row = conn.execute(
+        "SELECT * FROM review_item_policy_bundle WHERE policy_bundle_id=?",
+        (bundle_id,),
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            """INSERT INTO review_item_policy_bundle(
+                   policy_bundle_id,version,config_json,content_fingerprint,status,created_at,updated_at
+               ) VALUES (?,?,?,?,?,?,?)""",
+            (bundle_id, version, snapshot, content_fingerprint, "ACTIVE", now, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM review_item_policy_bundle WHERE policy_bundle_id=?",
+            (bundle_id,),
+        ).fetchone()
+    elif row["content_fingerprint"] != content_fingerprint:
+        raise ValueError("E6_POLICY_CONTENT_MISMATCH_FOR_BUNDLE_ID")
+
+    binding = conn.execute(
+        "SELECT * FROM review_cycle_e6_policy WHERE review_cycle_id=?",
+        (cycle["id"],),
+    ).fetchone()
+    if binding is None:
+        conn.execute(
+            """INSERT INTO review_cycle_e6_policy(
+                   review_cycle_id,policy_bundle_db_id,policy_bundle_id,content_fingerprint,bound_at,frozen_at
+               ) VALUES (?,?,?,?,?,?)""",
+            (cycle["id"], row["id"], bundle_id, content_fingerprint, now, None),
+        )
+    elif binding["policy_bundle_id"] != bundle_id or binding["content_fingerprint"] != content_fingerprint:
+        raise ValueError("E6_POLICY_BUNDLE_MISMATCH_WITH_REVIEW_CYCLE")
+    elif binding["frozen_at"] is not None:
+        raise ValueError("E6_REVIEW_CYCLE_POLICY_BINDING_FROZEN")
+    return row
+
+
+def _db_stage1e6_lock_context(conn: _DBConnection, relationship_public_id: str, review_cycle_public_id: str):
+    if conn.backend == "postgresql":
+        rel = conn.execute(
+            "SELECT * FROM relationship WHERE relationship_id=? FOR UPDATE",
+            (relationship_public_id,),
+        ).fetchone()
+        cycle = conn.execute(
+            "SELECT * FROM review_cycle WHERE review_cycle_id=? FOR UPDATE",
+            (review_cycle_public_id,),
+        ).fetchone()
+    else:
+        rel = conn.execute(
+            "SELECT * FROM relationship WHERE relationship_id=?",
+            (relationship_public_id,),
+        ).fetchone()
+        cycle = conn.execute(
+            "SELECT * FROM review_cycle WHERE review_cycle_id=?",
+            (review_cycle_public_id,),
+        ).fetchone()
+    if rel is None:
+        raise ValueError(f"E6_RELATIONSHIP_NOT_REGISTERED:{relationship_public_id}")
+    if cycle is None:
+        raise ValueError(f"E6_REVIEW_CYCLE_NOT_REGISTERED:{review_cycle_public_id}")
+    if cycle["status"] != "Active":
+        raise ValueError("E6_REVIEW_CYCLE_FROZEN_AT_WRITE_LAYER")
+    return rel, cycle
+
+
+def _db_stage1e6_audit(
+    conn: _DBConnection,
+    *,
+    entity_type: str,
+    entity_id: str,
+    relationship_id: int | None,
+    event_type: str,
+    actor: str,
+    state_fingerprint: str,
+    payload: dict | None = None,
+):
+    idem = _db_stage1e6_hash({
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "event_type": event_type,
+        "state_fingerprint": state_fingerprint,
+    })
+    return _db_append_audit(
+        conn,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        relationship_id=relationship_id,
+        event_type=event_type,
+        actor=actor,
+        payload=payload,
+        idempotency_key=idem,
+    )
+
+
+def _db_stage1e6_persistence_action_fingerprint(promotion) -> str:
+    return _db_stage1e6_hash({
+        "promotion_fingerprint": _db_stage1e6_attr(promotion, "promotion_fingerprint"),
+        "downstream_state_fingerprint": _db_stage1e6_attr(promotion, "downstream_state_fingerprint"),
+        "proposed_persistence_action": _db_stage1e6_enum_value(
+            _db_stage1e6_attr(promotion, "proposed_persistence_action")
+        ),
+    })
+
+
+def _db_stage1e6_persist_dre(conn, inp, result, rel, cycle, actor: str):
+    dre = result.decision_requirement
+    situation_key = _db_stage1e6_management_situation_key(inp)
+    current = conn.execute(
+        """SELECT * FROM decision_requirement_evaluation
+           WHERE relationship_id=? AND review_cycle_id=? AND management_situation_key=?
+             AND lifecycle_status='PUBLISHED'
+           ORDER BY id DESC LIMIT 1""",
+        (rel["id"], cycle["id"], situation_key),
+    ).fetchone()
+    if current is not None and int(bool(current["test_only"])) != int(bool(dre.test_only)):
+        raise RuntimeError("E6_DRE_TEST_ISOLATION_CONFLICT")
+    if current is not None and current["evaluation_fingerprint"] == dre.decision_requirement_fingerprint:
+        return current, False
+
+    now = _db_now()
+    evaluation_id = _db_stage1e6_next_public_id(
+        conn, prefix="DRE", table="decision_requirement_evaluation", column="evaluation_id", width=4
+    )
+    context_fp = result.decision_context_change.current_context_fingerprint
+    conn.execute(
+        """INSERT INTO decision_requirement_evaluation(
+               evaluation_id,relationship_id,review_cycle_id,source_aue_id,source_aue_cluster_id,
+               management_situation_key,economic_episode_key,decision_requirement,decision_family,
+               question_type,management_question_key,management_question_text,decision_scope_code,
+               required_authority,actionability_status,resolution_state,decision_context_fingerprint,
+               choice_set_codes_json,material_context_codes_json,
+               full_source_state_fingerprint,evaluation_fingerprint,primary_reason_code,reason_codes_json,
+               coverage_status,rule_version,config_version,policy_bundle_id,lifecycle_status,
+               created_at,published_at,created_by,test_only
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            evaluation_id, rel["id"], cycle["id"], dre.source_aue_id, dre.source_cluster_id,
+            situation_key, dre.economic_episode_key, _db_stage1e6_enum_value(dre.decision_requirement),
+            _db_stage1e6_enum_value(dre.decision_family), _db_stage1e6_enum_value(dre.question_type),
+            dre.management_question_key, dre.management_question_text, dre.decision_scope_code,
+            _db_stage1e6_enum_value(dre.required_authority), _db_stage1e6_enum_value(dre.actionability_status),
+            _db_stage1e6_enum_value(dre.resolution_state), context_fp,
+            json.dumps(list(inp.management_situation.choice_set_codes), ensure_ascii=False),
+            json.dumps(list(inp.management_situation.material_context_codes), ensure_ascii=False),
+            dre.source_fingerprint, dre.decision_requirement_fingerprint, dre.primary_reason_code,
+            json.dumps(list(dre.reason_codes), ensure_ascii=False), _db_stage1e6_enum_value(dre.coverage_status),
+            dre.rule_version, dre.config_version, dre.policy_bundle_id, "VALIDATED",
+            now, None, actor, int(bool(dre.test_only)),
+        ),
+    )
+    inserted = conn.execute(
+        "SELECT * FROM decision_requirement_evaluation WHERE evaluation_id=?", (evaluation_id,)
+    ).fetchone()
+    if current is not None:
+        conn.execute(
+            """UPDATE decision_requirement_evaluation
+               SET lifecycle_status='SUPERSEDED',superseded_at=?
+               WHERE id=? AND lifecycle_status='PUBLISHED'""",
+            (now, current["id"]),
+        )
+        _db_stage1e6_audit(
+            conn, entity_type="DecisionRequirementEvaluation", entity_id=current["evaluation_id"],
+            relationship_id=rel["id"], event_type="DECISION_REQUIREMENT_EVALUATION_SUPERSEDED",
+            actor=actor, state_fingerprint=current["evaluation_fingerprint"],
+            payload={"superseded_by": evaluation_id},
+        )
+    conn.execute(
+        """UPDATE decision_requirement_evaluation
+           SET lifecycle_status='PUBLISHED',published_at=? WHERE id=? AND lifecycle_status='VALIDATED'""",
+        (now, inserted["id"]),
+    )
+    _db_stage1e6_audit(
+        conn, entity_type="DecisionRequirementEvaluation", entity_id=evaluation_id,
+        relationship_id=rel["id"], event_type="DECISION_REQUIREMENT_EVALUATION_PUBLISHED",
+        actor=actor, state_fingerprint=dre.decision_requirement_fingerprint,
+        payload={"decision_requirement": _db_stage1e6_enum_value(dre.decision_requirement)},
+    )
+    return conn.execute(
+        "SELECT * FROM decision_requirement_evaluation WHERE evaluation_id=?", (evaluation_id,)
+    ).fetchone(), True
+
+
+def _db_stage1e6_persist_rpe(conn, inp, result, rel, cycle, dre_row, actor: str):
+    promotion = result.promotion
+    situation_key = _db_stage1e6_management_situation_key(inp)
+    action_fp = _db_stage1e6_persistence_action_fingerprint(promotion)
+    rpe_idem = _db_stage1e6_hash({
+        "promotion_fingerprint": promotion.promotion_fingerprint,
+        "persistence_action_fingerprint": action_fp,
+        "policy_bundle_id": promotion.policy_bundle_id,
+    })
+    current = conn.execute(
+        """SELECT * FROM review_promotion_evaluation
+           WHERE relationship_id=? AND review_cycle_id=? AND management_situation_key=?
+             AND lifecycle_status='PUBLISHED'
+           ORDER BY id DESC LIMIT 1""",
+        (rel["id"], cycle["id"], situation_key),
+    ).fetchone()
+    if current is not None and int(bool(current["test_only"])) != int(bool(promotion.test_only)):
+        raise RuntimeError("E6_RPE_TEST_ISOLATION_CONFLICT")
+    if current is not None and current["idempotency_key"] == rpe_idem:
+        return current, False
+
+    now = _db_now()
+    rpe_id = _db_stage1e6_next_public_id(
+        conn, prefix="RPE", table="review_promotion_evaluation", column="promotion_evaluation_id", width=4
+    )
+    conn.execute(
+        """INSERT INTO review_promotion_evaluation(
+               promotion_evaluation_id,decision_requirement_evaluation_db_id,decision_requirement_evaluation_id,
+               relationship_id,review_cycle_id,source_aue_id,source_aue_cluster_id,management_situation_key,
+               economic_episode_key,management_question_key,decision_context_fingerprint,promotion_result,
+               primary_reason_code,reason_codes_json,proposed_persistence_action,existing_review_item_id,
+               prior_review_item_id,decision_requirement_fingerprint,promotion_fingerprint,
+               downstream_state_fingerprint,persistence_action_fingerprint,idempotency_key,rule_version,
+               config_version,policy_bundle_id,lifecycle_status,created_at,published_at,created_by,test_only
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            rpe_id, dre_row["id"], dre_row["evaluation_id"], rel["id"], cycle["id"],
+            promotion.source_aue_id, promotion.source_cluster_id, situation_key,
+            promotion.economic_episode_key, promotion.management_question_key,
+            promotion.decision_context_fingerprint, _db_stage1e6_enum_value(promotion.promotion_result),
+            promotion.primary_reason_code, json.dumps(list(promotion.reason_codes), ensure_ascii=False),
+            _db_stage1e6_enum_value(promotion.proposed_persistence_action), promotion.existing_review_item_id,
+            promotion.prior_review_item_id, promotion.decision_requirement_fingerprint,
+            promotion.promotion_fingerprint, promotion.downstream_state_fingerprint, action_fp, rpe_idem,
+            promotion.rule_version, promotion.config_version, promotion.policy_bundle_id,
+            "VALIDATED", now, None, actor, int(bool(promotion.test_only)),
+        ),
+    )
+    inserted = conn.execute(
+        "SELECT * FROM review_promotion_evaluation WHERE promotion_evaluation_id=?", (rpe_id,)
+    ).fetchone()
+    if current is not None:
+        conn.execute(
+            """UPDATE review_promotion_evaluation
+               SET lifecycle_status='SUPERSEDED',superseded_at=?
+               WHERE id=? AND lifecycle_status='PUBLISHED'""",
+            (now, current["id"]),
+        )
+        _db_stage1e6_audit(
+            conn, entity_type="ReviewPromotionEvaluation", entity_id=current["promotion_evaluation_id"],
+            relationship_id=rel["id"], event_type="REVIEW_PROMOTION_EVALUATION_SUPERSEDED",
+            actor=actor, state_fingerprint=current["idempotency_key"],
+            payload={"superseded_by": rpe_id},
+        )
+    conn.execute(
+        """UPDATE review_promotion_evaluation
+           SET lifecycle_status='PUBLISHED',published_at=? WHERE id=? AND lifecycle_status='VALIDATED'""",
+        (now, inserted["id"]),
+    )
+    _db_stage1e6_audit(
+        conn, entity_type="ReviewPromotionEvaluation", entity_id=rpe_id,
+        relationship_id=rel["id"], event_type="REVIEW_PROMOTION_EVALUATION_PUBLISHED",
+        actor=actor, state_fingerprint=rpe_idem,
+        payload={
+            "promotion_result": _db_stage1e6_enum_value(promotion.promotion_result),
+            "proposed_action": _db_stage1e6_enum_value(promotion.proposed_persistence_action),
+        },
+    )
+    return conn.execute(
+        "SELECT * FROM review_promotion_evaluation WHERE promotion_evaluation_id=?", (rpe_id,)
+    ).fetchone(), True
+
+
+def _db_stage1e6_active_equivalent(conn, rel_id: int, episode: str, question_key: str):
+    rows = conn.execute(
+        """SELECT * FROM review_item
+           WHERE relationship_id=? AND economic_episode_key=? AND management_question_key=?
+             AND lifecycle_status='OPEN' AND validity_status='VALID'
+             AND creation_basis IN ('SYSTEM_PROMOTION','MANAGEMENT_INITIATED')
+           ORDER BY id""",
+        (rel_id, episode, question_key),
+    ).fetchall()
+    if len(rows) > 1:
+        raise RuntimeError("E6_MULTIPLE_ACTIVE_EQUIVALENT_REVIEW_ITEMS")
+    return rows[0] if rows else None
+
+
+def _db_stage1e6_terminal_by_public_id(conn, review_item_id: str | None):
+    if not review_item_id:
+        return None
+    return conn.execute(
+        """SELECT * FROM review_item
+           WHERE review_item_id=? AND lifecycle_status IN ('RESOLVED','WITHDRAWN')
+             AND validity_status='VALID'
+           ORDER BY id DESC LIMIT 1""",
+        (review_item_id,),
+    ).fetchone()
+
+
+
+def _db_stage1e6_validate_recurrence_prior(prior, *, rel, result):
+    candidate = result.candidate
+    if prior is None or candidate is None:
+        raise RuntimeError('E6_RECURRENCE_PRIOR_TERMINAL_ITEM_MISSING')
+    if prior['relationship_id'] != rel['id']:
+        raise RuntimeError('E6_RECURRENCE_PRIOR_RELATIONSHIP_MISMATCH')
+    if prior['economic_episode_key'] != candidate.economic_episode_key:
+        raise RuntimeError('E6_RECURRENCE_PRIOR_EPISODE_MISMATCH')
+    if prior['management_question_key'] != candidate.management_question_key:
+        raise RuntimeError('E6_RECURRENCE_PRIOR_QUESTION_MISMATCH')
+    if prior['validity_status'] != 'VALID' or prior['lifecycle_status'] not in ('RESOLVED','WITHDRAWN'):
+        raise RuntimeError('E6_RECURRENCE_PRIOR_NOT_VALID_TERMINAL')
+
+
+def _db_stage1e6_ensure_question_revision(conn, review_item, question_text: str, actor: str, test_only: bool):
+    latest = conn.execute(
+        """SELECT * FROM review_item_question_revision
+           WHERE review_item_db_id=? ORDER BY revision_number DESC LIMIT 1""",
+        (review_item["id"],),
+    ).fetchone()
+    if latest is not None and latest["question_text"] == question_text:
+        return latest
+    revision_number = (int(latest["revision_number"]) + 1) if latest is not None else 1
+    revision_id = _db_stage1e6_next_public_id(
+        conn, prefix="RIQ", table="review_item_question_revision", column="revision_id", width=5
+    )
+    revision_type = "EDITORIAL" if latest is not None else "ORIGIN"
+    conn.execute(
+        """INSERT INTO review_item_question_revision(
+               revision_id,review_item_db_id,review_item_id,revision_number,question_text,
+               revision_type,created_by,test_only,created_at
+           ) VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            revision_id, review_item["id"], review_item["review_item_id"], revision_number,
+            question_text, revision_type, actor, int(bool(test_only)), _db_now(),
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM review_item_question_revision WHERE revision_id=?", (revision_id,)
+    ).fetchone()
+
+
+def _db_stage1e6_upsert_cycle_link(
+    conn, *, review_item, cycle, revision, result, rpe_row, dre_row, association_basis: str, actor: str
+):
+    existing = conn.execute(
+        """SELECT * FROM review_item_cycle_link
+           WHERE review_item_db_id=? AND review_cycle_id=?""",
+        (review_item["id"], cycle["id"]),
+    ).fetchone()
+    source_fp = _db_stage1e6_hash({
+        "aue_id": result.promotion.source_aue_id,
+        "dre_id": dre_row["evaluation_id"],
+        "rpe_id": rpe_row["promotion_evaluation_id"],
+        "question_revision_id": revision["revision_id"],
+    })
+    now = _db_now()
+    if existing is None:
+        link_id = _db_stage1e6_next_public_id(
+            conn, prefix="RIC", table="review_item_cycle_link", column="link_id", width=5
+        )
+        conn.execute(
+            """INSERT INTO review_item_cycle_link(
+                   link_id,review_item_db_id,review_item_id,review_cycle_id,association_basis,
+                   question_revision_db_id,question_revision_id,current_aue_id,
+                   decision_requirement_evaluation_id,promotion_evaluation_id,source_state_fingerprint,
+                   policy_bundle_id,frozen_at,test_only,created_at,updated_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                link_id, review_item["id"], review_item["review_item_id"], cycle["id"], association_basis,
+                revision["id"], revision["revision_id"], result.promotion.source_aue_id,
+                dre_row["evaluation_id"], rpe_row["promotion_evaluation_id"], source_fp,
+                result.promotion.policy_bundle_id, None, int(bool(result.promotion.test_only)), now, now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM review_item_cycle_link WHERE link_id=?", (link_id,)).fetchone()
+        _db_stage1e6_audit(
+            conn, entity_type="ReviewItem", entity_id=review_item["review_item_id"],
+            relationship_id=review_item["relationship_id"], event_type="REVIEW_ITEM_LINKED_TO_REVIEW_CYCLE",
+            actor=actor, state_fingerprint=source_fp,
+            payload={"review_cycle_id": cycle["review_cycle_id"], "association_basis": association_basis},
+        )
+        return row
+
+    if existing["frozen_at"] is not None or cycle["status"] != "Active":
+        raise ValueError("E6_REVIEW_CYCLE_FROZEN_AT_WRITE_LAYER")
+    if existing["source_state_fingerprint"] != source_fp:
+        conn.execute(
+            """UPDATE review_item_cycle_link
+               SET question_revision_db_id=?,question_revision_id=?,current_aue_id=?,
+                   decision_requirement_evaluation_id=?,promotion_evaluation_id=?,
+                   source_state_fingerprint=?,policy_bundle_id=?,updated_at=?
+               WHERE id=? AND frozen_at IS NULL""",
+            (
+                revision["id"], revision["revision_id"], result.promotion.source_aue_id,
+                dre_row["evaluation_id"], rpe_row["promotion_evaluation_id"], source_fp,
+                result.promotion.policy_bundle_id, now, existing["id"],
+            ),
+        )
+        _db_stage1e6_audit(
+            conn, entity_type="ReviewItem", entity_id=review_item["review_item_id"],
+            relationship_id=review_item["relationship_id"], event_type="REVIEW_ITEM_CONTEXT_UPDATED",
+            actor=actor, state_fingerprint=source_fp,
+            payload={"review_cycle_id": cycle["review_cycle_id"]},
+        )
+    return conn.execute(
+        "SELECT * FROM review_item_cycle_link WHERE id=?", (existing["id"],)
+    ).fetchone()
+
+
+def _db_stage1e6_add_intelligence_link(
+    conn, *, review_item, cycle, source_type: str, source_id: str, role: str,
+    state_fingerprint: str, test_only: bool
+):
+    existing = conn.execute(
+        """SELECT * FROM review_item_intelligence_link
+           WHERE review_item_db_id=? AND source_object_type=? AND source_object_id=? AND link_role=?
+           ORDER BY id DESC LIMIT 1""",
+        (review_item["id"], source_type, source_id, role),
+    ).fetchone()
+    if existing is not None:
+        return existing
+    if role == "CURRENT_CONTEXT" and source_type == "AUE":
+        previous = conn.execute(
+            """SELECT * FROM review_item_intelligence_link
+               WHERE review_item_db_id=? AND source_object_type='AUE' AND link_role='CURRENT_CONTEXT'
+               ORDER BY id DESC LIMIT 1""",
+            (review_item["id"],),
+        ).fetchone()
+        if previous is not None and previous["source_object_id"] != source_id:
+            conn.execute(
+                """UPDATE review_item_intelligence_link
+                   SET link_role='HISTORICAL_CONTEXT',updated_at=? WHERE id=?""",
+                (_db_now(), previous["id"]),
+            )
+    link_id = _db_stage1e6_next_public_id(
+        conn, prefix="RIL", table="review_item_intelligence_link", column="link_id", width=5
+    )
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO review_item_intelligence_link(
+               link_id,review_item_db_id,review_item_id,source_object_type,source_object_id,
+               link_role,review_cycle_id,source_state_fingerprint,test_only,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            link_id, review_item["id"], review_item["review_item_id"], source_type, source_id,
+            role, cycle["id"] if cycle is not None else None, state_fingerprint,
+            int(bool(test_only)), now, now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM review_item_intelligence_link WHERE link_id=?", (link_id,)
+    ).fetchone()
+
+
+def _db_stage1e6_create_review_item(conn, *, rel, cycle, result, dre_row, rpe_row, actor: str):
+    candidate = result.candidate
+    if candidate is None:
+        raise RuntimeError("E6_REVIEWITEM_CANDIDATE_REQUIRED")
+    review_item_id = _db_stage1e6_next_public_id(
+        conn, prefix="REV", table="review_item", column="review_item_id", width=4
+    )
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO review_item(
+               review_item_id,review_cycle_id,relationship_id,portfolio_signal_id,title,
+               management_question,recommendation,expected_outcome,status,source,created_at,updated_at,closed_at,
+               creation_basis,economic_episode_key,management_question_key,question_type,decision_family,
+               decision_scope_code,lifecycle_status,validity_status,origin_aue_id,origin_dre_id,origin_rpe_id,
+               origin_decision_context_fingerprint,created_in_review_cycle_id,prior_review_item_id,
+               prior_review_item_relationship_type,test_only
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            review_item_id, cycle["id"], rel["id"], None,
+            f"Executive Review · {rel['name']}", candidate.management_question_text,
+            None, None, "Open", E6_REVIEW_SOURCE, now, now, None,
+            _db_stage1e6_enum_value(candidate.creation_basis), candidate.economic_episode_key,
+            candidate.management_question_key, _db_stage1e6_enum_value(candidate.question_type),
+            _db_stage1e6_enum_value(candidate.decision_family), candidate.decision_scope_code,
+            _db_stage1e6_enum_value(candidate.lifecycle_status), _db_stage1e6_enum_value(candidate.validity_status),
+            candidate.origin_aue_id, dre_row["evaluation_id"], rpe_row["promotion_evaluation_id"],
+            candidate.origin_decision_context_fingerprint, cycle["id"], candidate.prior_review_item_id,
+            _db_stage1e6_enum_value(candidate.prior_relationship_type), int(bool(candidate.test_only)),
+        ),
+    )
+    item = conn.execute("SELECT * FROM review_item WHERE review_item_id=?", (review_item_id,)).fetchone()
+    revision = _db_stage1e6_ensure_question_revision(
+        conn, item, candidate.management_question_text, actor, bool(candidate.test_only)
+    )
+    _db_stage1e6_upsert_cycle_link(
+        conn, review_item=item, cycle=cycle, revision=revision, result=result,
+        rpe_row=rpe_row, dre_row=dre_row, association_basis="ORIGIN", actor=actor,
+    )
+    promotion_source_fp = result.promotion.promotion_fingerprint
+    for source_type, source_id in (
+        ("AUE", result.promotion.source_aue_id),
+        ("DRE", dre_row["evaluation_id"]),
+        ("RPE", rpe_row["promotion_evaluation_id"]),
+    ):
+        _db_stage1e6_add_intelligence_link(
+            conn, review_item=item, cycle=cycle, source_type=source_type, source_id=source_id,
+            role="PROMOTION_SOURCE", state_fingerprint=promotion_source_fp,
+            test_only=bool(result.promotion.test_only),
+        )
+    _db_stage1e6_add_intelligence_link(
+        conn, review_item=item, cycle=cycle, source_type="AUE", source_id=result.promotion.source_aue_id,
+        role="CURRENT_CONTEXT", state_fingerprint=result.decision_requirement.source_fingerprint,
+        test_only=bool(result.promotion.test_only),
+    )
+    _db_stage1e6_audit(
+        conn, entity_type="ReviewItem", entity_id=review_item_id, relationship_id=rel["id"],
+        event_type="REVIEW_ITEM_CREATED", actor=actor,
+        state_fingerprint=rpe_row["idempotency_key"],
+        payload={
+            "creation_basis": _db_stage1e6_enum_value(candidate.creation_basis),
+            "management_question_key": candidate.management_question_key,
+            "economic_episode_key": candidate.economic_episode_key,
+            "origin_aue_id": candidate.origin_aue_id,
+        },
+    )
+    return conn.execute("SELECT * FROM review_item WHERE review_item_id=?", (review_item_id,)).fetchone()
+
+
+def _db_stage1e6_reuse_review_item(conn, *, review_item, rel, cycle, result, dre_row, rpe_row, actor: str):
+    if review_item["lifecycle_status"] != "OPEN" or review_item["validity_status"] != "VALID":
+        raise RuntimeError("E6_REUSE_REQUIRES_VALID_OPEN_REVIEWITEM")
+    if int(bool(review_item["test_only"])) != int(bool(result.promotion.test_only)):
+        raise RuntimeError("E6_TEST_ISOLATION_MISMATCH")
+    question_text = result.decision_requirement.management_question_text or review_item["management_question"]
+    revision = _db_stage1e6_ensure_question_revision(
+        conn, review_item, question_text, actor, bool(result.promotion.test_only)
+    )
+    _db_stage1e6_upsert_cycle_link(
+        conn, review_item=review_item, cycle=cycle, revision=revision, result=result,
+        rpe_row=rpe_row, dre_row=dre_row, association_basis="REUSED_EXISTING", actor=actor,
+    )
+    _db_stage1e6_add_intelligence_link(
+        conn, review_item=review_item, cycle=cycle, source_type="AUE", source_id=result.promotion.source_aue_id,
+        role="CURRENT_CONTEXT", state_fingerprint=result.decision_requirement.source_fingerprint,
+        test_only=bool(result.promotion.test_only),
+    )
+    _db_stage1e6_audit(
+        conn, entity_type="ReviewItem", entity_id=review_item["review_item_id"], relationship_id=rel["id"],
+        event_type="REVIEW_ITEM_REUSED", actor=actor,
+        state_fingerprint=rpe_row["idempotency_key"],
+        payload={"review_cycle_id": cycle["review_cycle_id"], "source_aue_id": result.promotion.source_aue_id},
+    )
+    return conn.execute("SELECT * FROM review_item WHERE id=?", (review_item["id"],)).fetchone()
+
+
+def _db_stage1e6_prior_review_item_for_situation(conn, *, rel_id: int, cycle_id: int, management_situation_key: str):
+    """Resolve the most recent ReviewItem previously applied for this situation.
+
+    Used when a newly published negative RPE supersedes a prior positive one: the
+    ReviewItem lifecycle is untouched, but the open-cycle context must still move
+    to the newest governed DRE/RPE/AUE state.
+    """
+    row = conn.execute(
+        """SELECT rpa.review_item_id
+           FROM review_promotion_evaluation rpe
+           JOIN review_promotion_application rpa ON rpa.promotion_evaluation_db_id=rpe.id
+           WHERE rpe.relationship_id=? AND rpe.review_cycle_id=? AND rpe.management_situation_key=?
+             AND rpa.review_item_id IS NOT NULL
+           ORDER BY rpe.id DESC,rpa.id DESC LIMIT 1""",
+        (rel_id, cycle_id, management_situation_key),
+    ).fetchone()
+    if row is None:
+        return None
+    return conn.execute(
+        "SELECT * FROM review_item WHERE review_item_id=?", (row["review_item_id"],)
+    ).fetchone()
+
+
+def _db_stage1e6_latest_question_revision(conn, review_item):
+    return conn.execute(
+        """SELECT * FROM review_item_question_revision
+           WHERE review_item_db_id=? ORDER BY revision_number DESC LIMIT 1""",
+        (review_item["id"],),
+    ).fetchone()
+
+
+def _db_stage1e6_insert_application(
+    conn, *, rpe_row, proposed_action: str, actual_action: str, review_item_id: str | None,
+    prior_review_item_id: str | None, concurrency_resolution_code: str | None, test_only: bool, actor: str,
+    relationship_id: int
+):
+    idem = _db_stage1e6_hash({
+        "promotion_evaluation_id": rpe_row["promotion_evaluation_id"],
+        "actual_action": actual_action,
+        "review_item_id": review_item_id,
+        "prior_review_item_id": prior_review_item_id,
+    })
+    existing = conn.execute(
+        "SELECT * FROM review_promotion_application WHERE idempotency_key=?", (idem,)
+    ).fetchone()
+    if existing is not None:
+        return existing, False
+    app_id = _db_stage1e6_next_public_id(
+        conn, prefix="RPA", table="review_promotion_application", column="application_id", width=4
+    )
+    app_fp = _db_stage1e6_hash({
+        "rpe": rpe_row["promotion_evaluation_id"],
+        "proposed": proposed_action,
+        "actual": actual_action,
+        "review_item": review_item_id,
+        "concurrency_resolution": concurrency_resolution_code,
+    })
+    conn.execute(
+        """INSERT INTO review_promotion_application(
+               application_id,promotion_evaluation_db_id,promotion_evaluation_id,proposed_action,actual_action,
+               review_item_id,prior_review_item_id,application_fingerprint,idempotency_key,
+               concurrency_resolution_code,status,test_only,created_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            app_id, rpe_row["id"], rpe_row["promotion_evaluation_id"], proposed_action, actual_action,
+            review_item_id, prior_review_item_id, app_fp, idem, concurrency_resolution_code,
+            "APPLIED", int(bool(test_only)), _db_now(),
+        ),
+    )
+    _db_stage1e6_audit(
+        conn, entity_type="ReviewPromotionApplication", entity_id=app_id,
+        relationship_id=relationship_id, event_type="REVIEW_PROMOTION_APPLICATION_APPLIED",
+        actor=actor, state_fingerprint=app_fp,
+        payload={"proposed_action": proposed_action, "actual_action": actual_action, "review_item_id": review_item_id},
+    )
+    return conn.execute(
+        "SELECT * FROM review_promotion_application WHERE application_id=?", (app_id,)
+    ).fetchone(), True
+
+
+def _db_stage1e6_persist_evaluation(inp, result, *, actor: str = "E6 Persistence Foundation") -> dict:
+    """Persist one locked E.6.7 result transactionally.
+
+    This adapter does not run the deterministic engine; it persists the already
+    governed input/result pair. Normal Review authority remains LEGACY in E.6.8C.
+    """
+    ctx = inp.review_context
+    policy = inp.policy
+    if not _db_stage1e6_schema_ready():
+        raise RuntimeError("E6_SCHEMA_NOT_READY")
+
+    _db_stage1e6_validate_result_contract(inp, result)
+
+    with _db_transaction() as conn:
+        rel, cycle = _db_stage1e6_lock_context(conn, ctx.relationship_id, ctx.review_cycle_id)
+        output_test_only = bool(result.promotion.test_only)
+        _db_stage1e6_validate_write_authority(
+            conn, relationship_public_id=ctx.relationship_id, output_test_only=output_test_only
+        )
+        _db_stage1e6_ensure_policy_binding(conn, cycle, policy)
+        _db_stage1e6_validate_aue_lineage(conn, inp=inp, rel=rel, cycle=cycle)
+
+        # Isolation can only propagate upward; never downgrade a test chain.
+        upstream_test_flags = [
+            bool(getattr(inp.review_context, "test_only", False)),
+            bool(getattr(inp.aue, "test_only", False)),
+            bool(getattr(inp.aue_cluster, "test_only", False)),
+            bool(getattr(inp.management_situation, "test_only", False)),
+            bool(getattr(inp.authority_context, "test_only", False)),
+            bool(getattr(inp.governing_decision_state, "test_only", False)),
+        ]
+        if any(upstream_test_flags) and not output_test_only:
+            raise RuntimeError("E6_TEST_ONLY_DOWNGRADE_PROHIBITED")
+
+        proposed_pre = str(_db_stage1e6_enum_value(result.promotion.proposed_persistence_action))
+        if proposed_pre == "KEEP_EXISTING":
+            ev = inp.existing_evaluation_state
+            if not ev.prior_promotion_evaluation_id:
+                raise RuntimeError("E6_KEEP_EXISTING_PRIOR_PROMOTION_MISSING")
+            prior_rpe = conn.execute(
+                "SELECT * FROM review_promotion_evaluation WHERE promotion_evaluation_id=?",
+                (ev.prior_promotion_evaluation_id,),
+            ).fetchone()
+            if prior_rpe is None:
+                raise RuntimeError("E6_KEEP_EXISTING_PRIOR_RPE_NOT_PERSISTED")
+            if prior_rpe["lifecycle_status"] != "PUBLISHED":
+                raise RuntimeError("E6_KEEP_EXISTING_PRIOR_RPE_NOT_CURRENT")
+            prior_dre = conn.execute(
+                "SELECT * FROM decision_requirement_evaluation WHERE id=?",
+                (prior_rpe["decision_requirement_evaluation_db_id"],),
+            ).fetchone()
+            prior_app = conn.execute(
+                "SELECT * FROM review_promotion_application WHERE promotion_evaluation_db_id=? ORDER BY id DESC LIMIT 1",
+                (prior_rpe["id"],),
+            ).fetchone()
+            if prior_dre is None or prior_app is None:
+                raise RuntimeError("E6_KEEP_EXISTING_PRIOR_APPLICATION_INCOMPLETE")
+            if str(prior_rpe["promotion_fingerprint"]) != str(result.promotion.promotion_fingerprint):
+                raise RuntimeError("E6_KEEP_EXISTING_PROMOTION_FINGERPRINT_MISMATCH")
+            if str(prior_rpe["downstream_state_fingerprint"]) != str(result.promotion.downstream_state_fingerprint):
+                raise RuntimeError("E6_KEEP_EXISTING_DOWNSTREAM_FINGERPRINT_MISMATCH")
+            if str(prior_dre["evaluation_fingerprint"]) != str(result.decision_requirement.decision_requirement_fingerprint):
+                raise RuntimeError("E6_KEEP_EXISTING_DRE_FINGERPRINT_MISMATCH")
+            return {
+                "Decision Requirement Evaluation": prior_dre["evaluation_id"],
+                "Review Promotion Evaluation": prior_rpe["promotion_evaluation_id"],
+                "Review Promotion Application": prior_app["application_id"],
+                "Proposed Action": "KEEP_EXISTING",
+                "Actual Action": prior_app["actual_action"],
+                "Review Item ID": prior_app["review_item_id"],
+                "DRE Created": False,
+                "RPE Created": False,
+                "RPA Created": False,
+                "Exact Rerun": True,
+                "Test Only": bool(prior_app["test_only"]),
+            }
+
+        dre_row, dre_created = _db_stage1e6_persist_dre(conn, inp, result, rel, cycle, actor)
+        rpe_row, rpe_created = _db_stage1e6_persist_rpe(conn, inp, result, rel, cycle, dre_row, actor)
+
+        # Exact persistence rerun returns the already applied RPA without writes.
+        prior_application = conn.execute(
+            """SELECT * FROM review_promotion_application
+               WHERE promotion_evaluation_db_id=? ORDER BY id DESC LIMIT 1""",
+            (rpe_row["id"],),
+        ).fetchone()
+        if not rpe_created and prior_application is not None:
+            return {
+                "Decision Requirement Evaluation": dre_row["evaluation_id"],
+                "Review Promotion Evaluation": rpe_row["promotion_evaluation_id"],
+                "Review Promotion Application": prior_application["application_id"],
+                "Proposed Action": prior_application["proposed_action"],
+                "Actual Action": prior_application["actual_action"],
+                "Review Item ID": prior_application["review_item_id"],
+                "DRE Created": False,
+                "RPE Created": False,
+                "RPA Created": False,
+                "Exact Rerun": True,
+                "Test Only": bool(prior_application["test_only"]),
+            }
+
+        proposed = str(_db_stage1e6_enum_value(result.promotion.proposed_persistence_action))
+        actual = proposed
+        concurrency_resolution = None
+        item = None
+        prior_id = result.promotion.prior_review_item_id
+        qkey = result.promotion.management_question_key
+        episode = result.promotion.economic_episode_key
+
+        active = None
+        if qkey:
+            active = _db_stage1e6_active_equivalent(conn, rel["id"], episode, qkey)
+
+        if proposed == "KEEP_EXISTING":
+            raise RuntimeError("E6_KEEP_EXISTING_FAST_PATH_NOT_TAKEN")
+
+        if proposed == "CREATE_NEW":
+            if active is None:
+                item = _db_stage1e6_create_review_item(
+                    conn, rel=rel, cycle=cycle, result=result, dre_row=dre_row, rpe_row=rpe_row, actor=actor
+                )
+                actual = "CREATE_NEW"
+            else:
+                item = _db_stage1e6_reuse_review_item(
+                    conn, review_item=active, rel=rel, cycle=cycle, result=result,
+                    dre_row=dre_row, rpe_row=rpe_row, actor=actor
+                )
+                actual = "REUSE_EXISTING"
+                concurrency_resolution = "ACTIVE_EQUIVALENT_CREATED_CONCURRENTLY"
+
+        elif proposed == "REUSE_EXISTING":
+            if active is None:
+                raise RuntimeError("E6_REUSE_EXISTING_TARGET_MISSING_REEVALUATION_REQUIRED")
+            item = _db_stage1e6_reuse_review_item(
+                conn, review_item=active, rel=rel, cycle=cycle, result=result,
+                dre_row=dre_row, rpe_row=rpe_row, actor=actor
+            )
+            actual = "REUSE_EXISTING"
+
+        elif proposed == "CREATE_RECURRENCE":
+            if active is not None:
+                item = _db_stage1e6_reuse_review_item(
+                    conn, review_item=active, rel=rel, cycle=cycle, result=result,
+                    dre_row=dre_row, rpe_row=rpe_row, actor=actor
+                )
+                actual = "REUSE_EXISTING"
+                concurrency_resolution = "ACTIVE_EQUIVALENT_CREATED_CONCURRENTLY"
+            else:
+                prior = _db_stage1e6_terminal_by_public_id(conn, prior_id)
+                _db_stage1e6_validate_recurrence_prior(prior, rel=rel, result=result)
+                item = _db_stage1e6_create_review_item(
+                    conn, rel=rel, cycle=cycle, result=result, dre_row=dre_row, rpe_row=rpe_row, actor=actor
+                )
+                actual = "CREATE_RECURRENCE"
+
+        elif proposed == "NO_ACTION":
+            actual = "NO_ACTION"
+            # A negative/current evaluation does not close or withdraw an existing
+            # ReviewItem. If this management situation previously produced one,
+            # update only the open-cycle analytical context so the frozen cycle can
+            # later answer what EC-AI knew at its final governed state.
+            prior_item = _db_stage1e6_prior_review_item_for_situation(
+                conn, rel_id=rel["id"], cycle_id=cycle["id"],
+                management_situation_key=_db_stage1e6_management_situation_key(inp),
+            )
+            if prior_item is not None and prior_item["lifecycle_status"] == "OPEN":
+                revision = _db_stage1e6_latest_question_revision(conn, prior_item)
+                if revision is not None:
+                    _db_stage1e6_upsert_cycle_link(
+                        conn, review_item=prior_item, cycle=cycle, revision=revision, result=result,
+                        rpe_row=rpe_row, dre_row=dre_row, association_basis="REUSED_EXISTING", actor=actor,
+                    )
+                    _db_stage1e6_add_intelligence_link(
+                        conn, review_item=prior_item, cycle=cycle, source_type="AUE",
+                        source_id=result.promotion.source_aue_id, role="CURRENT_CONTEXT",
+                        state_fingerprint=result.decision_requirement.source_fingerprint,
+                        test_only=bool(result.promotion.test_only),
+                    )
+
+        else:
+            raise RuntimeError(f"E6_UNSUPPORTED_PERSISTENCE_ACTION:{proposed}")
+
+        app_row, app_created = _db_stage1e6_insert_application(
+            conn, rpe_row=rpe_row, proposed_action=proposed, actual_action=actual,
+            review_item_id=item["review_item_id"] if item is not None else None,
+            prior_review_item_id=prior_id, concurrency_resolution_code=concurrency_resolution,
+            test_only=output_test_only, actor=actor, relationship_id=rel["id"],
+        )
+        return {
+            "Decision Requirement Evaluation": dre_row["evaluation_id"],
+            "Review Promotion Evaluation": rpe_row["promotion_evaluation_id"],
+            "Review Promotion Application": app_row["application_id"],
+            "Proposed Action": proposed,
+            "Actual Action": actual,
+            "Review Item ID": item["review_item_id"] if item is not None else app_row["review_item_id"],
+            "DRE Created": bool(dre_created),
+            "RPE Created": bool(rpe_created),
+            "RPA Created": bool(app_created),
+            "Exact Rerun": False,
+            "Test Only": output_test_only,
+        }
+
+
+def _db_stage1e6_foundation_summary() -> dict:
+    conn = _db_connect()
+    try:
+        tables = [
+            "review_item_policy_bundle",
+            "review_cycle_e6_policy",
+            "decision_requirement_evaluation",
+            "review_promotion_evaluation",
+            "review_promotion_application",
+            "review_item_question_revision",
+            "review_item_cycle_link",
+            "review_item_intelligence_link",
+        ]
+        counts = {table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]) for table in tables}
+        return {
+            "E6 Schema Ready": _db_stage1e6_schema_ready(conn),
+            "Schema Version": E6_SCHEMA_VERSION,
+            "Review Authority Mode": _db_stage1e6_review_authority_mode(conn),
+            "Counts": counts,
+        }
+    finally:
+        conn.close()
+
+# END STAGE 1-E.6.8C — REVIEWITEM PERSISTENCE FOUNDATION IMPLEMENTATION
+
+
+# =============================================================================
+# STAGE 1-E.6.8D — DIAGNOSTICS INTEGRATION & CONTROLLED LIVE VALIDATION
+# =============================================================================
+
+E6_8D_EPISODE = "E6_8D_VALIDATION_REFI_2027"
+E6_8D_SUBJECT = "controlled refinancing opportunity"
+E6_8D_BASE_CONTEXT_CODES = ("EVENT:DEBT_MATURITY:NEAR_TERM",)
+E6_8D_RECURRENCE_CONTEXT_CODES = (
+    "EVENT:DEBT_MATURITY:NEAR_TERM",
+    "EVENT:ACQUISITION:NEW",
+)
+
+
+def _db_stage1e6_validation_relationship(conn: _DBConnection):
+    row = conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E6_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+    if row is not None:
+        return row
+    now = _db_now()
+    conn.execute(
+        """INSERT INTO relationship(
+               relationship_id,name,country,sector,external_rating,outlook,score,
+               attention_rating,primary_driver,recommended_action,created_at,updated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            E6_VALIDATION_RELATIONSHIP_ID, E6_VALIDATION_COMPANY,
+            "SYSTEM", "VALIDATION", None, None, None, None,
+            "E6.8D controlled ReviewItem validation fixture",
+            "Hidden from business UI; TEST-only ReviewItem persistence validation.",
+            now, now,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM relationship WHERE relationship_id=?",
+        (E6_VALIDATION_RELATIONSHIP_ID,),
+    ).fetchone()
+
+
+def _db_stage1e6_build_validation_aue_candidate(
+    conn: _DBConnection,
+    *,
+    binding_days: int,
+):
+    rel = _db_stage1e6_validation_relationship(conn)
+    cycle = _db_active_review_cycle(conn)
+    policy = default_policy_config()  # E.5 policy; E.6 engine is namespaced as _E6.
+    policy_row = _db_stage1e5_ensure_review_policy(conn, cycle, policy, test_only=True)
+    as_of = date.fromisoformat(str(policy_row["evaluation_as_of"])[:10])
+
+    ctx = ReviewContext(
+        relationship_id=rel["relationship_id"],
+        review_cycle_id=cycle["review_cycle_id"],
+        evaluation_as_of=as_of,
+        review_cycle_frozen=(cycle["status"] != "Active"),
+        policy_bundle_id=policy.policy_bundle_id,
+    )
+    opportunity = OpportunitySignalInput(
+        signal_id="E6-SYN-SIG-001",
+        relationship_id=rel["relationship_id"],
+        domain="LENDING",
+        signal_strength="HIGH",
+        signal_status="ACTIVE",
+        confidence=E5ConfidenceLevel.HIGH,
+        executive_relevance=ExecutiveRelevanceStatus.ELIGIBLE,
+        economic_episode_key=E6_8D_EPISODE,
+        test_only=False,
+    )
+    deadline = date.fromordinal(as_of.toordinal() + int(binding_days))
+    window = UrgencyWindowInput(
+        window_id="E6-SYN-WIN-001",
+        relationship_id=rel["relationship_id"],
+        domain="LENDING",
+        factor_code=UrgencyFactorCode.DECISION_WINDOW,
+        clock_type=ClockType.DECISION_WINDOW,
+        confidence=E5ConfidenceLevel.HIGH,
+        executive_relevance=ExecutiveRelevanceStatus.ELIGIBLE,
+        actionability=ActionabilityStatus.ACTIONABLE,
+        economic_episode_key=E6_8D_EPISODE,
+        binding_date=deadline,
+        date_precision=DatePrecision.DAY,
+        window_status="ACTIVE",
+        test_only=False,
+    )
+    inputs = EvaluationInputs(
+        opportunities=(opportunity,),
+        urgency_windows=(window,),
+    )
+    attention_coverage = AxisCoverageInput(
+        frozenset(x.value for x in AttentionFactorCode),
+        True,
+    )
+    urgency_coverage = AxisCoverageInput(
+        frozenset(x.value for x in UrgencyFactorCode),
+        True,
+    )
+    candidate = evaluate_attention_urgency(
+        ctx, inputs, attention_coverage, urgency_coverage, policy
+    )
+    return ctx, candidate
+
+
+def _db_stage1e6_ensure_validation_aue(*, binding_days: int) -> str:
+    conn = _db_connect()
+    try:
+        ctx, candidate = _db_stage1e6_build_validation_aue_candidate(
+            conn, binding_days=binding_days
+        )
+    finally:
+        conn.close()
+    result = _db_stage1e5_persist_candidate(
+        ctx, candidate,
+        actor="E6.8D Validation Harness",
+        test_only=True,
+    )
+    return result["Evaluation ID"]
+
+
+def _db_stage1e6_material_context_from_dre_row(row):
+    if row is None:
+        return None
+    try:
+        choice_codes = tuple(json.loads(row["choice_set_codes_json"] or "[]"))
+        material_codes = tuple(json.loads(row["material_context_codes_json"] or "[]"))
+    except Exception:
+        return None
+    authority = str(row["required_authority"] or "UNKNOWN")
+    actionability = str(row["actionability_status"] or "NOT_ASSESSED")
+    try:
+        return _E6.MaterialDecisionContextState(
+            required_authority=_E6.DecisionAuthority(authority),
+            choice_set_codes=choice_codes,
+            actionability=_E6.ManagementActionability(actionability),
+            material_context_codes=material_codes,
+        )
+    except Exception:
+        return None
+
+
+def _db_stage1e6_latest_dre_for_review_item(conn: _DBConnection, review_item_id: str):
+    return conn.execute(
+        """SELECT dre.*
+           FROM review_promotion_application rpa
+           JOIN review_promotion_evaluation rpe ON rpe.id=rpa.promotion_evaluation_db_id
+           JOIN decision_requirement_evaluation dre ON dre.id=rpe.decision_requirement_evaluation_db_id
+           WHERE rpa.review_item_id=?
+           ORDER BY rpa.id DESC LIMIT 1""",
+        (review_item_id,),
+    ).fetchone()
+
+
+def _db_stage1e6_current_aue_for_review_item(conn: _DBConnection, review_item_db_id: int):
+    row = conn.execute(
+        """SELECT source_object_id
+           FROM review_item_intelligence_link
+           WHERE review_item_db_id=? AND source_object_type='AUE' AND link_role='CURRENT_CONTEXT'
+           ORDER BY id DESC LIMIT 1""",
+        (review_item_db_id,),
+    ).fetchone()
+    return row["source_object_id"] if row is not None else None
+
+
+def _db_stage1e6_build_equivalent_state(
+    conn: _DBConnection,
+    *,
+    rel,
+    episode: str,
+    question_key: str,
+):
+    active_rows = conn.execute(
+        """SELECT * FROM review_item
+           WHERE relationship_id=? AND economic_episode_key=? AND management_question_key=?
+             AND lifecycle_status='OPEN'
+           ORDER BY id""",
+        (rel["id"], episode, question_key),
+    ).fetchall()
+    if len(active_rows) > 1:
+        raise RuntimeError("E6_8D_MULTIPLE_ACTIVE_EQUIVALENT_REVIEWITEMS")
+
+    active_items = []
+    for row in active_rows:
+        dre = _db_stage1e6_latest_dre_for_review_item(conn, row["review_item_id"])
+        active_items.append(
+            _E6.ExistingReviewItemSnapshot(
+                review_item_id=row["review_item_id"],
+                relationship_id=rel["relationship_id"],
+                economic_episode_key=row["economic_episode_key"],
+                management_question_key=row["management_question_key"],
+                lifecycle_status=_E6.ReviewItemLifecycle(row["lifecycle_status"]),
+                validity_status=_E6.ReviewItemValidity(row["validity_status"]),
+                origin_aue_id=row["origin_aue_id"],
+                current_aue_id=_db_stage1e6_current_aue_for_review_item(conn, row["id"]),
+                material_context_state=_db_stage1e6_material_context_from_dre_row(dre),
+                test_only=bool(row["test_only"]),
+                ended_at=None,
+            )
+        )
+
+    terminal = conn.execute(
+        """SELECT * FROM review_item
+           WHERE relationship_id=? AND economic_episode_key=? AND management_question_key=?
+             AND lifecycle_status IN ('RESOLVED','WITHDRAWN')
+           ORDER BY COALESCE(resolved_at,withdrawn_at,updated_at,created_at) DESC,id DESC
+           LIMIT 1""",
+        (rel["id"], episode, question_key),
+    ).fetchone()
+    terminal_snapshot = None
+    if terminal is not None:
+        dre = _db_stage1e6_latest_dre_for_review_item(conn, terminal["review_item_id"])
+        ended_raw = terminal["resolved_at"] or terminal["withdrawn_at"] or terminal["updated_at"]
+        ended_at = None
+        if ended_raw:
+            try:
+                ended_at = datetime.fromisoformat(str(ended_raw).replace("Z","+00:00"))
+            except Exception:
+                ended_at = None
+        terminal_snapshot = _E6.ExistingReviewItemSnapshot(
+            review_item_id=terminal["review_item_id"],
+            relationship_id=rel["relationship_id"],
+            economic_episode_key=terminal["economic_episode_key"],
+            management_question_key=terminal["management_question_key"],
+            lifecycle_status=_E6.ReviewItemLifecycle(terminal["lifecycle_status"]),
+            validity_status=_E6.ReviewItemValidity(terminal["validity_status"]),
+            origin_aue_id=terminal["origin_aue_id"],
+            current_aue_id=_db_stage1e6_current_aue_for_review_item(conn, terminal["id"]),
+            material_context_state=_db_stage1e6_material_context_from_dre_row(dre),
+            test_only=bool(terminal["test_only"]),
+            ended_at=ended_at,
+        )
+    return _E6.EquivalentReviewStateInput(
+        active_equivalent_items=tuple(active_items),
+        latest_terminal_equivalent_item=terminal_snapshot,
+    )
+
+
+def _db_stage1e6_build_governing_decision_state(
+    conn: _DBConnection,
+    *,
+    rel,
+    question_key: str,
+    terminal_snapshot,
+):
+    if terminal_snapshot is None:
+        return _E6.GoverningDecisionStateInput(test_only=True)
+    decision = conn.execute(
+        """SELECT d.*
+           FROM decision d
+           JOIN review_item ri ON ri.id=d.review_item_id
+           WHERE d.relationship_id=? AND ri.review_item_id=?
+             AND d.question_resolution_effect IS NOT NULL
+           ORDER BY d.id DESC LIMIT 1""",
+        (rel["id"], terminal_snapshot.review_item_id),
+    ).fetchone()
+    if decision is None:
+        return _E6.GoverningDecisionStateInput(test_only=True)
+    return _E6.GoverningDecisionStateInput(
+        decision_id=decision["decision_id"],
+        management_question_key=question_key,
+        resolution_effect=_E6.QuestionResolutionEffect(decision["question_resolution_effect"]),
+        lineage_complete=True,
+        material_context_state=terminal_snapshot.material_context_state,
+        test_only=True,
+    )
+
+
+def _db_stage1e6_existing_evaluation_state(
+    conn: _DBConnection,
+    *,
+    rel,
+    cycle,
+    management_situation_key: str,
+):
+    rpe = conn.execute(
+        """SELECT * FROM review_promotion_evaluation
+           WHERE relationship_id=? AND review_cycle_id=? AND management_situation_key=?
+             AND lifecycle_status='PUBLISHED'
+           ORDER BY id DESC LIMIT 1""",
+        (rel["id"], cycle["id"], management_situation_key),
+    ).fetchone()
+    if rpe is None:
+        return _E6.ExistingEvaluationStateInput()
+    dre = conn.execute(
+        "SELECT * FROM decision_requirement_evaluation WHERE id=?",
+        (rpe["decision_requirement_evaluation_db_id"],),
+    ).fetchone()
+    app = conn.execute(
+        "SELECT * FROM review_promotion_application WHERE promotion_evaluation_db_id=? ORDER BY id DESC LIMIT 1",
+        (rpe["id"],),
+    ).fetchone()
+    return _E6.ExistingEvaluationStateInput(
+        prior_decision_requirement_evaluation_id=dre["evaluation_id"] if dre is not None else None,
+        prior_decision_requirement_fingerprint=dre["evaluation_fingerprint"] if dre is not None else None,
+        prior_promotion_evaluation_id=rpe["promotion_evaluation_id"],
+        prior_promotion_fingerprint=rpe["promotion_fingerprint"],
+        prior_downstream_state_fingerprint=rpe["downstream_state_fingerprint"],
+        prior_resulting_review_item_id=app["review_item_id"] if app is not None else None,
+        prior_proposed_persistence_action=_E6.ReviewItemPersistenceAction(rpe["proposed_persistence_action"]),
+    )
+
+
+def _db_stage1e6_build_validation_engine_input(
+    *,
+    material_context_codes=E6_8D_BASE_CONTEXT_CODES,
+):
+    conn = _db_connect()
+    try:
+        rel = _db_stage1e6_validation_relationship(conn)
+        cycle = _db_active_review_cycle(conn)
+        if cycle["status"] != "Active":
+            raise ValueError("E6_8D_ACTIVE_REVIEW_CYCLE_REQUIRED")
+        aue = conn.execute(
+            """SELECT * FROM attention_urgency_evaluation
+               WHERE relationship_id=? AND review_cycle_id=? AND status='PUBLISHED' AND test_only=1
+               ORDER BY id DESC LIMIT 1""",
+            (rel["id"], cycle["id"]),
+        ).fetchone()
+        if aue is None:
+            raise RuntimeError("E6_8D_CURRENT_AUE_MISSING")
+        cluster = conn.execute(
+            """SELECT * FROM attention_urgency_cluster
+               WHERE evaluation_db_id=? AND axis='ATTENTION' AND economic_episode_key=?
+               ORDER BY id ASC LIMIT 1""",
+            (aue["id"], E6_8D_EPISODE),
+        ).fetchone()
+        if cluster is None:
+            raise RuntimeError("E6_8D_ATTENTION_CLUSTER_MISSING")
+        source_ids = tuple(json.loads(cluster["source_ids_json"] or "[]"))
+        if not source_ids:
+            raise RuntimeError("E6_8D_CLUSTER_SOURCE_IDS_MISSING")
+
+        policy = _E6.default_policy_config()
+        review_ctx = _E6.ReviewContext(
+            relationship_id=rel["relationship_id"],
+            review_cycle_id=cycle["review_cycle_id"],
+            evaluation_as_of=date.fromisoformat(_db_stage1e5_review_as_of(cycle)),
+            review_cycle_frozen=False,
+            policy_bundle_id=policy.policy_bundle_id,
+            test_only=True,
+        )
+        quadrant = _E6.Quadrant(aue["quadrant"]) if aue["quadrant"] else None
+        aue_input = _E6.AttentionUrgencyInput(
+            evaluation_id=aue["evaluation_id"],
+            relationship_id=rel["relationship_id"],
+            review_cycle_id=cycle["review_cycle_id"],
+            attention_rating=aue["attention_rating"],
+            urgency_rating=aue["urgency_rating"],
+            quadrant=quadrant,
+            quadrant_status=_E6.QuadrantStatus(aue["quadrant_status"]),
+            attention_coverage=_E6.CoverageStatus(aue["attention_coverage"]),
+            urgency_coverage=_E6.CoverageStatus(aue["urgency_coverage"]),
+            validity_status=_E6.AUEValidity.VALID,
+            current_status=aue["status"],
+            source_fingerprint=aue["source_fingerprint"],
+            test_only=True,
+        )
+        cluster_input = _E6.AUEClusterContextInput(
+            cluster_id=cluster["cluster_evaluation_id"],
+            source_aue_id=aue["evaluation_id"],
+            relationship_id=rel["relationship_id"],
+            economic_episode_key=cluster["economic_episode_key"],
+            domain=cluster["domain"],
+            # E.6 consumes the governed economic driver represented by this
+            # Attention cluster; the underlying AUE source IDs preserve lineage.
+            driver_codes=("LENDING_WALLET_GAP",),
+            source_object_ids=source_ids,
+            lineage_complete=True,
+            validity_status=_E6.AUEClusterValidity.VALID,
+            test_only=True,
+        )
+        subject_source_id = source_ids[0]
+        situation = _E6.ManagementSituationInput(
+            economic_episode_key=E6_8D_EPISODE,
+            source_cluster_id=cluster["cluster_evaluation_id"],
+            domain="LENDING",
+            primary_driver_code="LENDING_WALLET_GAP",
+            countervailing_driver_codes=(),
+            governed_question_type_hint=_E6.ManagementQuestionType.PURSUE_OPPORTUNITY,
+            decision_scope_code="LENDING",
+            question_subject_code="REFINANCING_OPPORTUNITY",
+            question_subject_label=E6_8D_SUBJECT,
+            template_parameters=(
+                _E6.GovernedTemplateParameter(
+                    code="subject",
+                    value=E6_8D_SUBJECT,
+                    source_object_id=subject_source_id,
+                ),
+            ),
+            meaningful_choice_exists=True,
+            choice_still_open=True,
+            actionability=_E6.ManagementActionability.ACTIONABLE,
+            executive_relevance=_E6.ExecutiveRelevanceStatus.ELIGIBLE,
+            choice_set_codes=("PURSUE","DEFER","MONITOR_NO_ACTION"),
+            material_context_codes=tuple(material_context_codes),
+            source_object_ids=source_ids,
+            lineage_complete=True,
+            test_only=True,
+        )
+        qkey = _E6.build_management_question_key(
+            rel["relationship_id"], E6_8D_EPISODE,
+            _E6.ManagementQuestionType.PURSUE_OPPORTUNITY, "LENDING",
+        )
+        eq_state = _db_stage1e6_build_equivalent_state(
+            conn, rel=rel, episode=E6_8D_EPISODE, question_key=qkey
+        )
+        gov_state = _db_stage1e6_build_governing_decision_state(
+            conn, rel=rel, question_key=qkey,
+            terminal_snapshot=eq_state.latest_terminal_equivalent_item,
+        )
+
+        provisional = _E6.ReviewItemEvaluationInput(
+            review_context=review_ctx,
+            aue=aue_input,
+            aue_cluster=cluster_input,
+            management_situation=situation,
+            authority_context=_E6.DecisionAuthorityInput(
+                lineage_complete=True, test_only=True
+            ),
+            equivalent_review_state=eq_state,
+            governing_decision_state=gov_state,
+            existing_evaluation_state=_E6.ExistingEvaluationStateInput(),
+            policy=policy,
+        )
+        situation_key = _db_stage1e6_management_situation_key(provisional)
+        prior_eval = _db_stage1e6_existing_evaluation_state(
+            conn, rel=rel, cycle=cycle, management_situation_key=situation_key
+        )
+        return _E6.ReviewItemEvaluationInput(
+            review_context=review_ctx,
+            aue=aue_input,
+            aue_cluster=cluster_input,
+            management_situation=situation,
+            authority_context=_E6.DecisionAuthorityInput(
+                lineage_complete=True, test_only=True
+            ),
+            equivalent_review_state=eq_state,
+            governing_decision_state=gov_state,
+            existing_evaluation_state=prior_eval,
+            policy=policy,
+        )
+    finally:
+        conn.close()
+
+
+def _db_stage1e6_terminalize_validation_review_item(review_item_id: str) -> str:
+    with _db_transaction() as conn:
+        rel = _db_stage1e6_validation_relationship(conn)
+        item = conn.execute(
+            "SELECT * FROM review_item WHERE review_item_id=?",
+            (review_item_id,),
+        ).fetchone()
+        if item is None or item["relationship_id"] != rel["id"]:
+            raise RuntimeError("E6_8D_REVIEWITEM_NOT_VALIDATION_FIXTURE")
+        if item["lifecycle_status"] == "RESOLVED":
+            existing = conn.execute(
+                """SELECT decision_id FROM decision
+                   WHERE review_item_id=? AND question_resolution_effect='RESOLVES'
+                   ORDER BY id DESC LIMIT 1""",
+                (item["id"],),
+            ).fetchone()
+            if existing:
+                return existing["decision_id"]
+        if item["lifecycle_status"] != "OPEN":
+            raise RuntimeError("E6_8D_REVIEWITEM_NOT_OPEN_FOR_TERMINALIZATION")
+
+        latest_dre = _db_stage1e6_latest_dre_for_review_item(conn, review_item_id)
+        decision_id = _db_stage1e6_next_public_id(
+            conn, prefix="DEC", table="decision", column="decision_id", width=4
+        )
+        cycle = _db_active_review_cycle(conn)
+        now = _db_now()
+        conn.execute(
+            """INSERT INTO decision(
+                   decision_id,review_item_id,relationship_id,review_cycle_id,decision_date,
+                   original_recommendation,management_decision,final_action,rationale,decision_owner,
+                   execution_required,lifecycle_status,created_at,updated_at,closed_at,
+                   question_resolution_effect,decision_context_fingerprint
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                decision_id,item["id"],rel["id"],cycle["id"],str(now)[:10],
+                item["recommendation"] or "Review governed refinancing opportunity",
+                "Approved","Proceed with governed validation strategy",
+                "Controlled E.6.8D recurrence validation.","E6.8D Validation Harness",
+                0,"Closed",now,now,now,"RESOLVES",
+                latest_dre["decision_context_fingerprint"] if latest_dre is not None else None,
+            ),
+        )
+        conn.execute(
+            """UPDATE review_item
+               SET lifecycle_status='RESOLVED',status='Closed',
+                   resolution_decision_id=?,resolution_reason=?,resolved_at=?,
+                   closed_at=?,updated_at=?
+               WHERE id=?""",
+            (
+                decision_id,"E6_8D_CONTROLLED_VALIDATION",now,now,now,item["id"],
+            ),
+        )
+        _db_stage1e6_audit(
+            conn, entity_type="ReviewItem", entity_id=review_item_id,
+            relationship_id=rel["id"], event_type="REVIEW_ITEM_RESOLVED",
+            actor="E6.8D Validation Harness",
+            state_fingerprint=latest_dre["decision_context_fingerprint"] if latest_dre is not None else decision_id,
+            payload={"decision_id": decision_id, "reason": "controlled E6.8D validation"},
+        )
+        return decision_id
+
+
+def _db_stage1e6_8d_validation_summary() -> dict:
+    conn = _db_connect()
+    try:
+        rel = conn.execute(
+            "SELECT * FROM relationship WHERE relationship_id=?",
+            (E6_VALIDATION_RELATIONSHIP_ID,),
+        ).fetchone()
+        if rel is None:
+            return {"Fixture Exists": False}
+        cycle = _db_active_review_cycle(conn)
+        items = conn.execute(
+            """SELECT review_item_id,lifecycle_status,validity_status,origin_aue_id,
+                      prior_review_item_id,prior_review_item_relationship_type,
+                      management_question_key,created_at,resolved_at,test_only
+               FROM review_item
+               WHERE relationship_id=? AND creation_basis='SYSTEM_PROMOTION'
+                 AND economic_episode_key=?
+               ORDER BY id""",
+            (rel["id"], E6_8D_EPISODE),
+        ).fetchall()
+        dres = conn.execute(
+            """SELECT evaluation_id,decision_requirement,lifecycle_status,source_aue_id,
+                      management_question_key,required_authority,actionability_status,
+                      test_only
+               FROM decision_requirement_evaluation
+               WHERE relationship_id=? AND review_cycle_id=?
+               ORDER BY id""",
+            (rel["id"], cycle["id"]),
+        ).fetchall()
+        rpes = conn.execute(
+            """SELECT promotion_evaluation_id,promotion_result,proposed_persistence_action,
+                      lifecycle_status,source_aue_id,management_question_key,test_only
+               FROM review_promotion_evaluation
+               WHERE relationship_id=? AND review_cycle_id=?
+               ORDER BY id""",
+            (rel["id"], cycle["id"]),
+        ).fetchall()
+        apps = conn.execute(
+            """SELECT rpa.application_id,rpa.proposed_action,rpa.actual_action,
+                      rpa.review_item_id,rpa.prior_review_item_id,rpa.concurrency_resolution_code,
+                      rpa.test_only
+               FROM review_promotion_application rpa
+               JOIN review_promotion_evaluation rpe ON rpe.id=rpa.promotion_evaluation_db_id
+               WHERE rpe.relationship_id=? AND rpe.review_cycle_id=?
+               ORDER BY rpa.id""",
+            (rel["id"], cycle["id"]),
+        ).fetchall()
+        return {
+            "Fixture Exists": True,
+            "Review Cycle": cycle["review_cycle_id"],
+            "Review Authority Mode": _db_stage1e6_review_authority_mode(conn),
+            "Review Items": [dict(r) for r in items],
+            "DRE": [dict(r) for r in dres],
+            "RPE": [dict(r) for r in rpes],
+            "Applications": [dict(r) for r in apps],
+        }
+    finally:
+        conn.close()
+
+
+def _db_stage1e6_8d_lineage(review_item_id: str) -> dict:
+    conn = _db_connect()
+    try:
+        item = conn.execute(
+            "SELECT * FROM review_item WHERE review_item_id=?",
+            (review_item_id,),
+        ).fetchone()
+        if item is None:
+            return {"Lineage PASS": False, "Reason": "REVIEW_ITEM_NOT_FOUND"}
+        revisions = conn.execute(
+            "SELECT * FROM review_item_question_revision WHERE review_item_id=? ORDER BY revision_number",
+            (review_item_id,),
+        ).fetchall()
+        cycles = conn.execute(
+            "SELECT * FROM review_item_cycle_link WHERE review_item_id=? ORDER BY id",
+            (review_item_id,),
+        ).fetchall()
+        intel = conn.execute(
+            "SELECT * FROM review_item_intelligence_link WHERE review_item_id=? ORDER BY id",
+            (review_item_id,),
+        ).fetchall()
+        apps = conn.execute(
+            """SELECT rpa.*,rpe.promotion_evaluation_id,dre.evaluation_id
+               FROM review_promotion_application rpa
+               JOIN review_promotion_evaluation rpe ON rpe.id=rpa.promotion_evaluation_db_id
+               JOIN decision_requirement_evaluation dre ON dre.id=rpe.decision_requirement_evaluation_db_id
+               WHERE rpa.review_item_id=?
+               ORDER BY rpa.id""",
+            (review_item_id,),
+        ).fetchall()
+        audits = conn.execute(
+            """SELECT * FROM audit_event
+               WHERE entity_type='ReviewItem' AND entity_id=?
+               ORDER BY id""",
+            (review_item_id,),
+        ).fetchall()
+        current_links = [r for r in intel if r["link_role"] == "CURRENT_CONTEXT" and r["source_object_type"] == "AUE"]
+        lineage_pass = bool(
+            len(revisions) >= 1
+            and len(cycles) >= 1
+            and len(apps) >= 1
+            and len(current_links) <= 1
+            and bool(item["test_only"])
+        )
+        return {
+            "Lineage PASS": lineage_pass,
+            "Review Item": dict(item),
+            "Question Revisions": [dict(r) for r in revisions],
+            "Cycle Links": [dict(r) for r in cycles],
+            "Intelligence Links": [dict(r) for r in intel],
+            "Applications": [dict(r) for r in apps],
+            "Audit Events": [dict(r) for r in audits],
+            "Summary": {
+                "Review Item ID": review_item_id,
+                "Lifecycle": item["lifecycle_status"],
+                "Validity": item["validity_status"],
+                "Origin AUE": item["origin_aue_id"],
+                "Prior Review Item": item["prior_review_item_id"],
+                "Question Revisions": len(revisions),
+                "Cycle Links": len(cycles),
+                "Intelligence Links": len(intel),
+                "Applications": len(apps),
+                "Audit Events": len(audits),
+                "Current AUE Links": len(current_links),
+            },
+        }
+    finally:
+        conn.close()
+
+
+def _db_stage1e6_8d_run_live_validation() -> dict:
+    """Controlled end-to-end engine + Supabase persistence validation.
+
+    The hidden E6 relationship is the only E.6 automatic-write scope while
+    REVIEW_ITEM_AUTHORITY_MODE remains LEGACY.
+    """
+    # If a completed recurrence already exists for this ReviewCycle, return a
+    # reloadable summary instead of manufacturing another recurrence.
+    existing = _db_stage1e6_8d_validation_summary()
+    if existing.get("Fixture Exists"):
+        completed = [
+            x for x in existing.get("Review Items", [])
+            if x.get("prior_review_item_relationship_type") == "RECURRENCE"
+            and x.get("lifecycle_status") == "OPEN"
+        ]
+        if completed:
+            current_id = completed[-1]["review_item_id"]
+            lineage = _db_stage1e6_8d_lineage(current_id)
+            return {
+                "E.6.8D Live Validation PASS": bool(lineage.get("Lineage PASS")),
+                "Already Completed": True,
+                "Current Review Item": current_id,
+                "Current Lifecycle": completed[-1]["lifecycle_status"],
+                "Lineage PASS": bool(lineage.get("Lineage PASS")),
+                "Summary": existing,
+            }
+
+    # 1) First AUE -> CREATE_NEW.
+    aue1 = _db_stage1e6_ensure_validation_aue(binding_days=15)
+    inp1 = _db_stage1e6_build_validation_engine_input(
+        material_context_codes=E6_8D_BASE_CONTEXT_CODES
+    )
+    res1 = _E6.evaluate_review_item_candidate(inp1)
+    p1 = _db_stage1e6_persist_evaluation(
+        inp1, res1, actor="E6.8D Validation Harness"
+    )
+    rev1 = p1["Review Item ID"]
+
+    # 2) Reconcile downstream state -> REUSE_EXISTING.
+    inp2 = _db_stage1e6_build_validation_engine_input(
+        material_context_codes=E6_8D_BASE_CONTEXT_CODES
+    )
+    res2 = _E6.evaluate_review_item_candidate(inp2)
+    p2 = _db_stage1e6_persist_evaluation(
+        inp2, res2, actor="E6.8D Validation Harness"
+    )
+
+    # 3) Exact stable rerun -> KEEP_EXISTING.
+    inp3 = _db_stage1e6_build_validation_engine_input(
+        material_context_codes=E6_8D_BASE_CONTEXT_CODES
+    )
+    res3 = _E6.evaluate_review_item_candidate(inp3)
+    p3 = _db_stage1e6_persist_evaluation(
+        inp3, res3, actor="E6.8D Validation Harness"
+    )
+
+    # 4) New persisted AUE, same question -> REUSE_EXISTING.
+    aue2 = _db_stage1e6_ensure_validation_aue(binding_days=7)
+    inp4 = _db_stage1e6_build_validation_engine_input(
+        material_context_codes=E6_8D_BASE_CONTEXT_CODES
+    )
+    res4 = _E6.evaluate_review_item_candidate(inp4)
+    p4 = _db_stage1e6_persist_evaluation(
+        inp4, res4, actor="E6.8D Validation Harness"
+    )
+
+    # 5) Controlled management resolution establishes a terminal prior item.
+    decision_id = _db_stage1e6_terminalize_validation_review_item(rev1)
+
+    # 6) New AUE + governed material context change -> CREATE_RECURRENCE.
+    aue3 = _db_stage1e6_ensure_validation_aue(binding_days=3)
+    inp5 = _db_stage1e6_build_validation_engine_input(
+        material_context_codes=E6_8D_RECURRENCE_CONTEXT_CODES
+    )
+    res5 = _E6.evaluate_review_item_candidate(inp5)
+    p5 = _db_stage1e6_persist_evaluation(
+        inp5, res5, actor="E6.8D Validation Harness"
+    )
+    rev2 = p5["Review Item ID"]
+
+    # Persistence exact rerun of the same governed recurrence result must not
+    # manufacture another successor.
+    p5b = _db_stage1e6_persist_evaluation(
+        inp5, res5, actor="E6.8D Validation Harness"
+    )
+
+    lineage1 = _db_stage1e6_8d_lineage(rev1)
+    lineage2 = _db_stage1e6_8d_lineage(rev2)
+    summary = _db_stage1e6_8d_validation_summary()
+
+    pass_result = bool(
+        res1.promotion.proposed_persistence_action == _E6.ReviewItemPersistenceAction.CREATE_NEW
+        and p1["Actual Action"] == "CREATE_NEW"
+        and p2["Actual Action"] == "REUSE_EXISTING"
+        and res3.promotion.proposed_persistence_action == _E6.ReviewItemPersistenceAction.KEEP_EXISTING
+        and p3["Exact Rerun"] is True
+        and aue2 != aue1
+        and p4["Actual Action"] == "REUSE_EXISTING"
+        and p4["Review Item ID"] == rev1
+        and decision_id
+        and aue3 != aue2
+        and res5.promotion.proposed_persistence_action == _E6.ReviewItemPersistenceAction.CREATE_RECURRENCE
+        and p5["Actual Action"] == "CREATE_RECURRENCE"
+        and rev2 != rev1
+        and p5b["Exact Rerun"] is True
+        and lineage1.get("Lineage PASS")
+        and lineage2.get("Lineage PASS")
+        and bool(lineage2.get("Review Item", {}).get("test_only"))
+        and lineage2.get("Review Item", {}).get("prior_review_item_id") == rev1
+    )
+
+    return {
+        "E.6.8D Live Validation PASS": pass_result,
+        "AUE 1": aue1,
+        "AUE 2": aue2,
+        "AUE 3": aue3,
+        "CREATE_NEW": p1,
+        "Post-Create Reconciliation": p2,
+        "KEEP_EXISTING": p3,
+        "Same Question / New AUE REUSE": p4,
+        "Resolution Decision": decision_id,
+        "CREATE_RECURRENCE": p5,
+        "Recurrence Exact Rerun": p5b,
+        "Original Review Item": rev1,
+        "Recurrence Review Item": rev2,
+        "Original Lineage PASS": bool(lineage1.get("Lineage PASS")),
+        "Recurrence Lineage PASS": bool(lineage2.get("Lineage PASS")),
+        "Summary": summary,
+    }
+
+# END STAGE 1-E.6.8D — DIAGNOSTICS INTEGRATION & CONTROLLED LIVE VALIDATION
+
+
+
+# =============================================================================
 # STAGE 1-E.4.9 — FINAL LIVE VALIDATION
 # =============================================================================
 
@@ -13172,6 +17823,8 @@ def _db_bootstrap_reference_state(review_cycle_name: str):
 
 
 def _db_get_or_create_review_item(conn: _DBConnection, row) -> Any:
+    if _db_stage1e6_schema_ready(conn) and _db_stage1e6_review_authority_mode(conn) == 'E6':
+        raise RuntimeError('LEGACY_REVIEWITEM_CREATOR_DISABLED_IN_E6_MODE')
     cycle = _db_active_review_cycle(conn)
     rel = _db_relationship_row(conn, row["Company"])
     existing = conn.execute(
@@ -13217,6 +17870,8 @@ def _db_sync_relationship_review_items():
     decisions attach to the same item rather than creating a parallel session object.
     """
     with _db_transaction() as conn:
+        if _db_stage1e6_schema_ready(conn) and _db_stage1e6_review_authority_mode(conn) == 'E6':
+            return
         cycle = _db_active_review_cycle(conn)
         now = _db_now()
         candidates = df[df["MAS"] >= 41].copy().sort_values("MAS", ascending=False)
@@ -14397,7 +19052,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.5.10 · Final Live Attention × Urgency Validation Hotfix v0.3 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.6.8D · Diagnostics Integration & Controlled Live Validation v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -14917,6 +19572,84 @@ def render_stage_1c_sidebar():
 
 
 
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.6.8D · ReviewItem Persistence Live Validation**")
+            st.caption(
+                "Diagnostics only · hidden EC-AI E6 Validation Co · locked E.6.7 engine embedded · "
+                "normal Review remains LEGACY authority. Validates CREATE → KEEP → REUSE → RECURRENCE on the durable DB."
+            )
+            try:
+                e68d_foundation = _db_stage1e6_foundation_summary()
+                st.write({
+                    "Schema Ready": e68d_foundation.get("E6 Schema Ready"),
+                    "E6 Schema Version": e68d_foundation.get("Schema Version"),
+                    "Review Authority Mode": e68d_foundation.get("Review Authority Mode"),
+                    "Embedded Engine": getattr(_E6, "ENGINE_VERSION", "unknown"),
+                })
+            except Exception as exc:
+                e68d_foundation = None
+                st.error(f"E.6.8D foundation reload failed: {exc}")
+
+            if st.button(
+                "Run E.6.8D Controlled Live ReviewItem Validation",
+                key="stage1e6_8d_live_validation",
+                use_container_width=True,
+            ):
+                try:
+                    result = _db_stage1e6_8d_run_live_validation()
+                    st.session_state["stage1e6_8d_live_result"] = result
+                except Exception as exc:
+                    st.error(f"E.6.8D live validation failed: {exc}")
+
+            e68d_result = st.session_state.get("stage1e6_8d_live_result")
+            if e68d_result:
+                if e68d_result.get("E.6.8D Live Validation PASS"):
+                    st.success(
+                        "E.6.8D PASS · locked E.6.7 engine + durable persistence validated "
+                        "CREATE_NEW, stable KEEP_EXISTING, new-AUE REUSE_EXISTING and linked CREATE_RECURRENCE."
+                    )
+                else:
+                    st.error("E.6.8D CHECK · inspect the controlled validation output.")
+                st.write(e68d_result)
+
+            try:
+                e68d_summary = _db_stage1e6_8d_validation_summary()
+            except Exception as exc:
+                e68d_summary = None
+                st.error(f"E.6.8D summary reload failed: {exc}")
+
+            if e68d_summary and e68d_summary.get("Fixture Exists"):
+                items = e68d_summary.get("Review Items", [])
+                if items:
+                    st.dataframe(pd.DataFrame(items), use_container_width=True, hide_index=True)
+                    for item in items[-2:]:
+                        rid = item.get("review_item_id")
+                        lineage_key = f"stage1e6_8d_lineage::{rid}"
+                        if st.button(
+                            f"Load {rid} E.6 ReviewItem Lineage",
+                            key=f"stage1e6_8d_load_lineage::{rid}",
+                            use_container_width=True,
+                        ):
+                            try:
+                                st.session_state[lineage_key] = _db_stage1e6_8d_lineage(rid)
+                            except Exception as exc:
+                                st.error(f"E.6.8D lineage load failed for {rid}: {exc}")
+                        lineage = st.session_state.get(lineage_key)
+                        if lineage:
+                            summary = lineage.get("Summary", {})
+                            if lineage.get("Lineage PASS"):
+                                st.success(
+                                    f"E.6.8D {rid} Lineage PASS · Lifecycle {summary.get('Lifecycle')} · "
+                                    f"Origin AUE {summary.get('Origin AUE')} · "
+                                    f"Cycle Links {summary.get('Cycle Links')} · "
+                                    f"Applications {summary.get('Applications')}"
+                                )
+                            else:
+                                st.error(f"E.6.8D {rid} Lineage CHECK")
+                            st.write(summary)
+                            with st.expander(f"Inspect {rid} full E.6 lineage", expanded=False):
+                                st.json(lineage)
 
         if diagnostics_enabled:
             st.markdown("**Stage 1-E.5.10 · Final Live Attention × Urgency Validation**")
