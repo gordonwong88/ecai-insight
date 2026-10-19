@@ -1469,7 +1469,7 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 13
-ECAI_PERSISTENCE_RUNTIME_VERSION = 15  # E.6.8D: diagnostics integration + controlled live validation
+ECAI_PERSISTENCE_RUNTIME_VERSION = 16  # E.6.8D v0.2: commit validation fixture before AUE persistence
 ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8D Diagnostics Integration & Controlled Live Supabase Validation Candidate v0.1"
 
 
@@ -16440,13 +16440,16 @@ def _db_stage1e6_build_validation_aue_candidate(
 
 
 def _db_stage1e6_ensure_validation_aue(*, binding_days: int) -> str:
-    conn = _db_connect()
-    try:
+    # The E.6 validation relationship and E.5 review-policy binding may be
+    # created while building the synthetic AUE candidate. They must be
+    # committed before _db_stage1e5_persist_candidate opens its own
+    # transaction; otherwise PostgreSQL rolls the fixture insert back when
+    # the first connection closes and the persistence layer sees an
+    # unregistered relationship.
+    with _db_transaction() as conn:
         ctx, candidate = _db_stage1e6_build_validation_aue_candidate(
             conn, binding_days=binding_days
         )
-    finally:
-        conn.close()
     result = _db_stage1e5_persist_candidate(
         ctx, candidate,
         actor="E6.8D Validation Harness",
@@ -19052,7 +19055,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.6.8D · Diagnostics Integration & Controlled Live Validation v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.6.8D · Diagnostics Integration & Controlled Live Validation v0.2 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
