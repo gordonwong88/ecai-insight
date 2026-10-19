@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.6.8D Diagnostics Integration & Controlled Live Supabase Validation Candidate v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.6.8I Live Shadow Comparison & Stage 1-C Compatibility Validation v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1469,8 +1469,8 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 13
-ECAI_PERSISTENCE_RUNTIME_VERSION = 16  # E.6.8D v0.2: commit validation fixture before AUE persistence
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8D Diagnostics Integration & Controlled Live Supabase Validation Candidate v0.1"
+ECAI_PERSISTENCE_RUNTIME_VERSION = 19  # E.6.8I v0.1: live shadow + Stage 1-C compatibility validation
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8I Live Shadow Comparison & Stage 1-C Compatibility Validation v0.1"
 
 
 def _db_now() -> str:
@@ -17109,6 +17109,781 @@ def _db_stage1e6_8d_run_live_validation() -> dict:
 # END STAGE 1-E.6.8D — DIAGNOSTICS INTEGRATION & CONTROLLED LIVE VALIDATION
 
 
+# =============================================================================
+# STAGE 1-E.6.8H-A — GOVERNED REVIEW WORKSPACE ADAPTER CODE RED-TEAM HOTFIX
+# =============================================================================
+# Read-only boundary. These functions translate durable ReviewItem state into a
+# stable Stage 1-C-compatible presentation contract. They MUST NOT create,
+# supersede, repair, or mutate institutional objects. v0.2 adds fail-visible
+# lineage integrity checks, test-isolation protection, duplicate-cycle-link
+# detection, and non-N+1 downstream summarisation.
+E6_REVIEW_ADAPTER_VERSION = "1.0-shadow-v0.2-red-team"
+E6_REVIEW_ADAPTER_REQUIRED_FIELDS = (
+    "review_item_id", "relationship_id", "relationship_name", "review_cycle_id",
+    "creation_basis", "management_question", "ecai_recommendation",
+    "attention_rating", "attention_score", "urgency_rating", "urgency_score",
+    "quadrant", "lifecycle_status", "validity_status", "decision_status",
+    "execution_status", "source_aue_id", "source_dre_id", "source_rpe_id",
+    "question_revision_id", "lineage_status", "lineage_integrity_status",
+    "data_quality_status", "decision_history_count", "execution_action_count",
+)
+
+
+def _db_stage1e6_8h_json_list(value) -> list[str]:
+    if value in (None, "", []):
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            return [str(v) for v in parsed]
+    except Exception:
+        pass
+    return [str(value)]
+
+
+def _db_stage1e6_8h_reason_text(value) -> str:
+    reasons = _db_stage1e6_8h_json_list(value)
+    return " · ".join(reasons) if reasons else "Not assessed"
+
+
+def _db_stage1e6_8h_rows_by_review_item(conn: _DBConnection, table: str, review_item_db_ids: list[int]):
+    """Load all downstream rows for the requested ReviewItems in one batch.
+
+    Table names are internal constants supplied by the adapter only. The helper
+    exists to avoid N+1 queries while keeping downstream history visible.
+    """
+    if table not in {"decision", "execution_action"}:
+        raise ValueError(f"E6_REVIEW_ADAPTER_INVALID_BATCH_TABLE:{table}")
+    if not review_item_db_ids:
+        return {}
+    placeholders = ",".join("?" for _ in review_item_db_ids)
+    rows = conn.execute(
+        f"SELECT * FROM {table} WHERE review_item_id IN ({placeholders}) ORDER BY review_item_id ASC, id DESC",
+        tuple(review_item_db_ids),
+    ).fetchall()
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(int(row["review_item_id"]), []).append(row)
+    return grouped
+
+
+def _db_stage1e6_8h_latest_compatibility_decision(rows: list) -> tuple[object | None, int, str]:
+    """Compatibility-only Decision summary until the locked G/G-Z contract is implemented.
+
+    We do not claim the newest legacy Decision is a governed E.6 resolution.
+    """
+    if not rows:
+        return None, 0, "NONE"
+    if len(rows) == 1:
+        return rows[0], 1, "SINGLE_LEGACY_RECORD"
+    return rows[0], len(rows), "LEGACY_LATEST_BY_ID_NOT_GOVERNED"
+
+
+def _db_stage1e6_8h_execution_summary(rows: list) -> tuple[str, str | None, int, list[str]]:
+    if not rows:
+        return "Not Required / Not Started", None, 0, []
+    statuses = sorted({str(r["status"] or "NOT_ASSESSED") for r in rows})
+    if len(rows) == 1:
+        return str(rows[0]["status"] or "NOT_ASSESSED"), rows[0]["execution_action_id"], 1, statuses
+    # Do not hide an older open/blocked action merely because another action has
+    # a higher surrogate ID. Multiple actions are a truthful presentation fact.
+    return "Multiple Actions", None, len(rows), statuses
+
+
+def _db_stage1e6_8h_integrity(row, *, include_test_only: bool) -> tuple[str, list[str]]:
+    basis = str(row["creation_basis"] or "LEGACY_STAGE_1D")
+    issues: list[str] = []
+
+    # Question revision must belong to the same ReviewItem and match both stored IDs.
+    qrid = row["question_revision_id"]
+    qrdb = row["question_revision_db_id"]
+    if qrid or qrdb:
+        if row["joined_question_revision_db_id"] is None:
+            issues.append("QUESTION_REVISION_MISSING")
+        else:
+            if int(row["qr_review_item_db_id"]) != int(row["review_item_db_id"]):
+                issues.append("QUESTION_REVISION_WRONG_REVIEW_ITEM")
+            if str(row["qr_revision_id"] or "") != str(qrid or ""):
+                issues.append("QUESTION_REVISION_ID_MISMATCH")
+    elif basis in {"SYSTEM_PROMOTION", "MANAGEMENT_INITIATED"}:
+        issues.append("QUESTION_REVISION_NOT_LINKED")
+
+    # If a cycle link points at governed analytical lineage, the joined rows must
+    # exist and agree on Relationship, ReviewCycle and exact source AUE.
+    current_aue_id = row["current_aue_id"]
+    if current_aue_id:
+        if row["joined_aue_id"] is None:
+            issues.append("AUE_MISSING")
+        else:
+            if int(row["aue_relationship_id"]) != int(row["relationship_db_id"]):
+                issues.append("AUE_WRONG_RELATIONSHIP")
+            if int(row["aue_review_cycle_id"]) != int(row["cycle_link_review_cycle_id"]):
+                issues.append("AUE_WRONG_REVIEW_CYCLE")
+            if str(row["aue_status"] or "") != "PUBLISHED":
+                issues.append("AUE_NOT_PUBLISHED")
+
+    dre_id = row["decision_requirement_evaluation_id"]
+    if dre_id:
+        if row["joined_dre_id"] is None:
+            issues.append("DRE_MISSING")
+        else:
+            if int(row["dre_relationship_id"]) != int(row["relationship_db_id"]):
+                issues.append("DRE_WRONG_RELATIONSHIP")
+            if int(row["dre_review_cycle_id"]) != int(row["cycle_link_review_cycle_id"]):
+                issues.append("DRE_WRONG_REVIEW_CYCLE")
+            if current_aue_id and str(row["dre_source_aue_id"] or "") != str(current_aue_id):
+                issues.append("DRE_AUE_MISMATCH")
+            if str(row["dre_lifecycle_status"] or "") != "PUBLISHED":
+                issues.append("DRE_NOT_PUBLISHED")
+
+    rpe_id = row["promotion_evaluation_id"]
+    if rpe_id:
+        if row["joined_rpe_id"] is None:
+            issues.append("RPE_MISSING")
+        else:
+            if int(row["rpe_relationship_id"]) != int(row["relationship_db_id"]):
+                issues.append("RPE_WRONG_RELATIONSHIP")
+            if int(row["rpe_review_cycle_id"]) != int(row["cycle_link_review_cycle_id"]):
+                issues.append("RPE_WRONG_REVIEW_CYCLE")
+            if current_aue_id and str(row["rpe_source_aue_id"] or "") != str(current_aue_id):
+                issues.append("RPE_AUE_MISMATCH")
+            if dre_id and str(row["rpe_dre_id"] or "") != str(dre_id):
+                issues.append("RPE_DRE_MISMATCH")
+            if str(row["rpe_lifecycle_status"] or "") != "PUBLISHED":
+                issues.append("RPE_NOT_PUBLISHED")
+
+    # Full system promotion lineage must be complete; management-initiated items
+    # may legitimately have no AUE/DRE/RPE at origin.
+    if basis == "SYSTEM_PROMOTION":
+        if not current_aue_id:
+            issues.append("SYSTEM_PROMOTION_AUE_NOT_LINKED")
+        if not dre_id:
+            issues.append("SYSTEM_PROMOTION_DRE_NOT_LINKED")
+        if not rpe_id:
+            issues.append("SYSTEM_PROMOTION_RPE_NOT_LINKED")
+
+    parent_test = bool(row["review_item_test_only"])
+    link_test = bool(row["cycle_link_test_only"])
+    if parent_test != link_test:
+        issues.append("TEST_ISOLATION_REVIEWITEM_CYCLELINK_MISMATCH")
+    source_test_values = [
+        ("QUESTION_REVISION", row["qr_test_only"]),
+        ("AUE", row["aue_test_only"]),
+        ("DRE", row["dre_test_only"]),
+        ("RPE", row["rpe_test_only"]),
+    ]
+    for label, value in source_test_values:
+        if value is not None and bool(value) != parent_test:
+            issues.append(f"TEST_ISOLATION_{label}_MISMATCH")
+    if not include_test_only and parent_test:
+        issues.append("TEST_ONLY_ITEM_IN_BUSINESS_READ")
+
+    if issues:
+        return "INVALID", sorted(set(issues))
+    if basis == "LEGACY_STAGE_1D":
+        return "LEGACY", []
+    if basis == "MANAGEMENT_INITIATED":
+        return "PARTIAL_BY_DESIGN", []
+    return "FULL", []
+
+
+def _db_stage1e6_8h_data_quality(row, lineage_integrity: str, lineage_issues: list[str]) -> tuple[str, str]:
+    if lineage_integrity == "INVALID":
+        return "BLOCKED", " · ".join(lineage_issues)
+    basis = str(row["creation_basis"] or "LEGACY_STAGE_1D")
+    if basis == "MANAGEMENT_INITIATED" and not row["current_aue_id"]:
+        return "NOT_ASSESSED", "Management-initiated item has no governed AUE attached to this cycle context"
+    if not row["current_aue_id"]:
+        return "NOT_ASSESSED", "No governed AUE attached to this cycle context"
+    quality_pass = row["quality_gate_pass"]
+    attention_coverage = str(row["attention_coverage"] or "NOT_ASSESSED")
+    urgency_coverage = str(row["urgency_coverage"] or "NOT_ASSESSED")
+    if bool(quality_pass) and attention_coverage != "NOT_ASSESSED" and urgency_coverage != "NOT_ASSESSED":
+        return "PASS", ""
+    reasons = _db_stage1e6_8h_json_list(row["quality_gate_reason_codes_json"])
+    return "CHECK", " · ".join(reasons) if reasons else "AUE quality or coverage incomplete"
+
+
+def _db_stage1e6_8h_load_governed_items(conn: _DBConnection, *, include_test_only: bool = False) -> list[dict]:
+    cycle = _db_active_review_cycle(conn)
+    test_clause = "" if include_test_only else "AND COALESCE(ri.test_only,0)=0 AND COALESCE(ril.test_only,0)=0"
+    rows = conn.execute(
+        f"""SELECT
+               ri.id AS review_item_db_id,
+               ri.relationship_id AS relationship_db_id,
+               ri.review_item_id,
+               ri.creation_basis,
+               ri.management_question AS legacy_management_question,
+               ri.recommendation,
+               ri.expected_outcome,
+               ri.lifecycle_status,
+               ri.validity_status,
+               ri.question_type,
+               ri.decision_family,
+               ri.decision_scope_code,
+               ri.test_only AS review_item_test_only,
+               r.relationship_id AS relationship_public_id,
+               r.name AS relationship_name,
+               rc.review_cycle_id AS review_cycle_public_id,
+               ril.review_cycle_id AS cycle_link_review_cycle_id,
+               ril.link_id AS cycle_link_id,
+               ril.association_basis,
+               ril.question_revision_db_id,
+               ril.question_revision_id,
+               ril.current_aue_id,
+               ril.decision_requirement_evaluation_id,
+               ril.promotion_evaluation_id,
+               ril.frozen_at AS cycle_link_frozen_at,
+               ril.test_only AS cycle_link_test_only,
+               qr.id AS joined_question_revision_db_id,
+               qr.review_item_db_id AS qr_review_item_db_id,
+               qr.revision_id AS qr_revision_id,
+               qr.question_text AS revision_question_text,
+               qr.test_only AS qr_test_only,
+               aue.evaluation_id AS joined_aue_id,
+               aue.relationship_id AS aue_relationship_id,
+               aue.review_cycle_id AS aue_review_cycle_id,
+               aue.status AS aue_status,
+               aue.test_only AS aue_test_only,
+               aue.attention_rating,
+               aue.attention_score,
+               aue.attention_coverage,
+               aue.attention_reason_codes_json,
+               aue.urgency_rating,
+               aue.urgency_score,
+               aue.urgency_coverage,
+               aue.urgency_reason_codes_json,
+               aue.quadrant,
+               aue.quadrant_status,
+               aue.quality_gate_pass,
+               aue.quality_gate_reason_codes_json,
+               dre.evaluation_id AS joined_dre_id,
+               dre.relationship_id AS dre_relationship_id,
+               dre.review_cycle_id AS dre_review_cycle_id,
+               dre.source_aue_id AS dre_source_aue_id,
+               dre.lifecycle_status AS dre_lifecycle_status,
+               dre.test_only AS dre_test_only,
+               dre.decision_requirement,
+               dre.required_authority,
+               dre.actionability_status,
+               rpe.promotion_evaluation_id AS joined_rpe_id,
+               rpe.relationship_id AS rpe_relationship_id,
+               rpe.review_cycle_id AS rpe_review_cycle_id,
+               rpe.source_aue_id AS rpe_source_aue_id,
+               rpe.decision_requirement_evaluation_id AS rpe_dre_id,
+               rpe.lifecycle_status AS rpe_lifecycle_status,
+               rpe.test_only AS rpe_test_only,
+               rpe.promotion_result
+           FROM review_item_cycle_link ril
+           JOIN review_item ri ON ri.id=ril.review_item_db_id
+           JOIN relationship r ON r.id=ri.relationship_id
+           JOIN review_cycle rc ON rc.id=ril.review_cycle_id
+           LEFT JOIN review_item_question_revision qr ON qr.id=ril.question_revision_db_id
+           LEFT JOIN attention_urgency_evaluation aue ON aue.evaluation_id=ril.current_aue_id
+           LEFT JOIN decision_requirement_evaluation dre ON dre.evaluation_id=ril.decision_requirement_evaluation_id
+           LEFT JOIN review_promotion_evaluation rpe ON rpe.promotion_evaluation_id=ril.promotion_evaluation_id
+           WHERE ril.review_cycle_id=?
+             AND ri.creation_basis IN ('SYSTEM_PROMOTION','MANAGEMENT_INITIATED')
+             {test_clause}
+           ORDER BY ri.id ASC""",
+        (cycle["id"],),
+    ).fetchall()
+
+    seen = set()
+    for row in rows:
+        rid = int(row["review_item_db_id"])
+        if rid in seen:
+            raise RuntimeError(f"E6_REVIEW_ADAPTER_DUPLICATE_CYCLE_LINK:{row['review_item_id']}")
+        seen.add(rid)
+
+    review_item_ids = [int(r["review_item_db_id"]) for r in rows]
+    decision_rows = _db_stage1e6_8h_rows_by_review_item(conn, "decision", review_item_ids)
+    execution_rows = _db_stage1e6_8h_rows_by_review_item(conn, "execution_action", review_item_ids)
+
+    items = []
+    for row in rows:
+        rid = int(row["review_item_db_id"])
+        decision, decision_count, decision_governance = _db_stage1e6_8h_latest_compatibility_decision(decision_rows.get(rid, []))
+        execution_status, execution_id, execution_count, execution_statuses = _db_stage1e6_8h_execution_summary(execution_rows.get(rid, []))
+        lineage_integrity, lineage_issues = _db_stage1e6_8h_integrity(row, include_test_only=include_test_only)
+        quality_status, blocking_reason = _db_stage1e6_8h_data_quality(row, lineage_integrity, lineage_issues)
+
+        # Do not fall back to mutable/stale ReviewItem wording for governed items
+        # when the linked revision is broken. Missing governance remains visible.
+        question_issue = any(code.startswith("QUESTION_REVISION_") for code in lineage_issues)
+        question = None if question_issue else (row["revision_question_text"] if row["joined_question_revision_db_id"] is not None else None)
+        question = question or "Not assessed"
+        basis = str(row["creation_basis"] or "SYSTEM_PROMOTION")
+
+        # Broken analytical lineage or test-isolation mismatch is blocked and its
+        # AUE-derived values are not surfaced as governed business intelligence.
+        analytical_prefixes = ("AUE_", "DRE_", "RPE_", "SYSTEM_PROMOTION_", "TEST_ISOLATION_")
+        analytical_blocked = any(code.startswith(analytical_prefixes) for code in lineage_issues)
+        if analytical_blocked:
+            attention_rating = "NOT_ASSESSED"; attention_score = None
+            urgency_rating = "NOT_ASSESSED"; urgency_score = None
+            quadrant = "NOT_ASSIGNED"; why_important = "Not assessed"; why_now = "Not assessed"
+        else:
+            attention_rating = row["attention_rating"] or "NOT_ASSESSED"
+            attention_score = row["attention_score"]
+            urgency_rating = row["urgency_rating"] or "NOT_ASSESSED"
+            urgency_score = row["urgency_score"]
+            quadrant = row["quadrant"] or "NOT_ASSIGNED"
+            why_important = _db_stage1e6_8h_reason_text(row["attention_reason_codes_json"])
+            why_now = _db_stage1e6_8h_reason_text(row["urgency_reason_codes_json"])
+
+        items.append({
+            "review_item_id": row["review_item_id"],
+            "relationship_id": row["relationship_public_id"],
+            "relationship_name": row["relationship_name"],
+            "review_cycle_id": row["review_cycle_public_id"],
+            "creation_basis": basis,
+            "management_question": question,
+            "question_type": row["question_type"] or "NOT_ASSESSED",
+            "decision_family": row["decision_family"] or "NOT_ASSESSED",
+            "decision_scope_code": row["decision_scope_code"] or "NOT_ASSESSED",
+            "ecai_recommendation": row["recommendation"] or "Not assessed",
+            "expected_outcome": row["expected_outcome"] or "Not assessed",
+            "attention_rating": attention_rating,
+            "attention_score": attention_score,
+            "urgency_rating": urgency_rating,
+            "urgency_score": urgency_score,
+            "quadrant": quadrant,
+            "why_important": why_important,
+            "why_now": why_now,
+            "lifecycle_status": row["lifecycle_status"] or "NOT_ASSESSED",
+            "validity_status": row["validity_status"] or "NOT_ASSESSED",
+            "cycle_association_status": "FROZEN" if row["cycle_link_frozen_at"] else "CURRENT_CYCLE",
+            "decision_status": decision["management_decision"] if decision is not None else "Pending",
+            # G/G-Z semantics are locked conceptually but not yet implemented in the Decision table.
+            "decision_resolution_effect": "NOT_ASSESSED",
+            "latest_decision_id": decision["decision_id"] if decision is not None else None,
+            "decision_history_count": decision_count,
+            "decision_governance_status": decision_governance,
+            "execution_status": execution_status,
+            "execution_action_id": execution_id,
+            "execution_action_count": execution_count,
+            "execution_statuses": execution_statuses,
+            "source_aue_id": row["current_aue_id"],
+            "source_dre_id": row["decision_requirement_evaluation_id"],
+            "source_rpe_id": row["promotion_evaluation_id"],
+            "question_revision_id": row["question_revision_id"],
+            "lineage_status": ("INVALID" if lineage_integrity == "INVALID" else ("PARTIAL" if basis == "MANAGEMENT_INITIATED" else "FULL")),
+            "lineage_integrity_status": lineage_integrity,
+            "lineage_issues": lineage_issues,
+            "data_quality_status": quality_status,
+            "blocking_reason": blocking_reason,
+            "promotion_result": row["promotion_result"] or "NOT_ASSESSED",
+            "decision_requirement": row["decision_requirement"] or "NOT_ASSESSED",
+            "required_authority": row["required_authority"] or "NOT_ASSESSED",
+            "actionability_status": row["actionability_status"] or "NOT_ASSESSED",
+            "test_only": bool(row["review_item_test_only"]),
+        })
+    return items
+
+
+def _db_stage1e6_8h_load_legacy_items(conn: _DBConnection, *, include_test_only: bool = False) -> list[dict]:
+    cycle = _db_active_review_cycle(conn)
+    test_clause = "" if include_test_only else "AND COALESCE(ri.test_only,0)=0"
+    rows = conn.execute(
+        f"""SELECT ri.*, r.relationship_id AS relationship_public_id,
+                   r.name AS relationship_name, r.score AS relationship_score,
+                   r.attention_rating AS relationship_attention_rating,
+                   r.primary_driver AS relationship_primary_driver,
+                   rc.review_cycle_id AS review_cycle_public_id
+            FROM review_item ri
+            JOIN relationship r ON r.id=ri.relationship_id
+            JOIN review_cycle rc ON rc.id=ri.review_cycle_id
+            WHERE ri.review_cycle_id=?
+              AND ri.source='Relationship Review'
+              AND (ri.creation_basis='LEGACY_STAGE_1D' OR ri.creation_basis IS NULL)
+              {test_clause}
+            ORDER BY ri.id ASC""",
+        (cycle["id"],),
+    ).fetchall()
+    review_item_ids = [int(r["id"]) for r in rows]
+    decision_rows = _db_stage1e6_8h_rows_by_review_item(conn, "decision", review_item_ids)
+    execution_rows = _db_stage1e6_8h_rows_by_review_item(conn, "execution_action", review_item_ids)
+    items = []
+    for row in rows:
+        rid = int(row["id"])
+        decision, decision_count, decision_governance = _db_stage1e6_8h_latest_compatibility_decision(decision_rows.get(rid, []))
+        execution_status, execution_id, execution_count, execution_statuses = _db_stage1e6_8h_execution_summary(execution_rows.get(rid, []))
+        items.append({
+            "review_item_id": row["review_item_id"],
+            "relationship_id": row["relationship_public_id"],
+            "relationship_name": row["relationship_name"],
+            "review_cycle_id": row["review_cycle_public_id"],
+            "creation_basis": "LEGACY_STAGE_1D",
+            "management_question": row["management_question"] or "Not assessed",
+            "question_type": "NOT_ASSESSED",
+            "decision_family": "NOT_ASSESSED",
+            "decision_scope_code": "NOT_ASSESSED",
+            "ecai_recommendation": row["recommendation"] or "Not assessed",
+            "expected_outcome": row["expected_outcome"] or "Not assessed",
+            "attention_rating": row["relationship_attention_rating"] or "NOT_ASSESSED",
+            "attention_score": row["relationship_score"],
+            "urgency_rating": "NOT_ASSESSED",
+            "urgency_score": None,
+            "quadrant": "NOT_ASSIGNED",
+            "why_important": row["relationship_primary_driver"] or "Not assessed",
+            "why_now": "Not assessed",
+            "lifecycle_status": "NOT_ASSESSED",
+            "validity_status": "NOT_ASSESSED",
+            "cycle_association_status": "LEGACY_CURRENT_CYCLE",
+            "decision_status": decision["management_decision"] if decision is not None else "Pending",
+            "decision_resolution_effect": "NOT_ASSESSED",
+            "latest_decision_id": decision["decision_id"] if decision is not None else None,
+            "decision_history_count": decision_count,
+            "decision_governance_status": decision_governance,
+            "execution_status": execution_status,
+            "execution_action_id": execution_id,
+            "execution_action_count": execution_count,
+            "execution_statuses": execution_statuses,
+            "source_aue_id": None,
+            "source_dre_id": None,
+            "source_rpe_id": None,
+            "question_revision_id": None,
+            "lineage_status": "LEGACY",
+            "lineage_integrity_status": "LEGACY",
+            "lineage_issues": [],
+            "data_quality_status": "LEGACY",
+            "blocking_reason": "Legacy Stage 1-D item has no fabricated E.6 lineage",
+            "promotion_result": "NOT_ASSESSED",
+            "decision_requirement": "NOT_ASSESSED",
+            "required_authority": "NOT_ASSESSED",
+            "actionability_status": "NOT_ASSESSED",
+            "test_only": bool(row["test_only"]),
+        })
+    return items
+
+
+def _db_stage1e6_8h_load_review_workspace_items(
+    *, source_mode: str = "E6", include_test_only: bool = False, conn: _DBConnection | None = None
+) -> list[dict]:
+    """Read-only ReviewWorkspaceItem adapter.
+
+    source_mode:
+      E6     = governed SYSTEM_PROMOTION / MANAGEMENT_INITIATED cycle-linked items
+      LEGACY = current Stage 1-D relationship ReviewItems
+      ALL    = both sources for compatibility diagnostics
+    """
+    source_mode = str(source_mode).upper()
+    if source_mode not in {"E6", "LEGACY", "ALL"}:
+        raise ValueError(f"E6_REVIEW_ADAPTER_INVALID_SOURCE_MODE:{source_mode}")
+    owns = conn is None
+    if owns:
+        conn = _db_connect()
+    try:
+        items = []
+        if source_mode in {"E6", "ALL"}:
+            items.extend(_db_stage1e6_8h_load_governed_items(conn, include_test_only=include_test_only))
+        if source_mode in {"LEGACY", "ALL"}:
+            items.extend(_db_stage1e6_8h_load_legacy_items(conn, include_test_only=include_test_only))
+        return items
+    finally:
+        if owns:
+            conn.close()
+
+
+def _db_stage1e6_8h_contract_check(items: list[dict]) -> dict:
+    missing = []
+    seen = set()
+    duplicates = []
+    for item in items:
+        absent = [field for field in E6_REVIEW_ADAPTER_REQUIRED_FIELDS if field not in item]
+        if absent:
+            missing.append({"review_item_id": item.get("review_item_id"), "missing": absent})
+        rid = item.get("review_item_id")
+        if rid in seen:
+            duplicates.append(rid)
+        seen.add(rid)
+    return {
+        "Adapter Version": E6_REVIEW_ADAPTER_VERSION,
+        "Item Count": len(items),
+        "Contract PASS": not missing and not duplicates,
+        "Missing Fields": missing,
+        "Duplicate Review Item IDs": sorted(set(duplicates)),
+    }
+
+
+def _db_stage1e6_8h_stage1c_compatibility_rows(items: list[dict]) -> list[dict]:
+    """Translate the canonical adapter DTO to familiar Stage 1-C business fields.
+
+    This is presentation compatibility only. It does not rank, promote, or create items.
+    """
+    rows = []
+    for item in items:
+        score = item.get("attention_score")
+        rows.append({
+            "Review Item ID": item.get("review_item_id"),
+            "Relationship": item.get("relationship_name"),
+            "Score": "—" if score is None else f"{float(score):.1f}",
+            "Attention Rating": item.get("attention_rating") or "NOT_ASSESSED",
+            "Urgency Rating": item.get("urgency_rating") or "NOT_ASSESSED",
+            "Quadrant": item.get("quadrant") or "NOT_ASSIGNED",
+            "Primary Driver": item.get("question_type") or "NOT_ASSESSED",
+            "Management Question": item.get("management_question") or "Not assessed",
+            "Recommendation": item.get("ecai_recommendation") or "Not assessed",
+            "Expected Outcome": item.get("expected_outcome") or "Not assessed",
+            "Why Important": item.get("why_important") or "Not assessed",
+            "Why Now": item.get("why_now") or "Not assessed",
+            "Lifecycle": item.get("lifecycle_status") or "NOT_ASSESSED",
+            "Lineage": item.get("lineage_status") or "NOT_ASSESSED",
+        })
+    return rows
+
+
+def _db_stage1e6_8h_shadow_comparison(conn: _DBConnection | None = None) -> dict:
+    owns = conn is None
+    if owns:
+        conn = _db_connect()
+    try:
+        started = time.perf_counter()
+        legacy = _db_stage1e6_8h_load_legacy_items(conn, include_test_only=False)
+        governed = _db_stage1e6_8h_load_governed_items(conn, include_test_only=False)
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+
+        # Identity comparison uses stable relationship_id, not display names.
+        legacy_by_id = {i["relationship_id"]: i["relationship_name"] for i in legacy}
+        e6_by_id = {i["relationship_id"]: i["relationship_name"] for i in governed}
+        legacy_ids = set(legacy_by_id)
+        e6_ids = set(e6_by_id)
+        e6_question_counts = {}
+        for item in governed:
+            rid = item["relationship_id"]
+            e6_question_counts[rid] = e6_question_counts.get(rid, 0) + 1
+        multiple = {
+            e6_by_id[rid]: count for rid, count in e6_question_counts.items() if count > 1
+        }
+
+        return {
+            "Adapter Version": E6_REVIEW_ADAPTER_VERSION,
+            "Review Authority Mode": _db_stage1e6_review_authority_mode(conn),
+            "Legacy Review Items": len(legacy),
+            "E6 Governed Review Items": len(governed),
+            "Matched Relationships": sorted(legacy_by_id[rid] for rid in (legacy_ids & e6_ids)),
+            "Legacy-only Relationships": sorted(legacy_by_id[rid] for rid in (legacy_ids - e6_ids)),
+            "E6-only Relationships": sorted(e6_by_id[rid] for rid in (e6_ids - legacy_ids)),
+            "Matched Relationship IDs": sorted(legacy_ids & e6_ids),
+            "E6 Multiple Questions by Relationship": multiple,
+            "E6 Blocked Lineage Items": [i["review_item_id"] for i in governed if i["lineage_integrity_status"] == "INVALID"],
+            "Legacy Contract": _db_stage1e6_8h_contract_check(legacy),
+            "E6 Contract": _db_stage1e6_8h_contract_check(governed),
+            "Read Elapsed ms": elapsed_ms,
+            "Cutover Performed": False,
+        }
+    finally:
+        if owns:
+            conn.close()
+
+
+# END STAGE 1-E.6.8H — GOVERNED REVIEW WORKSPACE ADAPTER & SHADOW COMPARISON
+
+
+# =============================================================================
+# STAGE 1-E.6.8I — LIVE SHADOW COMPARISON & STAGE 1-C COMPATIBILITY VALIDATION
+# =============================================================================
+# Diagnostics only. This stage proves that the locked H-A read adapter can read
+# the live Supabase persistence model, exclude test fixtures from normal business
+# reads, translate a controlled governed ReviewItem into familiar Stage 1-C
+# presentation fields, and perform zero institutional writes. Review authority
+# remains LEGACY throughout this stage.
+E6_8I_VALIDATION_VERSION = "1.0-live-shadow-v0.1"
+E6_8I_STAGE1C_REQUIRED_FIELDS = (
+    "Review Item ID", "Relationship", "Score", "Attention Rating",
+    "Urgency Rating", "Quadrant", "Primary Driver", "Management Question",
+    "Recommendation", "Expected Outcome", "Why Important", "Why Now",
+    "Lifecycle", "Lineage",
+)
+E6_8I_READONLY_FINGERPRINT_TABLES = (
+    "review_item",
+    "review_item_cycle_link",
+    "review_item_question_revision",
+    "attention_urgency_evaluation",
+    "decision_requirement_evaluation",
+    "review_promotion_evaluation",
+    "decision",
+    "execution_action",
+)
+
+
+def _db_stage1e6_8i_readonly_fingerprint(conn: _DBConnection) -> str:
+    """Stable read fingerprint used only to prove that shadow validation wrote nothing."""
+    payload = {}
+    for table in E6_8I_READONLY_FINGERPRINT_TABLES:
+        rows = conn.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+        payload[table] = [dict(row) for row in rows]
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _db_stage1e6_8i_stage1c_contract(rows: list[dict]) -> dict:
+    missing = []
+    duplicate_ids = []
+    seen = set()
+    for row in rows:
+        rid = row.get("Review Item ID")
+        absent = [field for field in E6_8I_STAGE1C_REQUIRED_FIELDS if field not in row]
+        if absent:
+            missing.append({"Review Item ID": rid, "Missing": absent})
+        if rid in seen:
+            duplicate_ids.append(rid)
+        seen.add(rid)
+    return {
+        "Validation Version": E6_8I_VALIDATION_VERSION,
+        "Row Count": len(rows),
+        "Stage 1-C Compatibility PASS": not missing and not duplicate_ids,
+        "Missing Fields": missing,
+        "Duplicate Review Item IDs": sorted(set(x for x in duplicate_ids if x)),
+        "Required Fields": list(E6_8I_STAGE1C_REQUIRED_FIELDS),
+        "Priority / Ranking Introduced": any("Priority" in row for row in rows),
+    }
+
+
+def _db_stage1e6_8i_validation_item(items: list[dict]) -> dict | None:
+    candidates = [
+        item for item in items
+        if item.get("relationship_id") == E6_VALIDATION_RELATIONSHIP_ID
+        and item.get("creation_basis") == "SYSTEM_PROMOTION"
+        and item.get("lifecycle_status") == "OPEN"
+        and item.get("validity_status") == "VALID"
+        and bool(item.get("test_only"))
+    ]
+    if not candidates:
+        return None
+    # Public IDs are fixed-width REV-xxxx in v1; lexical ordering is stable.
+    return sorted(candidates, key=lambda x: str(x.get("review_item_id") or ""))[-1]
+
+
+def _db_stage1e6_8i_run_live_shadow_validation() -> dict:
+    """Read-only live Supabase proof for H-A adapter + Stage 1-C compatibility.
+
+    No authority switch, no ReviewItem creation, and no repair/supersession is
+    permitted here. The controlled E.6 validation relationship is surfaced only
+    through an explicit test-inclusive diagnostics read.
+    """
+    conn = _db_connect()
+    try:
+        authority_before = _db_stage1e6_review_authority_mode(conn)
+        before_fp = _db_stage1e6_8i_readonly_fingerprint(conn)
+        started = time.perf_counter()
+
+        legacy = _db_stage1e6_8h_load_review_workspace_items(
+            source_mode="LEGACY", include_test_only=False, conn=conn
+        )
+        governed_business = _db_stage1e6_8h_load_review_workspace_items(
+            source_mode="E6", include_test_only=False, conn=conn
+        )
+        governed_diagnostics = _db_stage1e6_8h_load_review_workspace_items(
+            source_mode="E6", include_test_only=True, conn=conn
+        )
+        shadow = _db_stage1e6_8h_shadow_comparison(conn=conn)
+
+        validation_item = _db_stage1e6_8i_validation_item(governed_diagnostics)
+        validation_rows = _db_stage1e6_8h_stage1c_compatibility_rows(
+            [validation_item] if validation_item else []
+        )
+        legacy_rows = _db_stage1e6_8h_stage1c_compatibility_rows(legacy)
+        business_rows = _db_stage1e6_8h_stage1c_compatibility_rows(governed_business)
+
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+        after_fp = _db_stage1e6_8i_readonly_fingerprint(conn)
+        authority_after = _db_stage1e6_review_authority_mode(conn)
+
+        legacy_contract = _db_stage1e6_8h_contract_check(legacy)
+        business_contract = _db_stage1e6_8h_contract_check(governed_business)
+        diagnostics_contract = _db_stage1e6_8h_contract_check(governed_diagnostics)
+        stage1c_legacy_contract = _db_stage1e6_8i_stage1c_contract(legacy_rows)
+        stage1c_business_contract = _db_stage1e6_8i_stage1c_contract(business_rows)
+        stage1c_validation_contract = _db_stage1e6_8i_stage1c_contract(validation_rows)
+
+        test_exclusion = bool(
+            all(not bool(i.get("test_only")) for i in governed_business)
+            and all(i.get("relationship_id") != E6_VALIDATION_RELATIONSHIP_ID for i in governed_business)
+        )
+        validation_lineage_pass = bool(
+            validation_item
+            and validation_item.get("lineage_status") == "FULL"
+            and validation_item.get("lineage_integrity_status") == "FULL"
+            and validation_item.get("data_quality_status") != "BLOCKED"
+            and validation_item.get("source_aue_id")
+            and validation_item.get("source_dre_id")
+            and validation_item.get("source_rpe_id")
+            and validation_item.get("question_revision_id")
+            and validation_item.get("management_question") not in (None, "", "Not assessed")
+        )
+        stage1c_validation_pass = bool(
+            stage1c_validation_contract.get("Stage 1-C Compatibility PASS")
+            and validation_rows
+            and validation_rows[0].get("Relationship") == E6_VALIDATION_COMPANY
+            and validation_rows[0].get("Management Question") not in (None, "", "Not assessed")
+            and validation_rows[0].get("Score") != "—"
+            and not stage1c_validation_contract.get("Priority / Ranking Introduced")
+        )
+        read_only_pass = before_fp == after_fp
+        authority_pass = authority_before == "LEGACY" and authority_after == "LEGACY"
+        shadow_pass = bool(
+            shadow.get("Legacy Contract", {}).get("Contract PASS")
+            and shadow.get("E6 Contract", {}).get("Contract PASS")
+            and not shadow.get("Cutover Performed")
+        )
+
+        overall = bool(
+            authority_pass
+            and read_only_pass
+            and legacy_contract.get("Contract PASS")
+            and business_contract.get("Contract PASS")
+            and diagnostics_contract.get("Contract PASS")
+            and stage1c_legacy_contract.get("Stage 1-C Compatibility PASS")
+            and stage1c_business_contract.get("Stage 1-C Compatibility PASS")
+            and stage1c_validation_pass
+            and test_exclusion
+            and validation_lineage_pass
+            and shadow_pass
+        )
+
+        return {
+            "E.6.8I Live Shadow Validation PASS": overall,
+            "Validation Version": E6_8I_VALIDATION_VERSION,
+            "Review Authority Before": authority_before,
+            "Review Authority After": authority_after,
+            "Cutover Performed": False,
+            "Read-only Fingerprint Stable": read_only_pass,
+            "Test Fixture Excluded From Business Read": test_exclusion,
+            "Hidden Validation Lineage PASS": validation_lineage_pass,
+            "Stage 1-C Hidden Preview PASS": stage1c_validation_pass,
+            "Legacy Review Items": len(legacy),
+            "E6 Governed Business Review Items": len(governed_business),
+            "E6 Diagnostics Review Items": len(governed_diagnostics),
+            "Legacy Contract": legacy_contract,
+            "E6 Business Contract": business_contract,
+            "E6 Diagnostics Contract": diagnostics_contract,
+            "Stage 1-C Legacy Compatibility": stage1c_legacy_contract,
+            "Stage 1-C E6 Business Compatibility": stage1c_business_contract,
+            "Stage 1-C Hidden Validation Compatibility": stage1c_validation_contract,
+            "Current Hidden Validation Review Item": (
+                validation_item.get("review_item_id") if validation_item else None
+            ),
+            "Current Hidden Validation AUE": (
+                validation_item.get("source_aue_id") if validation_item else None
+            ),
+            "Current Hidden Validation Lifecycle": (
+                validation_item.get("lifecycle_status") if validation_item else None
+            ),
+            "Shadow Comparison": shadow,
+            "Read Elapsed ms": elapsed_ms,
+            "Stage 1-C Hidden Preview Rows": validation_rows,
+        }
+    finally:
+        conn.close()
+
+
+# END STAGE 1-E.6.8I — LIVE SHADOW COMPARISON & STAGE 1-C COMPATIBILITY VALIDATION
+
+
 
 # =============================================================================
 # STAGE 1-E.4.9 — FINAL LIVE VALIDATION
@@ -19055,7 +19830,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.6.8D · Diagnostics Integration & Controlled Live Validation v0.2 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.6.8I · Live Shadow + Stage 1-C Compatibility Validation v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -19653,6 +20428,93 @@ def render_stage_1c_sidebar():
                             st.write(summary)
                             with st.expander(f"Inspect {rid} full E.6 lineage", expanded=False):
                                 st.json(lineage)
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.6.8H · Governed Review Adapter Shadow Comparison**")
+            st.caption(
+                "Read-only diagnostics · compares current LEGACY Review source with the governed E.6 adapter. "
+                "No Review authority cutover and no institutional writes are performed."
+            )
+            if st.button(
+                "Run E.6.8H Review Adapter Shadow Comparison",
+                key="stage1e6_8h_shadow_comparison",
+                use_container_width=True,
+            ):
+                try:
+                    before = _db_stage1e6_8d_validation_summary()
+                    comparison = _db_stage1e6_8h_shadow_comparison()
+                    governed_preview = _db_stage1e6_8h_load_review_workspace_items(
+                        source_mode="E6", include_test_only=True
+                    )
+                    after = _db_stage1e6_8d_validation_summary()
+                    comparison["Validation Fixture Stable"] = before == after
+                    comparison["Governed Preview Contract"] = _db_stage1e6_8h_contract_check(governed_preview)
+                    st.session_state["stage1e6_8h_shadow_result"] = comparison
+                    st.session_state["stage1e6_8h_governed_preview"] = governed_preview
+                except Exception as exc:
+                    st.error(f"E.6.8H shadow comparison failed: {exc}")
+
+            shadow = st.session_state.get("stage1e6_8h_shadow_result")
+            if shadow:
+                shadow_pass = bool(
+                    shadow.get("Legacy Contract", {}).get("Contract PASS")
+                    and shadow.get("E6 Contract", {}).get("Contract PASS")
+                    and shadow.get("Governed Preview Contract", {}).get("Contract PASS")
+                    and shadow.get("Validation Fixture Stable")
+                    and shadow.get("Review Authority Mode") == "LEGACY"
+                    and not shadow.get("Cutover Performed")
+                )
+                if shadow_pass:
+                    st.success(
+                        "E.6.8H SHADOW PASS · canonical ReviewWorkspaceItem contract is readable, "
+                        "the hidden governed E.6 item renders through the adapter, and Review authority remains LEGACY."
+                    )
+                else:
+                    st.error("E.6.8H SHADOW CHECK · inspect adapter contract or authority isolation.")
+                st.write(shadow)
+
+                preview = st.session_state.get("stage1e6_8h_governed_preview", [])
+                if preview:
+                    preview_rows = _db_stage1e6_8h_stage1c_compatibility_rows(preview)
+                    st.markdown("**Governed E.6 Shadow Preview · Stage 1-C-compatible fields**")
+                    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.info(
+                        "No governed E.6 ReviewItems are currently available to preview. "
+                        "This is expected before normal business Review authority is cut over."
+                    )
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.6.8I · Live Shadow Comparison & Stage 1-C Compatibility Validation**")
+            st.caption(
+                "Read-only live gate · keeps Review authority LEGACY, proves no institutional writes, "
+                "excludes TEST-only E.6 objects from normal business reads, and renders the controlled "
+                "governed ReviewItem through Stage 1-C-compatible presentation fields."
+            )
+            if st.button(
+                "Run E.6.8I Live Shadow + Stage 1-C Compatibility Validation",
+                key="stage1e6_8i_live_shadow_validation",
+                use_container_width=True,
+            ):
+                try:
+                    st.session_state["stage1e6_8i_live_result"] = _db_stage1e6_8i_run_live_shadow_validation()
+                except Exception as exc:
+                    st.error(f"E.6.8I live shadow validation failed: {exc}")
+
+            e68i = st.session_state.get("stage1e6_8i_live_result")
+            if e68i:
+                if e68i.get("E.6.8I Live Shadow Validation PASS"):
+                    st.success(
+                        "E.6.8I PASS · live governed Review adapter is read-only, TEST-isolated, "
+                        "Stage 1-C-compatible, and Review authority remains LEGACY."
+                    )
+                else:
+                    st.error("E.6.8I CHECK · inspect live shadow / compatibility output before any authority cutover.")
+                st.write(e68i)
+                preview_rows = e68i.get("Stage 1-C Hidden Preview Rows", [])
+                if preview_rows:
+                    st.markdown("**Controlled Governed ReviewItem · Stage 1-C Compatibility Preview**")
+                    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
 
         if diagnostics_enabled:
             st.markdown("**Stage 1-E.5.10 · Final Live Attention × Urgency Validation**")
