@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.6.8J.1A.1 Production AUE Coverage Readiness Inventory v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.6.8J.1A.2 Production Intelligence Source Onboarding Readiness Inventory v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1469,8 +1469,8 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 13
-ECAI_PERSISTENCE_RUNTIME_VERSION = 21  # E.6.8J.1A.1 v0.1: read-only production AUE coverage readiness inventory
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8J.1A.1 Production AUE Coverage Readiness Inventory v0.1"
+ECAI_PERSISTENCE_RUNTIME_VERSION = 22  # E.6.8J.1A.2 v0.1: read-only production intelligence source onboarding inventory
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8J.1A.2 Production Intelligence Source Onboarding Readiness Inventory v0.1"
 
 
 def _db_now() -> str:
@@ -18910,6 +18910,720 @@ def _db_stage1e6_8j1a1_run_live_scan_validation() -> dict:
 
 # END STAGE 1-E.6.8J.1A.1 — PRODUCTION AUE COVERAGE READINESS INVENTORY
 
+# =============================================================================
+# STAGE 1-E.6.8J.1A.2 — PRODUCTION INTELLIGENCE SOURCE ONBOARDING READINESS
+# =============================================================================
+# Strict read-only scan one layer upstream of AUE. It inventories governed wallet,
+# OpportunitySignal and Change/Event source state and identifies which real business
+# relationships can legitimately enter the locked E.3/E.4 engines. It never creates
+# WalletAssessments, signals, changes/events, AUEs or ReviewItems and never changes
+# Review authority.
+#
+# Governing rule: legacy MAS / UI scores are not source intelligence. Missing
+# governed source state remains explicit rather than being inferred or backfilled.
+
+E6_8J1A2_READINESS_VERSION = "1.0-source-onboarding-v0.1"
+E6_8J1A2_READY = "READY"
+E6_8J1A2_PARTIAL = "PARTIAL"
+E6_8J1A2_NOT_READY = "NOT_READY"
+E6_8J1A2_BLOCKED = "BLOCKED"
+
+E6_8J1A2_SUPPORTED_WALLET_METHODS = {
+    ("STRUCTURAL_LENDING", "1.0"): "LENDING_WALLET_GAP",
+    ("CASH_LIQUIDITY_WALLET", "1.0"): "LIQUIDITY_WALLET_GAP",
+}
+E6_8J1A2_CASH_ELIGIBLE_TIME_BASES = {"AVERAGE", "NORMALIZED_AVERAGE", "FORECAST_AVERAGE"}
+E6_8J1A2_CURRENT_SIGNAL_STATUSES = {"ACTIVE", "MONITORING", "SUPPRESSED"}
+E6_8J1A2_CURRENT_EVENT_STATUSES = {"ANNOUNCED", "SCHEDULED", "COMPLETED", "RECORDED"}
+E6_8J1A2_FINGERPRINT_TABLES = (
+    "relationship",
+    "review_cycle",
+    "intelligence_methodology",
+    "intelligence_evidence",
+    "intelligence_calculation",
+    "wallet_assessment",
+    "opportunity_signal_threshold_config",
+    "opportunity_signal",
+    "change_event_rule_config",
+    "change_event",
+    "change_event_temporal_evaluation",
+    "attention_urgency_evaluation",
+    "decision_requirement_evaluation",
+    "review_promotion_evaluation",
+    "review_item",
+)
+
+
+def _db_stage1e6_8j1a2_readonly_fingerprint(conn: _DBConnection) -> str:
+    payload = {}
+    for table in E6_8J1A2_FINGERPRINT_TABLES:
+        rows = conn.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+        payload[table] = [dict(row) for row in rows]
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _db_stage1e6_8j1a2_json_list(value) -> list[str]:
+    if value in (None, "", []):
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value]
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            return [str(x) for x in parsed]
+    except Exception:
+        pass
+    return [str(value)]
+
+
+def _db_stage1e6_8j1a2_quality_blockers(value) -> list[str]:
+    try:
+        parsed = json.loads(value or "{}")
+    except Exception:
+        return ["QUALITY_GATE_JSON_INVALID"]
+    if not isinstance(parsed, dict):
+        return ["QUALITY_GATE_JSON_INVALID"]
+    return [str(x) for x in (parsed.get("blocking_issues") or []) if str(x)]
+
+
+def _db_stage1e6_8j1a2_wallet_component_complete(wallet) -> bool:
+    method = (str(wallet["methodology_code"] or ""), str(wallet["methodology_version"] or ""))
+    if method == ("STRUCTURAL_LENDING", "1.0"):
+        return (
+            str(wallet["capex_component_status"] or "") == "COMPLETE"
+            or str(wallet["refinancing_component_status"] or "") == "COMPLETE"
+        )
+    if method == ("CASH_LIQUIDITY_WALLET", "1.0"):
+        return str(wallet["liquidity_component_status"] or "") == "COMPLETE"
+    return False
+
+
+def _db_stage1e6_8j1a2_wallet_perimeter(wallet, evidence_by_id: dict[str, object]) -> str | None:
+    values = []
+    for evidence_id in _db_stage1e6_8j1a2_json_list(wallet["evidence_ids_json"]):
+        row = evidence_by_id.get(evidence_id)
+        if row is not None and str(row["economic_perimeter"] or "").strip():
+            values.append(str(row["economic_perimeter"]).strip())
+    unique = sorted(set(values))
+    return unique[0] if len(unique) == 1 else None
+
+
+def _db_stage1e6_8j1a2_wallet_time_basis(wallet, evidence_by_id: dict[str, object]) -> str | None:
+    direct = str(wallet["liquidity_time_basis"] or "").strip()
+    if direct:
+        return direct
+    values = []
+    for evidence_id in _db_stage1e6_8j1a2_json_list(wallet["evidence_ids_json"]):
+        row = evidence_by_id.get(evidence_id)
+        if row is not None and str(row["time_basis"] or "").strip():
+            values.append(str(row["time_basis"]).strip())
+    unique = sorted(set(values))
+    return unique[0] if len(unique) == 1 else None
+
+
+def _db_stage1e6_8j1a2_wallet_integrity_reasons(
+    wallet,
+    *,
+    evidence_by_id: dict[str, object],
+    calculation_by_id: dict[str, object],
+) -> list[str]:
+    reasons: list[str] = []
+    evidence_ids = _db_stage1e6_8j1a2_json_list(wallet["evidence_ids_json"])
+    calculation_ids = _db_stage1e6_8j1a2_json_list(wallet["calculation_ids_json"])
+    if not evidence_ids or not calculation_ids:
+        reasons.append("WALLET_LINEAGE_MISSING")
+    for evidence_id in evidence_ids:
+        row = evidence_by_id.get(evidence_id)
+        if row is None:
+            reasons.append("WALLET_EVIDENCE_REFERENCE_MISSING")
+        elif int(row["relationship_id"]) != int(wallet["relationship_id"]):
+            reasons.append("WALLET_EVIDENCE_RELATIONSHIP_MISMATCH")
+    for calculation_id in calculation_ids:
+        row = calculation_by_id.get(calculation_id)
+        if row is None:
+            reasons.append("WALLET_CALCULATION_REFERENCE_MISSING")
+        elif int(row["relationship_id"]) != int(wallet["relationship_id"]):
+            reasons.append("WALLET_CALCULATION_RELATIONSHIP_MISMATCH")
+    blockers = _db_stage1e6_8j1a2_quality_blockers(wallet["quality_gate_json"])
+    if blockers:
+        if blockers == ["QUALITY_GATE_JSON_INVALID"]:
+            reasons.extend(blockers)
+        else:
+            reasons.append("WALLET_BLOCKING_QUALITY_ISSUE")
+    if str(wallet["confidence"] or "") not in {"HIGH", "MEDIUM"}:
+        reasons.append("WALLET_CONFIDENCE_BELOW_PRODUCTION_THRESHOLD")
+    return list(dict.fromkeys(reasons))
+
+
+def _db_stage1e6_8j1a2_signal_input_reasons(wallet) -> list[str]:
+    reasons: list[str] = []
+    method = (str(wallet["methodology_code"] or ""), str(wallet["methodology_version"] or ""))
+    signal_type = E6_8J1A2_SUPPORTED_WALLET_METHODS.get(method)
+    if signal_type is None:
+        return ["WALLET_METHODOLOGY_NOT_E3_SUPPORTED"]
+    if not _db_stage1e6_8j1a2_wallet_component_complete(wallet):
+        reasons.append("WALLET_COMPONENT_INCOMPLETE")
+    if str(wallet["capture_component_status"] or "") != "COMPLETE":
+        reasons.append("CAPTURE_COMPONENT_INCOMPLETE")
+    if str(wallet["capture_comparability_status"] or "") != "COMPARABLE":
+        reasons.append("CAPTURE_NOT_COMPARABLE")
+    if wallet["addressable_notional"] is None or float(wallet["addressable_notional"] or 0) <= 0:
+        reasons.append("ADDRESSABLE_WALLET_NOT_AVAILABLE")
+    if wallet["captured_notional"] is None:
+        reasons.append("CAPTURE_METRIC_MISSING")
+    if wallet["positive_wallet_gap"] is None:
+        reasons.append("POSITIVE_GAP_MISSING")
+    if wallet["notional_penetration"] is None:
+        reasons.append("PENETRATION_MISSING")
+    if not str(wallet["currency"] or "").strip():
+        reasons.append("SOURCE_CURRENCY_MISSING")
+    if signal_type == "LIQUIDITY_WALLET_GAP":
+        time_basis = str(wallet["liquidity_time_basis"] or "").upper().strip()
+        if not time_basis:
+            reasons.append("LIQUIDITY_TIME_BASIS_MISSING")
+        elif time_basis not in E6_8J1A2_CASH_ELIGIBLE_TIME_BASES:
+            reasons.append("LIQUIDITY_TIME_BASIS_NOT_SIGNAL_ELIGIBLE")
+    return reasons
+
+
+def _db_stage1e6_8j1a2_pair_comparable(current, previous, evidence_by_id: dict[str, object]) -> bool:
+    if str(current["methodology_code"] or "") != str(previous["methodology_code"] or ""):
+        return False
+    if str(current["methodology_version"] or "") != str(previous["methodology_version"] or ""):
+        return False
+    if str(current["geographic_scope"] or "") != str(previous["geographic_scope"] or ""):
+        return False
+    if str(current["time_horizon"] or "") != str(previous["time_horizon"] or ""):
+        return False
+    if _db_stage1e6_8j1a2_wallet_perimeter(current, evidence_by_id) != _db_stage1e6_8j1a2_wallet_perimeter(previous, evidence_by_id):
+        return False
+    if _db_stage1e6_8j1a2_wallet_time_basis(current, evidence_by_id) != _db_stage1e6_8j1a2_wallet_time_basis(previous, evidence_by_id):
+        return False
+    return True
+
+
+def _db_stage1e6_8j1a2_business_source_onboarding_inventory(*, conn: _DBConnection | None = None) -> dict:
+    owns = conn is None
+    if owns:
+        conn = _db_connect()
+    try:
+        cycle = _db_stage1e6_8j1_active_cycle_readonly(conn)
+        if cycle is None:
+            return {
+                "Inventory Version": E6_8J1A2_READINESS_VERSION,
+                "Review Cycle": None,
+                "Business Relationship Count": 0,
+                "Ready": 0,
+                "Partial": 0,
+                "Not Ready": 0,
+                "Blocked": 0,
+                "Inventory Status": "NO_ACTIVE_REVIEW_CYCLE",
+                "Relationships": [],
+                "Cutover Performed": False,
+            }
+
+        relationships = list(_db_stage1e6_8j1_relationships(conn))
+        if not relationships:
+            return {
+                "Inventory Version": E6_8J1A2_READINESS_VERSION,
+                "Review Cycle": cycle["review_cycle_id"],
+                "Business Relationship Count": 0,
+                "Ready": 0,
+                "Partial": 0,
+                "Not Ready": 0,
+                "Blocked": 0,
+                "Inventory Status": "NO_BUSINESS_RELATIONSHIPS",
+                "Relationships": [],
+                "Cutover Performed": False,
+            }
+
+        rel_ids = [int(r["id"]) for r in relationships]
+        ph = ",".join("?" for _ in rel_ids)
+
+        wallets = conn.execute(
+            f"""SELECT wa.id,wa.assessment_id,wa.relationship_id,wa.review_cycle_id,wa.methodology_id,
+                       wa.product,wa.effective_date,wa.currency,wa.geographic_scope,wa.time_horizon,
+                       wa.evidence_ids_json,wa.calculation_ids_json,wa.addressable_notional,wa.captured_notional,
+                       wa.notional_penetration,wa.confidence,wa.status,wa.publication_result,wa.quality_gate_json,
+                       wa.wallet_scope,wa.wallet_coverage,wa.capex_component_status,wa.refinancing_component_status,
+                       wa.capture_component_status,wa.positive_wallet_gap,wa.capture_comparability_status,
+                       wa.test_only,wa.liquidity_component_status,wa.liquidity_time_basis,
+                       wa.created_at,wa.published_at,wa.superseded_at,
+                       im.methodology_code,im.version AS methodology_version
+                  FROM wallet_assessment wa
+                  JOIN intelligence_methodology im ON im.id=wa.methodology_id
+                 WHERE wa.relationship_id IN ({ph})
+                 ORDER BY wa.relationship_id ASC,wa.id ASC""",
+            tuple(rel_ids),
+        ).fetchall()
+
+        evidence_rows = conn.execute(
+            f"""SELECT id,evidence_id,relationship_id,review_cycle_id,methodology_id,metric_code,
+                       confidence,economic_perimeter,geographic_scope,time_basis
+                  FROM intelligence_evidence
+                 WHERE relationship_id IN ({ph})
+                 ORDER BY relationship_id ASC,id ASC""",
+            tuple(rel_ids),
+        ).fetchall()
+        calc_rows = conn.execute(
+            f"""SELECT id,calculation_id,relationship_id,review_cycle_id,methodology_id,metric_code
+                  FROM intelligence_calculation
+                 WHERE relationship_id IN ({ph})
+                 ORDER BY relationship_id ASC,id ASC""",
+            tuple(rel_ids),
+        ).fetchall()
+        threshold_rows = conn.execute(
+            """SELECT id,config_version,signal_type,base_currency,status,test_only
+                 FROM opportunity_signal_threshold_config
+                WHERE status='ACTIVE' AND test_only=0 ORDER BY signal_type,id"""
+        ).fetchall()
+        rule_rows = conn.execute(
+            """SELECT id,config_version,config_type,status,test_only
+                 FROM change_event_rule_config
+                WHERE status='ACTIVE' AND test_only=0 ORDER BY config_type,id"""
+        ).fetchall()
+        signal_rows = conn.execute(
+            f"""SELECT id,signal_id,relationship_id,source_assessment_id,signal_type,signal_status,test_only
+                  FROM opportunity_signal
+                 WHERE relationship_id IN ({ph})
+                 ORDER BY relationship_id ASC,id ASC""",
+            tuple(rel_ids),
+        ).fetchall()
+        event_rows = conn.execute(
+            f"""SELECT id,change_event_id,relationship_id,object_kind,status,materiality,confidence,
+                       previous_assessment_id,current_assessment_id,economic_episode_key,evidence_ids_json,
+                       impact_domains_json,test_only
+                  FROM change_event
+                 WHERE relationship_id IN ({ph})
+                 ORDER BY relationship_id ASC,id ASC""",
+            tuple(rel_ids),
+        ).fetchall()
+        event_db_ids = [int(r["id"]) for r in event_rows]
+        if event_db_ids:
+            eph = ",".join("?" for _ in event_db_ids)
+            temporal_rows = conn.execute(
+                f"""SELECT id,temporal_evaluation_id,change_event_db_id,change_event_id,
+                           evaluation_as_of,temporal_state,test_only
+                      FROM change_event_temporal_evaluation
+                     WHERE change_event_db_id IN ({eph}) ORDER BY change_event_db_id,id""",
+                tuple(event_db_ids),
+            ).fetchall()
+        else:
+            temporal_rows = conn.execute(
+                "SELECT id,temporal_evaluation_id,change_event_db_id,change_event_id,evaluation_as_of,temporal_state,test_only FROM change_event_temporal_evaluation WHERE 1=0"
+            ).fetchall()
+
+        evidence_by_id = {str(r["evidence_id"]): r for r in evidence_rows}
+        calc_by_id = {str(r["calculation_id"]): r for r in calc_rows}
+        wallets_by_rel: dict[int, list] = {}
+        for row in wallets:
+            wallets_by_rel.setdefault(int(row["relationship_id"]), []).append(row)
+        signals_by_rel: dict[int, list] = {}
+        for row in signal_rows:
+            signals_by_rel.setdefault(int(row["relationship_id"]), []).append(row)
+        events_by_rel: dict[int, list] = {}
+        for row in event_rows:
+            events_by_rel.setdefault(int(row["relationship_id"]), []).append(row)
+        temporal_by_event: dict[int, list] = {}
+        for row in temporal_rows:
+            temporal_by_event.setdefault(int(row["change_event_db_id"]), []).append(row)
+
+        thresholds_by_type: dict[str, list] = {}
+        for row in threshold_rows:
+            thresholds_by_type.setdefault(str(row["signal_type"]), []).append(row)
+        rule_types = {str(r["config_type"]) for r in rule_rows}
+        change_config_ready = "CHANGE_MATERIALITY" in rule_types and "TEMPORAL" in rule_types
+        event_config_ready = "EVENT_MATERIALITY" in rule_types and "TEMPORAL" in rule_types
+
+        output_rows: list[dict] = []
+        for rel in relationships:
+            rid = int(rel["id"])
+            rel_wallets = wallets_by_rel.get(rid, [])
+            rel_signals = signals_by_rel.get(rid, [])
+            rel_events = events_by_rel.get(rid, [])
+            integrity: list[str] = []
+            readiness_reasons: list[str] = []
+
+            published_prod = [
+                w for w in rel_wallets
+                if not bool(w["test_only"])
+                and str(w["status"] or "") == "PUBLISHED"
+                and str(w["publication_result"] or "") == "PUBLISH"
+            ]
+            historical_prod = [
+                w for w in rel_wallets
+                if not bool(w["test_only"])
+                and str(w["status"] or "") in {"PUBLISHED", "SUPERSEDED"}
+                and str(w["publication_result"] or "") == "PUBLISH"
+            ]
+            current_test_published = [
+                w for w in rel_wallets
+                if bool(w["test_only"])
+                and str(w["status"] or "") == "PUBLISHED"
+                and str(w["publication_result"] or "") == "PUBLISH"
+            ]
+            if current_test_published:
+                integrity.append("TEST_CURRENT_PUBLISHED_WALLET_ON_BUSINESS_RELATIONSHIP")
+
+            supported_current = [
+                w for w in published_prod
+                if (str(w["methodology_code"] or ""), str(w["methodology_version"] or ""))
+                in E6_8J1A2_SUPPORTED_WALLET_METHODS
+            ]
+            by_signal_type: dict[str, list] = {}
+            for w in supported_current:
+                stype = E6_8J1A2_SUPPORTED_WALLET_METHODS[(str(w["methodology_code"]), str(w["methodology_version"]))]
+                by_signal_type.setdefault(stype, []).append(w)
+            if any(len(items) > 1 for items in by_signal_type.values()):
+                integrity.append("MULTIPLE_CURRENT_SUPPORTED_WALLETS_PER_SIGNAL_TYPE")
+
+            usable_wallets = []
+            signal_input_ready_wallets = []
+            signal_eval_ready_wallets = []
+            signal_missing_reasons: list[str] = []
+            comparable_pairs: list[tuple[str, str]] = []
+
+            for wallet in supported_current:
+                wallet_integrity = _db_stage1e6_8j1a2_wallet_integrity_reasons(
+                    wallet, evidence_by_id=evidence_by_id, calculation_by_id=calc_by_id
+                )
+                if any(x.endswith("MISMATCH") or x.endswith("MISSING") or x == "QUALITY_GATE_JSON_INVALID" for x in wallet_integrity):
+                    integrity.extend(wallet_integrity)
+                elif wallet_integrity:
+                    signal_missing_reasons.extend(wallet_integrity)
+                else:
+                    usable_wallets.append(wallet)
+
+                input_reasons = list(wallet_integrity)
+                input_reasons.extend(_db_stage1e6_8j1a2_signal_input_reasons(wallet))
+                if not input_reasons:
+                    signal_input_ready_wallets.append(wallet)
+                    stype = E6_8J1A2_SUPPORTED_WALLET_METHODS[(str(wallet["methodology_code"]), str(wallet["methodology_version"]))]
+                    configs = thresholds_by_type.get(stype, [])
+                    if not configs:
+                        signal_missing_reasons.append(f"NO_PRODUCTION_SIGNAL_THRESHOLD_CONFIG:{stype}")
+                    else:
+                        wallet_currency = str(wallet["currency"] or "").upper()
+                        same_currency_config = [c for c in configs if str(c["base_currency"] or "").upper() == wallet_currency]
+                        if not same_currency_config:
+                            signal_missing_reasons.append(f"GOVERNED_FX_BASIS_REQUIRED:{stype}")
+                        else:
+                            signal_eval_ready_wallets.append(wallet)
+                else:
+                    signal_missing_reasons.extend(input_reasons)
+
+                # Search an earlier authoritative same-methodology wallet and require
+                # the locked E.4 common economic-scope dimensions to match.
+                priors = [
+                    p for p in historical_prod
+                    if int(p["id"]) < int(wallet["id"])
+                    and int(p["methodology_id"]) == int(wallet["methodology_id"])
+                    and p["published_at"] is not None
+                ]
+                for prior in reversed(priors):
+                    prior_reasons = _db_stage1e6_8j1a2_wallet_integrity_reasons(
+                        prior, evidence_by_id=evidence_by_id, calculation_by_id=calc_by_id
+                    )
+                    if prior_reasons:
+                        continue
+                    if _db_stage1e6_8j1a2_pair_comparable(wallet, prior, evidence_by_id):
+                        comparable_pairs.append((str(prior["assessment_id"]), str(wallet["assessment_id"])))
+                        break
+
+            current_prod_signals = [
+                s for s in rel_signals
+                if not bool(s["test_only"])
+                and str(s["signal_status"] or "") in E6_8J1A2_CURRENT_SIGNAL_STATUSES
+            ]
+            signal_by_type: dict[str, list] = {}
+            for s in current_prod_signals:
+                signal_by_type.setdefault(str(s["signal_type"]), []).append(s)
+            if any(len(items) > 1 for items in signal_by_type.values()):
+                integrity.append("MULTIPLE_CURRENT_PRODUCTION_SIGNALS_PER_TYPE")
+            for stype, items in signal_by_type.items():
+                wallets_for_type = by_signal_type.get(stype, [])
+                if len(wallets_for_type) == 1 and str(items[0]["source_assessment_id"] or "") != str(wallets_for_type[0]["assessment_id"]):
+                    integrity.append("CURRENT_SIGNAL_SOURCE_WALLET_MISMATCH")
+
+            production_changes = [
+                e for e in rel_events
+                if not bool(e["test_only"])
+                and str(e["object_kind"] or "") == "CHANGE"
+                and str(e["status"] or "") in E6_8J1A2_CURRENT_EVENT_STATUSES
+            ]
+            production_corporate_events = [
+                e for e in rel_events
+                if not bool(e["test_only"])
+                and str(e["object_kind"] or "") == "EVENT"
+                and str(e["status"] or "") in E6_8J1A2_CURRENT_EVENT_STATUSES
+            ]
+            governed_changes = []
+            for change in production_changes:
+                temporals = [t for t in temporal_by_event.get(int(change["id"]), []) if not bool(t["test_only"])]
+                if not temporals:
+                    readiness_reasons.append("CHANGE_TEMPORAL_EVALUATION_MISSING")
+                    continue
+                governed_changes.append(change)
+
+            governed_events = []
+            for ev in production_corporate_events:
+                evidence_ids = _db_stage1e6_8j1a2_json_list(ev["evidence_ids_json"])
+                if not evidence_ids:
+                    integrity.append("CORPORATE_EVENT_EVIDENCE_LINEAGE_MISSING")
+                    continue
+                bad_evidence = False
+                for eid in evidence_ids:
+                    erow = evidence_by_id.get(eid)
+                    if erow is None:
+                        integrity.append("CORPORATE_EVENT_EVIDENCE_REFERENCE_MISSING")
+                        bad_evidence = True
+                    elif int(erow["relationship_id"]) != rid:
+                        integrity.append("CORPORATE_EVENT_EVIDENCE_RELATIONSHIP_MISMATCH")
+                        bad_evidence = True
+                if bad_evidence:
+                    continue
+                temporals = [t for t in temporal_by_event.get(int(ev["id"]), []) if not bool(t["test_only"])]
+                if not temporals:
+                    readiness_reasons.append("CORPORATE_EVENT_TEMPORAL_EVALUATION_MISSING")
+                    continue
+                governed_events.append(ev)
+
+            opportunity_signal_eval_ready = bool(signal_eval_ready_wallets)
+            change_pair_available = bool(comparable_pairs)
+            change_eval_ready = bool(change_pair_available and change_config_ready)
+            corporate_event_governed = bool(governed_events)
+            any_path_ready = bool(
+                opportunity_signal_eval_ready
+                or change_eval_ready
+                or corporate_event_governed
+                or current_prod_signals
+                or governed_changes
+            )
+
+            if integrity:
+                status = E6_8J1A2_BLOCKED
+                reasons = list(dict.fromkeys(integrity + readiness_reasons + signal_missing_reasons))
+            elif any_path_ready:
+                status = E6_8J1A2_READY
+                if current_prod_signals:
+                    reasons = ["GOVERNED_OPPORTUNITY_SIGNAL_ALREADY_PRESENT"]
+                elif opportunity_signal_eval_ready:
+                    reasons = ["READY_FOR_OPPORTUNITY_SIGNAL_EVALUATION"]
+                elif governed_changes:
+                    reasons = ["GOVERNED_CHANGE_STATE_ALREADY_PRESENT"]
+                elif change_eval_ready:
+                    reasons = ["READY_FOR_WALLET_CHANGE_EVALUATION"]
+                else:
+                    reasons = ["GOVERNED_CORPORATE_EVENT_ALREADY_PRESENT"]
+                reasons.extend(readiness_reasons + signal_missing_reasons)
+            elif published_prod or supported_current or signal_input_ready_wallets or comparable_pairs or production_corporate_events:
+                status = E6_8J1A2_PARTIAL
+                reasons = []
+                if published_prod and not supported_current:
+                    reasons.append("NO_E3_SUPPORTED_CURRENT_WALLET")
+                if signal_input_ready_wallets and not signal_eval_ready_wallets:
+                    reasons.append("E3_INPUT_READY_BUT_ENGINE_CONFIG_NOT_READY")
+                if comparable_pairs and not change_config_ready:
+                    reasons.append("CHANGE_PAIR_READY_BUT_E4_CONFIG_NOT_READY")
+                if production_corporate_events and not corporate_event_governed:
+                    reasons.append("CORPORATE_EVENT_LINEAGE_NOT_READY")
+                reasons.extend(readiness_reasons + signal_missing_reasons)
+                if not reasons:
+                    reasons = ["PRODUCTION_SOURCE_STATE_PARTIAL"]
+            else:
+                status = E6_8J1A2_NOT_READY
+                reasons = ["NO_PRODUCTION_DOMAIN_INTELLIGENCE"]
+                if rel_wallets:
+                    reasons.append("NO_CURRENT_PUBLISHED_PRODUCTION_WALLET")
+
+            reasons = list(dict.fromkeys(reasons))
+            supported_ids = [str(w["assessment_id"]) for w in supported_current]
+            signal_input_ids = [str(w["assessment_id"]) for w in signal_input_ready_wallets]
+            signal_eval_ids = [str(w["assessment_id"]) for w in signal_eval_ready_wallets]
+            output_rows.append({
+                "Relationship ID": rel["relationship_id"],
+                "Relationship": rel["name"],
+                "Country": rel["country"] or "",
+                "Sector": rel["sector"] or "",
+                "Source Onboarding Status": status,
+                "Primary Reason": reasons[0],
+                "Reason Codes": reasons,
+                "Production Wallet Assessments": len([w for w in rel_wallets if not bool(w["test_only"])]),
+                "Current Published Production Wallets": len(published_prod),
+                "Supported Current Wallets": len(supported_current),
+                "Supported Current Wallet IDs": supported_ids,
+                "E3 Input-ready Wallets": len(signal_input_ready_wallets),
+                "E3 Input-ready Wallet IDs": signal_input_ids,
+                "Opportunity Signal Evaluation Ready": opportunity_signal_eval_ready,
+                "Opportunity Signal Evaluation Wallet IDs": signal_eval_ids,
+                "Current Production Opportunity Signals": len(current_prod_signals),
+                "Comparable Historical Wallet Pairs": len(comparable_pairs),
+                "Comparable Wallet Pairs": [f"{a}→{b}" for a, b in comparable_pairs],
+                "Wallet Change Evaluation Ready": change_eval_ready,
+                "Current Production Changes": len(production_changes),
+                "Governed Production Changes": len(governed_changes),
+                "Current Production Corporate Events": len(production_corporate_events),
+                "Governed Corporate Events": len(governed_events),
+                "Production Signal Config Available": any(
+                    thresholds_by_type.get(E6_8J1A2_SUPPORTED_WALLET_METHODS[(str(w["methodology_code"]), str(w["methodology_version"]))])
+                    for w in supported_current
+                ) if supported_current else False,
+                "Production Change Config Available": change_config_ready,
+                "Production Event Config Available": event_config_ready,
+                "Corporate Event Pre-ingestion Source Contract": "NOT_AVAILABLE_IN_V1",
+                "Legacy Score Used As Source": False,
+                "AUE Population Performed": False,
+                "E.3 / E.4 Writes Performed": False,
+            })
+
+        ready = sum(1 for x in output_rows if x["Source Onboarding Status"] == E6_8J1A2_READY)
+        partial = sum(1 for x in output_rows if x["Source Onboarding Status"] == E6_8J1A2_PARTIAL)
+        blocked = sum(1 for x in output_rows if x["Source Onboarding Status"] == E6_8J1A2_BLOCKED)
+        not_ready = len(output_rows) - ready - partial - blocked
+        return {
+            "Inventory Version": E6_8J1A2_READINESS_VERSION,
+            "Review Cycle": cycle["review_cycle_id"],
+            "Business Relationship Count": len(output_rows),
+            "Ready": ready,
+            "Partial": partial,
+            "Not Ready": not_ready,
+            "Blocked": blocked,
+            "Relationships With Any Production Wallet Assessment": sum(1 for x in output_rows if x["Production Wallet Assessments"] > 0),
+            "Relationships With Current Published Production Wallet": sum(1 for x in output_rows if x["Current Published Production Wallets"] > 0),
+            "Relationships With Supported Current Wallet": sum(1 for x in output_rows if x["Supported Current Wallets"] > 0),
+            "Relationships With E3 Input-ready Wallet": sum(1 for x in output_rows if x["E3 Input-ready Wallets"] > 0),
+            "Ready for Opportunity Signal Evaluation": sum(1 for x in output_rows if x["Opportunity Signal Evaluation Ready"]),
+            "Relationships With Existing Production Opportunity Signal": sum(1 for x in output_rows if x["Current Production Opportunity Signals"] > 0),
+            "Relationships With Comparable Historical Wallet Pair": sum(1 for x in output_rows if x["Comparable Historical Wallet Pairs"] > 0),
+            "Ready for Wallet Change Evaluation": sum(1 for x in output_rows if x["Wallet Change Evaluation Ready"]),
+            "Relationships With Existing Production Change": sum(1 for x in output_rows if x["Governed Production Changes"] > 0),
+            "Relationships With Governed Corporate Event": sum(1 for x in output_rows if x["Governed Corporate Events"] > 0),
+            "Production Signal Config Count": len(threshold_rows),
+            "Production Change/Event Config Count": len(rule_rows),
+            "Production Change Config Ready": change_config_ready,
+            "Production Event Config Ready": event_config_ready,
+            "Corporate Event Pre-ingestion Contract Available": False,
+            "Inventory Status": "COMPLETE",
+            "Relationships": output_rows,
+            "Cutover Performed": False,
+            "AUE Population Performed": False,
+            "E.3 / E.4 Writes Performed": False,
+        }
+    finally:
+        if owns:
+            conn.close()
+
+
+def _db_stage1e6_8j1a2_display_rows(inventory: dict) -> list[dict]:
+    rows = []
+    for item in inventory.get("Relationships", []):
+        rows.append({
+            "Relationship": item.get("Relationship"),
+            "Status": item.get("Source Onboarding Status"),
+            "Published Wallets": item.get("Current Published Production Wallets", 0),
+            "Supported Wallets": item.get("Supported Current Wallets", 0),
+            "E3 Input Ready": item.get("E3 Input-ready Wallets", 0),
+            "Signal Eval Ready": bool(item.get("Opportunity Signal Evaluation Ready")),
+            "Existing Signals": item.get("Current Production Opportunity Signals", 0),
+            "Comparable Pairs": item.get("Comparable Historical Wallet Pairs", 0),
+            "Change Eval Ready": bool(item.get("Wallet Change Evaluation Ready")),
+            "Existing Events": item.get("Governed Corporate Events", 0),
+            "Primary Reason": item.get("Primary Reason") or "—",
+        })
+    return rows
+
+
+def _db_stage1e6_8j1a2_run_live_scan_validation() -> dict:
+    conn = _db_connect()
+    try:
+        before_fp = _db_stage1e6_8j1a2_readonly_fingerprint(conn)
+        authority_before = _db_stage1e6_review_authority_mode(conn)
+        started = time.perf_counter()
+        inventory = _db_stage1e6_8j1a2_business_source_onboarding_inventory(conn=conn)
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+        authority_after = _db_stage1e6_review_authority_mode(conn)
+        after_fp = _db_stage1e6_8j1a2_readonly_fingerprint(conn)
+
+        rows = inventory.get("Relationships", [])
+        ids = [str(x.get("Relationship ID") or "") for x in rows]
+        duplicates = sorted({x for x in ids if x and ids.count(x) > 1})
+        excluded_leak = sorted(set(ids) & set(E6_8J1_EXCLUDED_RELATIONSHIP_IDS))
+        valid = {E6_8J1A2_READY, E6_8J1A2_PARTIAL, E6_8J1A2_NOT_READY, E6_8J1A2_BLOCKED}
+        classifications_complete = bool(rows) and all(
+            x.get("Source Onboarding Status") in valid
+            and bool(x.get("Primary Reason"))
+            and x.get("Legacy Score Used As Source") is False
+            for x in rows
+        )
+        counts_reconcile = bool(
+            inventory.get("Business Relationship Count") == len(rows)
+            and inventory.get("Ready", 0) + inventory.get("Partial", 0)
+                + inventory.get("Not Ready", 0) + inventory.get("Blocked", 0) == len(rows)
+        )
+        read_only = before_fp == after_fp
+        authority_ok = authority_before == "LEGACY" and authority_after == "LEGACY"
+        contract_ok = bool(
+            inventory.get("Inventory Status") == "COMPLETE"
+            and classifications_complete and counts_reconcile
+            and not duplicates and not excluded_leak
+            and not inventory.get("Cutover Performed")
+            and not inventory.get("AUE Population Performed")
+            and not inventory.get("E.3 / E.4 Writes Performed")
+        )
+        overall = bool(read_only and authority_ok and contract_ok)
+        return {
+            "E.6.8J.1A.2 Source Onboarding Readiness PASS": overall,
+            "Inventory Version": E6_8J1A2_READINESS_VERSION,
+            "Review Authority Before": authority_before,
+            "Review Authority After": authority_after,
+            "Read-only Fingerprint Stable": read_only,
+            "Validation Fixtures Excluded": not excluded_leak,
+            "Duplicate Relationship IDs": duplicates,
+            "Classifications Complete": classifications_complete,
+            "Counts Reconcile": counts_reconcile,
+            "Legacy Scores Used As Source": False,
+            "E.3 / E.4 Engines Executed": False,
+            "E.3 / E.4 Writes Performed": False,
+            "AUE Population Performed": False,
+            "DRE / RPE / ReviewItem Writes Performed": False,
+            "Cutover Performed": False,
+            "Read Elapsed ms": elapsed_ms,
+            "Summary": {
+                k: inventory.get(k) for k in (
+                    "Review Cycle",
+                    "Business Relationship Count",
+                    "Ready",
+                    "Partial",
+                    "Not Ready",
+                    "Blocked",
+                    "Relationships With Any Production Wallet Assessment",
+                    "Relationships With Current Published Production Wallet",
+                    "Relationships With Supported Current Wallet",
+                    "Relationships With E3 Input-ready Wallet",
+                    "Ready for Opportunity Signal Evaluation",
+                    "Relationships With Existing Production Opportunity Signal",
+                    "Relationships With Comparable Historical Wallet Pair",
+                    "Ready for Wallet Change Evaluation",
+                    "Relationships With Existing Production Change",
+                    "Relationships With Governed Corporate Event",
+                    "Production Signal Config Count",
+                    "Production Change/Event Config Count",
+                    "Production Change Config Ready",
+                    "Production Event Config Ready",
+                    "Corporate Event Pre-ingestion Contract Available",
+                    "Inventory Status",
+                )
+            },
+            "Relationships": rows,
+            "Display Rows": _db_stage1e6_8j1a2_display_rows(inventory),
+        }
+    finally:
+        conn.close()
+
+
+# END STAGE 1-E.6.8J.1A.2 — PRODUCTION INTELLIGENCE SOURCE ONBOARDING READINESS
+
 
 
 
@@ -20858,7 +21572,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.6.8J.1A.1 · Production AUE Coverage Readiness Inventory v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.6.8J.1A.2 · Production Intelligence Source Onboarding Readiness Inventory v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -21613,6 +22327,42 @@ def render_stage_1c_sidebar():
                     st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
                 else:
                     st.info("No authoritative business relationships were available for production AUE coverage classification.")
+
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.6.8J.1A.2 · Production Intelligence Source Onboarding Readiness Inventory**")
+            st.caption(
+                "Strict read-only source onboarding scan · inventories production WalletAssessment lineage, "
+                "E.3 signal-config readiness, comparable wallet history for E.4 Change evaluation, and existing "
+                "governed CorporateEvent state. Legacy MAS/UI scores are never used as source intelligence; "
+                "no E.3/E.4 engine execution, AUE population or Review cutover occurs."
+            )
+            if st.button(
+                "Run E.6.8J.1A.2 Production Intelligence Source Onboarding Readiness Scan",
+                key="stage1e6_8j1a2_source_onboarding_scan",
+                use_container_width=True,
+            ):
+                try:
+                    st.session_state["stage1e6_8j1a2_source_onboarding_result"] = _db_stage1e6_8j1a2_run_live_scan_validation()
+                except Exception as exc:
+                    st.error(f"E.6.8J.1A.2 source onboarding readiness scan failed: {exc}")
+
+            e68j1a2 = st.session_state.get("stage1e6_8j1a2_source_onboarding_result")
+            if e68j1a2:
+                if e68j1a2.get("E.6.8J.1A.2 Source Onboarding Readiness PASS"):
+                    st.success(
+                        "E.6.8J.1A.2 PASS · production intelligence source onboarding was classified with zero writes; "
+                        "legacy scores were not used and no E.3/E.4/AUE/Review population occurred."
+                    )
+                else:
+                    st.error("E.6.8J.1A.2 CHECK · inspect source lineage/infrastructure before production onboarding.")
+                st.write({k: v for k, v in e68j1a2.items() if k not in {"Relationships", "Display Rows"}})
+                display_rows = e68j1a2.get("Display Rows", [])
+                if display_rows:
+                    st.markdown("**Production Intelligence Source Onboarding Readiness · Business Universe**")
+                    st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No authoritative business relationships were available for source onboarding classification.")
 
 
         if diagnostics_enabled:
