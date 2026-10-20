@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.6.8I Live Shadow Comparison & Stage 1-C Compatibility Validation v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.6.8J.1 Business Review Readiness Inventory v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1469,8 +1469,8 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 13
-ECAI_PERSISTENCE_RUNTIME_VERSION = 19  # E.6.8I v0.1: live shadow + Stage 1-C compatibility validation
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8I Live Shadow Comparison & Stage 1-C Compatibility Validation v0.1"
+ECAI_PERSISTENCE_RUNTIME_VERSION = 20  # E.6.8J.1 v0.1: read-only business Review readiness inventory
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8J.1 Business Review Readiness Inventory v0.1"
 
 
 def _db_now() -> str:
@@ -17886,6 +17886,416 @@ def _db_stage1e6_8i_run_live_shadow_validation() -> dict:
 
 
 # =============================================================================
+# STAGE 1-E.6.8J.1 — BUSINESS REVIEW READINESS INVENTORY IMPLEMENTATION
+# =============================================================================
+# Read-only upstream inventory. This stage does NOT create DRE/RPE/RPA/ReviewItem
+# objects, does NOT call the write-capable _db_active_review_cycle helper, and does
+# NOT change Review authority. It only establishes whether each authoritative
+# business relationship currently possesses production AUE + cluster lineage that
+# is structurally ready for the future deterministic candidate-situation assembler.
+
+E6_8J1_READINESS_VERSION = "1.0-readiness-v0.1"
+E6_8J1_READY = "READY_FOR_CANDIDATE_ASSEMBLY"
+E6_8J1_NOT_READY = "NOT_READY"
+E6_8J1_BLOCKED = "BLOCKED"
+E6_8J1_EXCLUDED_RELATIONSHIP_IDS = (
+    "REL-EC-AI-E3-VALIDATION-CO",
+    "REL-EC-AI-E4-VALIDATION-CO",
+    "REL-EC-AI-E5-VALIDATION-CO",
+    "REL-EC-AI-E5-FINAL-VALIDATION-CO",
+    "REL-EC-AI-E6-VALIDATION-CO",
+)
+E6_8J1_FINGERPRINT_TABLES = (
+    "relationship",
+    "review_cycle",
+    "attention_urgency_evaluation",
+    "attention_urgency_cluster",
+    "decision_requirement_evaluation",
+    "review_promotion_evaluation",
+    "review_item",
+)
+
+
+def _db_stage1e6_8j1_json_list(value) -> list[str]:
+    if value in (None, "", []):
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    try:
+        parsed = json.loads(value)
+        if isinstance(parsed, list):
+            return [str(v) for v in parsed]
+    except Exception:
+        pass
+    return [str(value)]
+
+
+def _db_stage1e6_8j1_readonly_fingerprint(conn: _DBConnection) -> str:
+    """Diagnostics-only fingerprint proving J.1 caused no institutional writes."""
+    payload = {}
+    for table in E6_8J1_FINGERPRINT_TABLES:
+        rows = conn.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+        payload[table] = [dict(row) for row in rows]
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _db_stage1e6_8j1_active_cycle_readonly(conn: _DBConnection):
+    """Read the active ReviewCycle without auto-creating one.
+
+    _db_active_review_cycle is intentionally not used because that compatibility
+    helper may INSERT RC-CURRENT when no Active row exists. J.1 is a zero-write
+    inventory and must fail visible instead of repairing state.
+    """
+    return conn.execute(
+        "SELECT * FROM review_cycle WHERE status='Active' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
+def _db_stage1e6_8j1_relationships(conn: _DBConnection):
+    placeholders = ",".join("?" for _ in E6_8J1_EXCLUDED_RELATIONSHIP_IDS)
+    return conn.execute(
+        f"""SELECT id,relationship_id,name,country,sector,score,attention_rating,primary_driver
+             FROM relationship
+             WHERE relationship_id NOT IN ({placeholders})
+             ORDER BY id""",
+        tuple(E6_8J1_EXCLUDED_RELATIONSHIP_IDS),
+    ).fetchall()
+
+
+def _db_stage1e6_8j1_reason_status(reason_codes: list[str]) -> str:
+    blocking = {
+        "MULTIPLE_CURRENT_PRODUCTION_AUE",
+        "TEST_AUE_ON_BUSINESS_RELATIONSHIP",
+        "TEST_CLUSTER_UNDER_PRODUCTION_AUE",
+        "CLUSTER_EVALUATION_ID_MISMATCH",
+        "CLUSTER_SEMANTIC_IDENTITY_INCOMPLETE",
+        "ATTENTION_PRIMARY_CLUSTER_LINEAGE_MISSING",
+        "URGENCY_PRIMARY_CLUSTER_LINEAGE_MISSING",
+    }
+    if any(code in blocking for code in reason_codes):
+        return E6_8J1_BLOCKED
+    if reason_codes:
+        return E6_8J1_NOT_READY
+    return E6_8J1_READY
+
+
+def _db_stage1e6_8j1_business_readiness_inventory(
+    *, conn: _DBConnection | None = None
+) -> dict:
+    """Classify the authoritative business universe for future E.6 candidate assembly.
+
+    This function is intentionally read-only and performs no candidate assembly,
+    DRE/RPE evaluation, ReviewItem persistence, repair, supersession, or cutover.
+    """
+    owns = conn is None
+    if owns:
+        conn = _db_connect()
+    try:
+        cycle = _db_stage1e6_8j1_active_cycle_readonly(conn)
+        if cycle is None:
+            return {
+                "Inventory Version": E6_8J1_READINESS_VERSION,
+                "Review Cycle": None,
+                "Business Relationship Count": 0,
+                "Ready for Candidate Assembly": 0,
+                "Not Ready": 0,
+                "Blocked": 0,
+                "Current Production AUE Count": 0,
+                "Candidate-visible Cluster Count": 0,
+                "Business AUE Coverage Complete": False,
+                "Inventory Status": "NO_ACTIVE_REVIEW_CYCLE",
+                "Relationships": [],
+                "Cutover Performed": False,
+            }
+
+        relationships = list(_db_stage1e6_8j1_relationships(conn))
+        if not relationships:
+            return {
+                "Inventory Version": E6_8J1_READINESS_VERSION,
+                "Review Cycle": cycle["review_cycle_id"],
+                "Business Relationship Count": 0,
+                "Ready for Candidate Assembly": 0,
+                "Not Ready": 0,
+                "Blocked": 0,
+                "Current Production AUE Count": 0,
+                "Candidate-visible Cluster Count": 0,
+                "Business AUE Coverage Complete": False,
+                "Inventory Status": "NO_BUSINESS_RELATIONSHIPS",
+                "Relationships": [],
+                "Cutover Performed": False,
+            }
+
+        relationship_db_ids = [int(r["id"]) for r in relationships]
+        rel_placeholders = ",".join("?" for _ in relationship_db_ids)
+        aue_rows = conn.execute(
+            f"""SELECT *
+                 FROM attention_urgency_evaluation
+                 WHERE review_cycle_id=?
+                   AND relationship_id IN ({rel_placeholders})
+                 ORDER BY relationship_id ASC,id DESC""",
+            (int(cycle["id"]), *relationship_db_ids),
+        ).fetchall()
+
+        aue_by_relationship: dict[int, list] = {}
+        for row in aue_rows:
+            aue_by_relationship.setdefault(int(row["relationship_id"]), []).append(row)
+
+        aue_db_ids = [int(row["id"]) for row in aue_rows]
+        cluster_by_aue: dict[int, list] = {}
+        if aue_db_ids:
+            aue_placeholders = ",".join("?" for _ in aue_db_ids)
+            cluster_rows = conn.execute(
+                f"""SELECT *
+                     FROM attention_urgency_cluster
+                     WHERE evaluation_db_id IN ({aue_placeholders})
+                     ORDER BY evaluation_db_id ASC,id ASC""",
+                tuple(aue_db_ids),
+            ).fetchall()
+            for row in cluster_rows:
+                cluster_by_aue.setdefault(int(row["evaluation_db_id"]), []).append(row)
+
+        inventory_rows = []
+        for rel in relationships:
+            rel_db_id = int(rel["id"])
+            all_rel_aues = aue_by_relationship.get(rel_db_id, [])
+            test_aues = [r for r in all_rel_aues if bool(r["test_only"])]
+            current_production = [
+                r for r in all_rel_aues
+                if not bool(r["test_only"]) and str(r["status"] or "") == "PUBLISHED"
+            ]
+
+            reason_codes: list[str] = []
+            current = None
+            if test_aues:
+                reason_codes.append("TEST_AUE_ON_BUSINESS_RELATIONSHIP")
+            if len(current_production) > 1:
+                reason_codes.append("MULTIPLE_CURRENT_PRODUCTION_AUE")
+            elif not current_production:
+                reason_codes.append("NO_CURRENT_PRODUCTION_AUE")
+            else:
+                current = current_production[0]
+
+            production_clusters = []
+            semantic_clusters = []
+            domains: set[str] = set()
+            episodes: set[str] = set()
+            cluster_ids: list[str] = []
+            if current is not None:
+                if not bool(current["quality_gate_pass"]):
+                    reason_codes.append("AUE_QUALITY_GATE_FAILED")
+                if str(current["quadrant_status"] or "") != "ASSIGNED":
+                    reason_codes.append("AUE_QUADRANT_NOT_ASSIGNED")
+
+                all_clusters = cluster_by_aue.get(int(current["id"]), [])
+                if any(bool(c["test_only"]) for c in all_clusters):
+                    reason_codes.append("TEST_CLUSTER_UNDER_PRODUCTION_AUE")
+                production_clusters = [c for c in all_clusters if not bool(c["test_only"])]
+                if not production_clusters:
+                    reason_codes.append("NO_PRODUCTION_AUE_CLUSTERS")
+
+                malformed_semantic = False
+                evaluation_id_mismatch = False
+                for c in production_clusters:
+                    if str(c["evaluation_id"] or "") != str(current["evaluation_id"] or ""):
+                        evaluation_id_mismatch = True
+                    semantic_ok = bool(
+                        str(c["cluster_key"] or "").strip()
+                        and str(c["domain"] or "").strip()
+                        and str(c["economic_episode_key"] or "").strip()
+                    )
+                    if not semantic_ok:
+                        malformed_semantic = True
+                        continue
+                    semantic_clusters.append(c)
+                    domains.add(str(c["domain"]))
+                    episodes.add(str(c["economic_episode_key"]))
+                    cluster_ids.append(str(c["cluster_evaluation_id"]))
+
+                if evaluation_id_mismatch:
+                    reason_codes.append("CLUSTER_EVALUATION_ID_MISMATCH")
+                if malformed_semantic:
+                    reason_codes.append("CLUSTER_SEMANTIC_IDENTITY_INCOMPLETE")
+                if production_clusters and not semantic_clusters:
+                    reason_codes.append("NO_CANDIDATE_VISIBLE_CLUSTER")
+
+                attention_primary = str(current["attention_primary_cluster_key"] or "").strip()
+                urgency_primary = str(current["urgency_primary_cluster_key"] or "").strip()
+                if attention_primary and not any(
+                    str(c["axis"] or "") == "ATTENTION"
+                    and str(c["cluster_key"] or "") == attention_primary
+                    for c in production_clusters
+                ):
+                    reason_codes.append("ATTENTION_PRIMARY_CLUSTER_LINEAGE_MISSING")
+                if urgency_primary and not any(
+                    str(c["axis"] or "") == "URGENCY"
+                    and str(c["cluster_key"] or "") == urgency_primary
+                    for c in production_clusters
+                ):
+                    reason_codes.append("URGENCY_PRIMARY_CLUSTER_LINEAGE_MISSING")
+
+            # Stable, deterministic reason precedence; first reason is the visible primary reason.
+            reason_codes = list(dict.fromkeys(reason_codes))
+            readiness_status = _db_stage1e6_8j1_reason_status(reason_codes)
+            if readiness_status == E6_8J1_READY:
+                reason_codes = [E6_8J1_READY]
+
+            inventory_rows.append({
+                "Relationship ID": rel["relationship_id"],
+                "Relationship": rel["name"],
+                "Country": rel["country"] or "",
+                "Sector": rel["sector"] or "",
+                "Review Cycle": cycle["review_cycle_id"],
+                "Readiness Status": readiness_status,
+                "Primary Reason": reason_codes[0] if reason_codes else E6_8J1_READY,
+                "Reason Codes": reason_codes,
+                "Current Production AUE": current["evaluation_id"] if current is not None else None,
+                "Current Production AUE Count": len(current_production),
+                "Test-only AUE Count": len(test_aues),
+                "AUE Quality Gate Pass": bool(current["quality_gate_pass"]) if current is not None else None,
+                "Quadrant Status": current["quadrant_status"] if current is not None else "NOT_ASSESSED",
+                "Quadrant": current["quadrant"] if current is not None else None,
+                "Attention Rating": current["attention_rating"] if current is not None else "NOT_ASSESSED",
+                "Attention Score": current["attention_score"] if current is not None else None,
+                "Urgency Rating": current["urgency_rating"] if current is not None else "NOT_ASSESSED",
+                "Urgency Score": current["urgency_score"] if current is not None else None,
+                "Production Cluster Count": len(production_clusters),
+                "Candidate-visible Cluster Count": len(semantic_clusters),
+                "Candidate-visible Cluster IDs": cluster_ids,
+                "Domains": sorted(domains),
+                "Economic Episodes": sorted(episodes),
+                "Attention Primary Cluster": (
+                    current["attention_primary_cluster_key"] if current is not None else None
+                ),
+                "Urgency Primary Cluster": (
+                    current["urgency_primary_cluster_key"] if current is not None else None
+                ),
+            })
+
+        ready_count = sum(1 for row in inventory_rows if row["Readiness Status"] == E6_8J1_READY)
+        blocked_count = sum(1 for row in inventory_rows if row["Readiness Status"] == E6_8J1_BLOCKED)
+        not_ready_count = len(inventory_rows) - ready_count - blocked_count
+        current_aue_count = sum(1 for row in inventory_rows if row["Current Production AUE"])
+        cluster_count = sum(int(row["Candidate-visible Cluster Count"]) for row in inventory_rows)
+
+        return {
+            "Inventory Version": E6_8J1_READINESS_VERSION,
+            "Review Cycle": cycle["review_cycle_id"],
+            "Business Relationship Count": len(inventory_rows),
+            "Ready for Candidate Assembly": ready_count,
+            "Not Ready": not_ready_count,
+            "Blocked": blocked_count,
+            "Current Production AUE Count": current_aue_count,
+            "Candidate-visible Cluster Count": cluster_count,
+            "Business AUE Coverage Complete": bool(inventory_rows) and ready_count == len(inventory_rows),
+            "Inventory Status": "COMPLETE",
+            "Relationships": inventory_rows,
+            "Cutover Performed": False,
+        }
+    finally:
+        if owns:
+            conn.close()
+
+
+def _db_stage1e6_8j1_display_rows(inventory: dict) -> list[dict]:
+    """Compact dataframe-safe projection; presentation only, no ranking."""
+    rows = []
+    for item in inventory.get("Relationships", []):
+        rows.append({
+            "Relationship": item.get("Relationship"),
+            "Readiness": item.get("Readiness Status"),
+            "Current AUE": item.get("Current Production AUE") or "—",
+            "Quadrant": item.get("Quadrant") or "—",
+            "A/U": f"{item.get('Attention Rating','NOT_ASSESSED')} / {item.get('Urgency Rating','NOT_ASSESSED')}",
+            "Clusters": item.get("Candidate-visible Cluster Count", 0),
+            "Domains": ", ".join(item.get("Domains", [])) or "—",
+            "Economic Episodes": ", ".join(item.get("Economic Episodes", [])) or "—",
+            "Primary Reason": item.get("Primary Reason") or "—",
+        })
+    return rows
+
+
+def _db_stage1e6_8j1_run_readiness_inventory_validation() -> dict:
+    """Live read-only validation wrapper for the J.1 inventory."""
+    conn = _db_connect()
+    try:
+        before_fp = _db_stage1e6_8j1_readonly_fingerprint(conn)
+        authority_before = _db_stage1e6_review_authority_mode(conn)
+        started = time.perf_counter()
+        inventory = _db_stage1e6_8j1_business_readiness_inventory(conn=conn)
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+        authority_after = _db_stage1e6_review_authority_mode(conn)
+        after_fp = _db_stage1e6_8j1_readonly_fingerprint(conn)
+
+        rows = inventory.get("Relationships", [])
+        relationship_ids = [str(row.get("Relationship ID") or "") for row in rows]
+        excluded_leak = sorted(set(relationship_ids) & set(E6_8J1_EXCLUDED_RELATIONSHIP_IDS))
+        duplicate_ids = sorted({rid for rid in relationship_ids if relationship_ids.count(rid) > 1 and rid})
+        valid_statuses = {E6_8J1_READY, E6_8J1_NOT_READY, E6_8J1_BLOCKED}
+        classifications_complete = bool(rows) and all(
+            row.get("Readiness Status") in valid_statuses
+            and bool(row.get("Primary Reason"))
+            for row in rows
+        )
+        counts_reconcile = bool(
+            inventory.get("Business Relationship Count") == len(rows)
+            and inventory.get("Ready for Candidate Assembly", 0)
+                + inventory.get("Not Ready", 0)
+                + inventory.get("Blocked", 0)
+                == len(rows)
+        )
+        read_only_pass = before_fp == after_fp
+        authority_pass = authority_before == "LEGACY" and authority_after == "LEGACY"
+        inventory_contract_pass = bool(
+            inventory.get("Inventory Status") == "COMPLETE"
+            and classifications_complete
+            and counts_reconcile
+            and not excluded_leak
+            and not duplicate_ids
+            and not inventory.get("Cutover Performed")
+        )
+        overall = bool(read_only_pass and authority_pass and inventory_contract_pass)
+
+        return {
+            "E.6.8J.1 Readiness Inventory PASS": overall,
+            "Inventory Version": E6_8J1_READINESS_VERSION,
+            "Review Authority Before": authority_before,
+            "Review Authority After": authority_after,
+            "Read-only Fingerprint Stable": read_only_pass,
+            "Validation Fixtures Excluded": not excluded_leak,
+            "Duplicate Relationship IDs": duplicate_ids,
+            "Classifications Complete": classifications_complete,
+            "Counts Reconcile": counts_reconcile,
+            "Cutover Performed": False,
+            "Candidate Assembly Performed": False,
+            "DRE / RPE / ReviewItem Writes Performed": False,
+            "Business AUE Coverage Complete": inventory.get("Business AUE Coverage Complete", False),
+            "Read Elapsed ms": elapsed_ms,
+            "Summary": {
+                k: inventory.get(k) for k in (
+                    "Review Cycle",
+                    "Business Relationship Count",
+                    "Ready for Candidate Assembly",
+                    "Not Ready",
+                    "Blocked",
+                    "Current Production AUE Count",
+                    "Candidate-visible Cluster Count",
+                    "Business AUE Coverage Complete",
+                    "Inventory Status",
+                )
+            },
+            "Relationships": rows,
+            "Display Rows": _db_stage1e6_8j1_display_rows(inventory),
+        }
+    finally:
+        conn.close()
+
+
+# END STAGE 1-E.6.8J.1 — BUSINESS REVIEW READINESS INVENTORY IMPLEMENTATION
+
+
+
+# =============================================================================
 # STAGE 1-E.4.9 — FINAL LIVE VALIDATION
 # =============================================================================
 
@@ -19830,7 +20240,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.6.8I · Live Shadow + Stage 1-C Compatibility Validation v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.6.8J.1 · Business Review Readiness Inventory v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -20515,6 +20925,40 @@ def render_stage_1c_sidebar():
                 if preview_rows:
                     st.markdown("**Controlled Governed ReviewItem · Stage 1-C Compatibility Preview**")
                     st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.6.8J.1 · Business Review Readiness Inventory**")
+            st.caption(
+                "Read-only upstream inventory · scans the authoritative business relationship universe for "
+                "current production AUE + cluster lineage. It does not assemble management situations, does not "
+                "create DRE/RPE/ReviewItems, and keeps Review authority LEGACY."
+            )
+            if st.button(
+                "Run E.6.8J.1 Business Review Readiness Inventory",
+                key="stage1e6_8j1_readiness_inventory",
+                use_container_width=True,
+            ):
+                try:
+                    st.session_state["stage1e6_8j1_readiness_result"] = _db_stage1e6_8j1_run_readiness_inventory_validation()
+                except Exception as exc:
+                    st.error(f"E.6.8J.1 readiness inventory failed: {exc}")
+
+            e68j1 = st.session_state.get("stage1e6_8j1_readiness_result")
+            if e68j1:
+                if e68j1.get("E.6.8J.1 Readiness Inventory PASS"):
+                    st.success(
+                        "E.6.8J.1 PASS · authoritative business relationships were classified with zero writes; "
+                        "no candidate assembly or Review authority cutover was performed."
+                    )
+                else:
+                    st.error("E.6.8J.1 CHECK · inspect inventory integrity before candidate assembly.")
+                st.write({k: v for k, v in e68j1.items() if k not in {"Relationships", "Display Rows"}})
+                display_rows = e68j1.get("Display Rows", [])
+                if display_rows:
+                    st.markdown("**Business Review Readiness Inventory · Current ReviewCycle**")
+                    st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No authoritative business relationships were available for readiness classification.")
 
         if diagnostics_enabled:
             st.markdown("**Stage 1-E.5.10 · Final Live Attention × Urgency Validation**")
