@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.6.8J.1 Business Review Readiness Inventory v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.6.8J.1A.1 Production AUE Coverage Readiness Inventory v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1469,8 +1469,8 @@ ECAI_DB_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
 ECAI_SCHEMA_VERSION = 13
-ECAI_PERSISTENCE_RUNTIME_VERSION = 20  # E.6.8J.1 v0.1: read-only business Review readiness inventory
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8J.1 Business Review Readiness Inventory v0.1"
+ECAI_PERSISTENCE_RUNTIME_VERSION = 21  # E.6.8J.1A.1 v0.1: read-only production AUE coverage readiness inventory
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8J.1A.1 Production AUE Coverage Readiness Inventory v0.1"
 
 
 def _db_now() -> str:
@@ -18294,6 +18294,624 @@ def _db_stage1e6_8j1_run_readiness_inventory_validation() -> dict:
 # END STAGE 1-E.6.8J.1 — BUSINESS REVIEW READINESS INVENTORY IMPLEMENTATION
 
 
+# =============================================================================
+# STAGE 1-E.6.8J.1A.1 — PRODUCTION AUE COVERAGE READINESS INVENTORY
+# =============================================================================
+# Strict read-only upstream scan. This stage does NOT create or supersede
+# OpportunitySignals / ChangeEvents / AUEs, does NOT create coverage attestations,
+# does NOT run the E.5 deterministic engine, and does NOT create E.6 objects.
+# It answers a narrower governance question: for each authoritative business
+# relationship, which production E.5 source families are actually represented by
+# governed persisted state, which factor families remain unassessed, and whether
+# there is enough source coverage to evaluate (but not necessarily publish) AUE.
+#
+# Governing rule: absence of a source row is NOT treated as verified NONE. It is
+# NOT_ASSESSED unless a governed coverage mechanism proves the factor was assessed.
+
+E6_8J1A1_READINESS_VERSION = "1.0-aue-readiness-v0.1"
+E6_8J1A1_READY_PUBLICATION = "READY_FOR_AUE_PUBLICATION"
+E6_8J1A1_READY_EVALUATION_ONLY = "READY_FOR_AUE_EVALUATION_ONLY"
+E6_8J1A1_NOT_READY = "NOT_READY"
+E6_8J1A1_BLOCKED = "BLOCKED"
+
+E6_8J1A1_ATTENTION_CODES = (
+    "ECONOMIC_OPPORTUNITY",
+    "MATERIAL_CHANGE",
+    "MATERIAL_EVENT",
+    "STRATEGIC_RELEVANCE",
+    "RISK_RELATIONSHIP_CONCERN",
+)
+E6_8J1A1_URGENCY_CODES = (
+    "EVENT_PROXIMITY",
+    "DECISION_WINDOW",
+    "EXECUTION_DEADLINE",
+    "RATE_OF_CHANGE",
+    "OPPORTUNITY_RISK_WINDOW",
+)
+E6_8J1A1_CURRENT_SIGNAL_STATUSES = {"ACTIVE", "MONITORING", "SUPPRESSED"}
+E6_8J1A1_CURRENT_CHANGE_STATUSES = {"RECORDED"}
+E6_8J1A1_CURRENT_EVENT_STATUSES = {"ANNOUNCED", "SCHEDULED", "COMPLETED"}
+E6_8J1A1_VALID_CONFIDENCE = {"HIGH", "MEDIUM", "LOW"}
+E6_8J1A1_VALID_SIGNAL_STRENGTH = {"HIGH", "MEDIUM", "LOW"}
+E6_8J1A1_VALID_MATERIALITY = {"MATERIAL", "NOT_MATERIAL", "NOT_ASSESSED"}
+E6_8J1A1_VALID_TEMPORAL_STATES = {
+    "IMMEDIATE", "NEAR_TERM", "FORWARD", "LONG_DATED",
+    "RECENTLY_OCCURRED", "HISTORICAL", "INACTIVE", "UNKNOWN",
+}
+E6_8J1A1_SUPPORTED_SIGNAL_TYPES = {"LENDING_WALLET_GAP", "LIQUIDITY_WALLET_GAP"}
+
+E6_8J1A1_FINGERPRINT_TABLES = (
+    "relationship",
+    "review_cycle",
+    "wallet_assessment",
+    "opportunity_signal",
+    "change_event",
+    "change_event_temporal_evaluation",
+    "attention_urgency_evaluation",
+    "attention_urgency_factor_evaluation",
+    "attention_urgency_cluster",
+    "decision_requirement_evaluation",
+    "review_promotion_evaluation",
+    "review_item",
+)
+
+
+def _db_stage1e6_8j1a1_readonly_fingerprint(conn: _DBConnection) -> str:
+    """Fingerprint all upstream/downstream institutional state touched by J.1A.1 scope."""
+    payload = {}
+    for table in E6_8J1A1_FINGERPRINT_TABLES:
+        rows = conn.execute(f"SELECT * FROM {table} ORDER BY id").fetchall()
+        payload[table] = [dict(row) for row in rows]
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _db_stage1e6_8j1a1_coverage_status(assessed_codes: list[str], universe: tuple[str, ...]) -> str:
+    assessed = {str(x) for x in assessed_codes if str(x)}
+    if not assessed:
+        return "NOT_ASSESSED"
+    if set(universe).issubset(assessed):
+        return "COMPLETE"
+    return "PARTIAL"
+
+
+def _db_stage1e6_8j1a1_signal_domain(signal_type: str | None) -> str | None:
+    return {
+        "LENDING_WALLET_GAP": "LENDING",
+        "LIQUIDITY_WALLET_GAP": "LIQUIDITY",
+    }.get(str(signal_type or "").upper())
+
+
+def _db_stage1e6_8j1a1_wallet_domain(product: str | None) -> str | None:
+    token = str(product or "").upper().strip()
+    if token == "LENDING":
+        return "LENDING"
+    if token in {"CASH", "CASH_LIQUIDITY", "LIQUIDITY", "DEPOSIT", "DEPOSITS"}:
+        return "LIQUIDITY"
+    return token or None
+
+
+def _db_stage1e6_8j1a1_business_aue_readiness_inventory(
+    *, conn: _DBConnection | None = None
+) -> dict:
+    """Read-only production E.5 source-coverage inventory for the business universe.
+
+    The function deliberately does not infer verified NONE from missing source rows.
+    It also does not manufacture Strategic, Risk, Decision Window, Execution Deadline,
+    Rate-of-Change or Opportunity/Risk Window coverage because no authoritative
+    production persistence adapter for those factor families exists in v1.
+    """
+    owns = conn is None
+    if owns:
+        conn = _db_connect()
+    try:
+        cycle = _db_stage1e6_8j1_active_cycle_readonly(conn)
+        if cycle is None:
+            return {
+                "Inventory Version": E6_8J1A1_READINESS_VERSION,
+                "Review Cycle": None,
+                "Business Relationship Count": 0,
+                "Ready for AUE Publication": 0,
+                "Ready for AUE Evaluation Only": 0,
+                "Not Ready": 0,
+                "Blocked": 0,
+                "Inventory Status": "NO_ACTIVE_REVIEW_CYCLE",
+                "Relationships": [],
+                "AUE Publication Coverage Complete": False,
+                "AUE Evaluation Coverage Available": False,
+            }
+
+        relationships = list(_db_stage1e6_8j1_relationships(conn))
+        if not relationships:
+            return {
+                "Inventory Version": E6_8J1A1_READINESS_VERSION,
+                "Review Cycle": cycle["review_cycle_id"],
+                "Business Relationship Count": 0,
+                "Ready for AUE Publication": 0,
+                "Ready for AUE Evaluation Only": 0,
+                "Not Ready": 0,
+                "Blocked": 0,
+                "Inventory Status": "NO_BUSINESS_RELATIONSHIPS",
+                "Relationships": [],
+                "AUE Publication Coverage Complete": False,
+                "AUE Evaluation Coverage Available": False,
+            }
+
+        rel_ids = [int(r["id"]) for r in relationships]
+        placeholders = ",".join("?" for _ in rel_ids)
+
+        signal_rows = conn.execute(
+            f"""SELECT s.id,s.signal_id,s.relationship_id,s.source_assessment_db_id,s.source_assessment_id,
+                       s.signal_type,s.signal_status,s.signal_strength,s.confidence,s.strategic_relevance,
+                       s.test_only,s.created_at,s.last_evaluated_at,
+                       wa.assessment_id AS wallet_assessment_id,wa.status AS wallet_status,
+                       wa.publication_result AS wallet_publication_result,wa.test_only AS wallet_test_only,
+                       wa.product AS wallet_product
+                  FROM opportunity_signal s
+                  LEFT JOIN wallet_assessment wa ON wa.id=s.source_assessment_db_id
+                 WHERE s.relationship_id IN ({placeholders})
+                 ORDER BY s.relationship_id ASC,s.id ASC""",
+            tuple(rel_ids),
+        ).fetchall()
+
+        source_rows = conn.execute(
+            f"""SELECT ce.id,ce.change_event_id,ce.relationship_id,ce.object_kind,ce.change_event_type,
+                       ce.status,ce.materiality,ce.confidence,ce.current_assessment_db_id,
+                       ce.current_assessment_id,ce.economic_episode_key,ce.event_group_id,
+                       ce.impact_domains_json,ce.metric_scope,ce.test_only,ce.created_at,ce.last_evaluated_at,
+                       wa.assessment_id AS wallet_assessment_id,wa.status AS wallet_status,
+                       wa.publication_result AS wallet_publication_result,wa.test_only AS wallet_test_only,
+                       wa.product AS wallet_product
+                  FROM change_event ce
+                  LEFT JOIN wallet_assessment wa ON wa.id=ce.current_assessment_db_id
+                 WHERE ce.relationship_id IN ({placeholders})
+                 ORDER BY ce.relationship_id ASC,ce.id ASC""",
+            tuple(rel_ids),
+        ).fetchall()
+
+        source_db_ids = [int(r["id"]) for r in source_rows]
+        temporal_rows = []
+        if source_db_ids:
+            temporal_placeholders = ",".join("?" for _ in source_db_ids)
+            temporal_rows = conn.execute(
+                f"""SELECT id,temporal_evaluation_id,change_event_db_id,change_event_id,
+                           evaluation_as_of,temporal_state,test_only,created_at
+                      FROM change_event_temporal_evaluation
+                     WHERE change_event_db_id IN ({temporal_placeholders})
+                     ORDER BY change_event_db_id ASC,id ASC""",
+                tuple(source_db_ids),
+            ).fetchall()
+        else:
+            # Keep the inventory query shape deterministic without inventing writes.
+            temporal_rows = conn.execute(
+                "SELECT id,temporal_evaluation_id,change_event_db_id,change_event_id,evaluation_as_of,temporal_state,test_only,created_at FROM change_event_temporal_evaluation WHERE 1=0"
+            ).fetchall()
+
+        aue_rows = conn.execute(
+            f"""SELECT id,evaluation_id,relationship_id,status,test_only
+                  FROM attention_urgency_evaluation
+                 WHERE review_cycle_id=? AND relationship_id IN ({placeholders})
+                 ORDER BY relationship_id ASC,id ASC""",
+            (int(cycle["id"]), *rel_ids),
+        ).fetchall()
+
+        signals_by_rel: dict[int, list] = {}
+        for row in signal_rows:
+            signals_by_rel.setdefault(int(row["relationship_id"]), []).append(row)
+        sources_by_rel: dict[int, list] = {}
+        for row in source_rows:
+            sources_by_rel.setdefault(int(row["relationship_id"]), []).append(row)
+        temporal_by_source: dict[int, list] = {}
+        for row in temporal_rows:
+            temporal_by_source.setdefault(int(row["change_event_db_id"]), []).append(row)
+        aues_by_rel: dict[int, list] = {}
+        for row in aue_rows:
+            aues_by_rel.setdefault(int(row["relationship_id"]), []).append(row)
+
+        inventory_rows: list[dict] = []
+        for rel in relationships:
+            rel_db_id = int(rel["id"])
+            integrity_reasons: list[str] = []
+            source_reasons: list[str] = []
+
+            rel_signals = signals_by_rel.get(rel_db_id, [])
+            current_test_signals = [
+                s for s in rel_signals
+                if bool(s["test_only"]) and str(s["signal_status"] or "") in E6_8J1A1_CURRENT_SIGNAL_STATUSES
+            ]
+            current_prod_signals = [
+                s for s in rel_signals
+                if not bool(s["test_only"]) and str(s["signal_status"] or "") in E6_8J1A1_CURRENT_SIGNAL_STATUSES
+            ]
+            if current_test_signals:
+                integrity_reasons.append("TEST_CURRENT_OPPORTUNITY_SIGNAL_ON_BUSINESS_RELATIONSHIP")
+
+            prod_by_type: dict[str, list] = {}
+            valid_signals = []
+            signal_domains: set[str] = set()
+            for sig in current_prod_signals:
+                sig_type = str(sig["signal_type"] or "")
+                prod_by_type.setdefault(sig_type, []).append(sig)
+                source_missing = sig["wallet_assessment_id"] is None
+                source_test = bool(sig["wallet_test_only"]) if sig["wallet_assessment_id"] is not None else False
+                source_authoritative = bool(
+                    sig["wallet_assessment_id"] is not None
+                    and str(sig["wallet_status"] or "") == "PUBLISHED"
+                    and str(sig["wallet_publication_result"] or "") == "PUBLISH"
+                    and not source_test
+                )
+                if source_missing:
+                    integrity_reasons.append("OPPORTUNITY_SOURCE_ASSESSMENT_MISSING")
+                elif source_test:
+                    integrity_reasons.append("OPPORTUNITY_SOURCE_ASSESSMENT_TEST_ONLY")
+                elif not source_authoritative:
+                    integrity_reasons.append("OPPORTUNITY_SOURCE_ASSESSMENT_NOT_PUBLISHED")
+                if sig_type not in E6_8J1A1_SUPPORTED_SIGNAL_TYPES:
+                    integrity_reasons.append("OPPORTUNITY_SIGNAL_TYPE_UNSUPPORTED")
+                if str(sig["signal_strength"] or "") not in E6_8J1A1_VALID_SIGNAL_STRENGTH:
+                    integrity_reasons.append("OPPORTUNITY_SIGNAL_STRENGTH_INVALID")
+                if str(sig["confidence"] or "") not in E6_8J1A1_VALID_CONFIDENCE:
+                    integrity_reasons.append("OPPORTUNITY_SIGNAL_CONFIDENCE_INVALID")
+                if source_authoritative and sig_type in E6_8J1A1_SUPPORTED_SIGNAL_TYPES \
+                        and str(sig["signal_strength"] or "") in E6_8J1A1_VALID_SIGNAL_STRENGTH \
+                        and str(sig["confidence"] or "") in E6_8J1A1_VALID_CONFIDENCE:
+                    valid_signals.append(sig)
+                    domain = _db_stage1e6_8j1a1_signal_domain(sig_type)
+                    if domain:
+                        signal_domains.add(domain)
+            if any(len(rows) > 1 for rows in prod_by_type.values()):
+                integrity_reasons.append("MULTIPLE_CURRENT_PRODUCTION_SIGNAL_PER_TYPE")
+
+            rel_sources = sources_by_rel.get(rel_db_id, [])
+            current_changes = [
+                s for s in rel_sources
+                if str(s["object_kind"] or "") == "CHANGE"
+                and str(s["status"] or "") in E6_8J1A1_CURRENT_CHANGE_STATUSES
+                and not bool(s["test_only"])
+            ]
+            current_events = [
+                s for s in rel_sources
+                if str(s["object_kind"] or "") == "EVENT"
+                and str(s["status"] or "") in E6_8J1A1_CURRENT_EVENT_STATUSES
+                and not bool(s["test_only"])
+            ]
+            current_test_sources = [
+                s for s in rel_sources
+                if bool(s["test_only"])
+                and (
+                    (str(s["object_kind"] or "") == "CHANGE" and str(s["status"] or "") in E6_8J1A1_CURRENT_CHANGE_STATUSES)
+                    or (str(s["object_kind"] or "") == "EVENT" and str(s["status"] or "") in E6_8J1A1_CURRENT_EVENT_STATUSES)
+                )
+            ]
+            if current_test_sources:
+                integrity_reasons.append("TEST_CURRENT_CHANGE_EVENT_ON_BUSINESS_RELATIONSHIP")
+
+            valid_changes = []
+            valid_events = []
+            change_domains: set[str] = set()
+            event_domains: set[str] = set()
+            temporal_ids: list[str] = []
+
+            def _latest_temporal(source_row):
+                rows = temporal_by_source.get(int(source_row["id"]), [])
+                if not rows:
+                    return None
+                return rows[-1]
+
+            for change in current_changes:
+                if str(change["confidence"] or "") not in E6_8J1A1_VALID_CONFIDENCE:
+                    integrity_reasons.append("CHANGE_CONFIDENCE_INVALID")
+                    continue
+                if str(change["materiality"] or "") not in E6_8J1A1_VALID_MATERIALITY:
+                    integrity_reasons.append("CHANGE_MATERIALITY_INVALID")
+                    continue
+                if change["wallet_assessment_id"] is None:
+                    integrity_reasons.append("CHANGE_CURRENT_ASSESSMENT_MISSING")
+                    continue
+                if bool(change["wallet_test_only"]):
+                    integrity_reasons.append("CHANGE_CURRENT_ASSESSMENT_TEST_ONLY")
+                    continue
+                temporal = _latest_temporal(change)
+                if temporal is None:
+                    source_reasons.append("CHANGE_TEMPORAL_STATE_NOT_READY")
+                    continue
+                if bool(temporal["test_only"]):
+                    integrity_reasons.append("TEST_TEMPORAL_EVALUATION_ON_PRODUCTION_SOURCE")
+                    continue
+                if str(temporal["change_event_id"] or "") != str(change["change_event_id"] or ""):
+                    integrity_reasons.append("TEMPORAL_SOURCE_ID_MISMATCH")
+                    continue
+                if str(temporal["temporal_state"] or "") not in E6_8J1A1_VALID_TEMPORAL_STATES:
+                    integrity_reasons.append("TEMPORAL_STATE_INVALID")
+                    continue
+                valid_changes.append(change)
+                temporal_ids.append(str(temporal["temporal_evaluation_id"]))
+                domain = _db_stage1e6_8j1a1_wallet_domain(change["wallet_product"])
+                if domain:
+                    change_domains.add(domain)
+
+            for event in current_events:
+                if str(event["confidence"] or "") not in E6_8J1A1_VALID_CONFIDENCE:
+                    integrity_reasons.append("EVENT_CONFIDENCE_INVALID")
+                    continue
+                if str(event["materiality"] or "") not in E6_8J1A1_VALID_MATERIALITY:
+                    integrity_reasons.append("EVENT_MATERIALITY_INVALID")
+                    continue
+                temporal = _latest_temporal(event)
+                if temporal is None:
+                    source_reasons.append("EVENT_TEMPORAL_STATE_NOT_READY")
+                    continue
+                if bool(temporal["test_only"]):
+                    integrity_reasons.append("TEST_TEMPORAL_EVALUATION_ON_PRODUCTION_SOURCE")
+                    continue
+                if str(temporal["change_event_id"] or "") != str(event["change_event_id"] or ""):
+                    integrity_reasons.append("TEMPORAL_SOURCE_ID_MISMATCH")
+                    continue
+                if str(temporal["temporal_state"] or "") not in E6_8J1A1_VALID_TEMPORAL_STATES:
+                    integrity_reasons.append("TEMPORAL_STATE_INVALID")
+                    continue
+                valid_events.append(event)
+                temporal_ids.append(str(temporal["temporal_evaluation_id"]))
+                for domain in _db_stage1e6_8j1_json_list(event["impact_domains_json"]):
+                    if str(domain).strip():
+                        event_domains.add(str(domain).strip())
+
+            attention_assessed_codes: list[str] = []
+            urgency_assessed_codes: list[str] = []
+            if valid_signals:
+                attention_assessed_codes.append("ECONOMIC_OPPORTUNITY")
+            if valid_changes:
+                attention_assessed_codes.append("MATERIAL_CHANGE")
+            if valid_events:
+                attention_assessed_codes.append("MATERIAL_EVENT")
+                urgency_assessed_codes.append("EVENT_PROXIMITY")
+
+            # Explicitly NOT_ASSESSED in v0.1 because no authoritative production
+            # persistence adapter/coverage attestation exists for these families.
+            missing_attention = [
+                code for code in E6_8J1A1_ATTENTION_CODES
+                if code not in set(attention_assessed_codes)
+            ]
+            missing_urgency = [
+                code for code in E6_8J1A1_URGENCY_CODES
+                if code not in set(urgency_assessed_codes)
+            ]
+            attention_coverage = _db_stage1e6_8j1a1_coverage_status(
+                attention_assessed_codes, E6_8J1A1_ATTENTION_CODES
+            )
+            urgency_coverage = _db_stage1e6_8j1a1_coverage_status(
+                urgency_assessed_codes, E6_8J1A1_URGENCY_CODES
+            )
+
+            production_source_count = len(current_prod_signals) + len(current_changes) + len(current_events)
+            evaluation_ready = bool(
+                not integrity_reasons
+                and attention_coverage != "NOT_ASSESSED"
+                and urgency_coverage != "NOT_ASSESSED"
+            )
+            publication_ready = bool(
+                evaluation_ready
+                and attention_coverage == "COMPLETE"
+                and urgency_coverage == "COMPLETE"
+            )
+
+            if publication_ready:
+                readiness = E6_8J1A1_READY_PUBLICATION
+                reason_codes = [E6_8J1A1_READY_PUBLICATION]
+            elif integrity_reasons:
+                readiness = E6_8J1A1_BLOCKED
+                reason_codes = list(dict.fromkeys(integrity_reasons + source_reasons))
+            elif evaluation_ready:
+                readiness = E6_8J1A1_READY_EVALUATION_ONLY
+                reason_codes = ["AUE_PUBLICATION_COVERAGE_INCOMPLETE"]
+                reason_codes.extend(source_reasons)
+            else:
+                readiness = E6_8J1A1_NOT_READY
+                if production_source_count == 0:
+                    reason_codes = ["NO_GOVERNED_E5_SOURCE_STATE"]
+                elif source_reasons:
+                    reason_codes = list(source_reasons)
+                elif attention_coverage == "NOT_ASSESSED":
+                    reason_codes = ["ATTENTION_AXIS_NOT_READY"]
+                elif urgency_coverage == "NOT_ASSESSED":
+                    reason_codes = ["URGENCY_AXIS_NOT_READY"]
+                else:
+                    reason_codes = ["AUE_COVERAGE_NOT_READY"]
+
+            coverage_reasons = []
+            for code in missing_attention:
+                coverage_reasons.append(f"ATTENTION_NOT_ASSESSED:{code}")
+            for code in missing_urgency:
+                coverage_reasons.append(f"URGENCY_NOT_ASSESSED:{code}")
+            reason_codes = list(dict.fromkeys(reason_codes + coverage_reasons))
+
+            existing_prod_aues = [
+                a for a in aues_by_rel.get(rel_db_id, [])
+                if not bool(a["test_only"]) and str(a["status"] or "") == "PUBLISHED"
+            ]
+
+            inventory_rows.append({
+                "Relationship ID": rel["relationship_id"],
+                "Relationship": rel["name"],
+                "Country": rel["country"] or "",
+                "Sector": rel["sector"] or "",
+                "Review Cycle": cycle["review_cycle_id"],
+                "Readiness Status": readiness,
+                "Primary Reason": reason_codes[0],
+                "Reason Codes": reason_codes,
+                "Production Source Count": production_source_count,
+                "Current Production Opportunity Signals": len(current_prod_signals),
+                "Usable Opportunity Signals": len(valid_signals),
+                "Current Production Changes": len(current_changes),
+                "Changes With Governed Temporal State": len(valid_changes),
+                "Current Production Corporate Events": len(current_events),
+                "Events With Governed Temporal State": len(valid_events),
+                "Current Test Source Count": len(current_test_signals) + len(current_test_sources),
+                "Attention Coverage": attention_coverage,
+                "Urgency Coverage": urgency_coverage,
+                "Attention Assessed Factor Codes": sorted(attention_assessed_codes),
+                "Urgency Assessed Factor Codes": sorted(urgency_assessed_codes),
+                "Attention Missing Factor Codes": missing_attention,
+                "Urgency Missing Factor Codes": missing_urgency,
+                "Strategic Context": "NOT_ASSESSED",
+                "Risk / Relationship Concern": "NOT_ASSESSED",
+                "Decision Window": "NOT_ASSESSED",
+                "Execution Deadline": "NOT_ASSESSED",
+                "Rate of Change": "NOT_ASSESSED",
+                "Opportunity / Risk Window": "NOT_ASSESSED",
+                "AUE Evaluation Ready": evaluation_ready,
+                "AUE Publication Ready": publication_ready,
+                "Existing Current Production AUE Count": len(existing_prod_aues),
+                "Opportunity Domains": sorted(signal_domains),
+                "Change Domains": sorted(change_domains),
+                "Event Domains": sorted(event_domains),
+                "Temporal Evaluation IDs": sorted(set(temporal_ids)),
+            })
+
+        pub_count = sum(1 for x in inventory_rows if x["Readiness Status"] == E6_8J1A1_READY_PUBLICATION)
+        eval_only_count = sum(1 for x in inventory_rows if x["Readiness Status"] == E6_8J1A1_READY_EVALUATION_ONLY)
+        blocked_count = sum(1 for x in inventory_rows if x["Readiness Status"] == E6_8J1A1_BLOCKED)
+        not_ready_count = len(inventory_rows) - pub_count - eval_only_count - blocked_count
+
+        return {
+            "Inventory Version": E6_8J1A1_READINESS_VERSION,
+            "Review Cycle": cycle["review_cycle_id"],
+            "Business Relationship Count": len(inventory_rows),
+            "Ready for AUE Publication": pub_count,
+            "Ready for AUE Evaluation Only": eval_only_count,
+            "Not Ready": not_ready_count,
+            "Blocked": blocked_count,
+            "Relationships With Opportunity Signals": sum(1 for x in inventory_rows if x["Current Production Opportunity Signals"] > 0),
+            "Relationships With Change State": sum(1 for x in inventory_rows if x["Current Production Changes"] > 0),
+            "Relationships With Corporate Events": sum(1 for x in inventory_rows if x["Current Production Corporate Events"] > 0),
+            "Attention Coverage Complete": sum(1 for x in inventory_rows if x["Attention Coverage"] == "COMPLETE"),
+            "Urgency Coverage Complete": sum(1 for x in inventory_rows if x["Urgency Coverage"] == "COMPLETE"),
+            "Existing Current Production AUE Count": sum(x["Existing Current Production AUE Count"] for x in inventory_rows),
+            "AUE Publication Coverage Complete": bool(inventory_rows) and pub_count == len(inventory_rows),
+            "AUE Evaluation Coverage Available": (pub_count + eval_only_count) > 0,
+            "Inventory Status": "COMPLETE",
+            "Relationships": inventory_rows,
+            "Cutover Performed": False,
+            "AUE Population Performed": False,
+        }
+    finally:
+        if owns:
+            conn.close()
+
+
+def _db_stage1e6_8j1a1_display_rows(inventory: dict) -> list[dict]:
+    rows = []
+    for item in inventory.get("Relationships", []):
+        rows.append({
+            "Relationship": item.get("Relationship"),
+            "Readiness": item.get("Readiness Status"),
+            "Opp Signals": item.get("Current Production Opportunity Signals", 0),
+            "Changes": item.get("Current Production Changes", 0),
+            "Events": item.get("Current Production Corporate Events", 0),
+            "Attention Coverage": item.get("Attention Coverage", "NOT_ASSESSED"),
+            "Urgency Coverage": item.get("Urgency Coverage", "NOT_ASSESSED"),
+            "AUE Eval Ready": bool(item.get("AUE Evaluation Ready")),
+            "AUE Publish Ready": bool(item.get("AUE Publication Ready")),
+            "Primary Reason": item.get("Primary Reason") or "—",
+        })
+    return rows
+
+
+def _db_stage1e6_8j1a1_run_live_scan_validation() -> dict:
+    """Live zero-write J.1A.1 wrapper; PASS means the scan is trustworthy, not that coverage is complete."""
+    conn = _db_connect()
+    try:
+        before_fp = _db_stage1e6_8j1a1_readonly_fingerprint(conn)
+        authority_before = _db_stage1e6_review_authority_mode(conn)
+        started = time.perf_counter()
+        inventory = _db_stage1e6_8j1a1_business_aue_readiness_inventory(conn=conn)
+        elapsed_ms = round((time.perf_counter() - started) * 1000.0, 1)
+        authority_after = _db_stage1e6_review_authority_mode(conn)
+        after_fp = _db_stage1e6_8j1a1_readonly_fingerprint(conn)
+
+        rows = inventory.get("Relationships", [])
+        ids = [str(x.get("Relationship ID") or "") for x in rows]
+        duplicates = sorted({rid for rid in ids if rid and ids.count(rid) > 1})
+        excluded_leak = sorted(set(ids) & set(E6_8J1_EXCLUDED_RELATIONSHIP_IDS))
+        valid_states = {
+            E6_8J1A1_READY_PUBLICATION,
+            E6_8J1A1_READY_EVALUATION_ONLY,
+            E6_8J1A1_NOT_READY,
+            E6_8J1A1_BLOCKED,
+        }
+        classifications_complete = bool(rows) and all(
+            x.get("Readiness Status") in valid_states
+            and bool(x.get("Primary Reason"))
+            and x.get("Attention Coverage") in {"COMPLETE", "PARTIAL", "NOT_ASSESSED"}
+            and x.get("Urgency Coverage") in {"COMPLETE", "PARTIAL", "NOT_ASSESSED"}
+            for x in rows
+        )
+        counts_reconcile = bool(
+            inventory.get("Business Relationship Count") == len(rows)
+            and inventory.get("Ready for AUE Publication", 0)
+                + inventory.get("Ready for AUE Evaluation Only", 0)
+                + inventory.get("Not Ready", 0)
+                + inventory.get("Blocked", 0)
+                == len(rows)
+        )
+        read_only = before_fp == after_fp
+        authority_ok = authority_before == "LEGACY" and authority_after == "LEGACY"
+        contract_ok = bool(
+            inventory.get("Inventory Status") == "COMPLETE"
+            and classifications_complete
+            and counts_reconcile
+            and not duplicates
+            and not excluded_leak
+            and not inventory.get("Cutover Performed")
+            and not inventory.get("AUE Population Performed")
+        )
+        overall = bool(read_only and authority_ok and contract_ok)
+
+        return {
+            "E.6.8J.1A.1 AUE Coverage Readiness PASS": overall,
+            "Inventory Version": E6_8J1A1_READINESS_VERSION,
+            "Review Authority Before": authority_before,
+            "Review Authority After": authority_after,
+            "Read-only Fingerprint Stable": read_only,
+            "Validation Fixtures Excluded": not excluded_leak,
+            "Duplicate Relationship IDs": duplicates,
+            "Classifications Complete": classifications_complete,
+            "Counts Reconcile": counts_reconcile,
+            "Cutover Performed": False,
+            "AUE Population Performed": False,
+            "E.5 Engine Executed": False,
+            "DRE / RPE / ReviewItem Writes Performed": False,
+            "Read Elapsed ms": elapsed_ms,
+            "Summary": {
+                k: inventory.get(k) for k in (
+                    "Review Cycle",
+                    "Business Relationship Count",
+                    "Ready for AUE Publication",
+                    "Ready for AUE Evaluation Only",
+                    "Not Ready",
+                    "Blocked",
+                    "Relationships With Opportunity Signals",
+                    "Relationships With Change State",
+                    "Relationships With Corporate Events",
+                    "Attention Coverage Complete",
+                    "Urgency Coverage Complete",
+                    "Existing Current Production AUE Count",
+                    "AUE Publication Coverage Complete",
+                    "AUE Evaluation Coverage Available",
+                    "Inventory Status",
+                )
+            },
+            "Relationships": rows,
+            "Display Rows": _db_stage1e6_8j1a1_display_rows(inventory),
+        }
+    finally:
+        conn.close()
+
+
+# END STAGE 1-E.6.8J.1A.1 — PRODUCTION AUE COVERAGE READINESS INVENTORY
+
+
+
 
 # =============================================================================
 # STAGE 1-E.4.9 — FINAL LIVE VALIDATION
@@ -20240,7 +20858,7 @@ def render_stage_1c_sidebar():
         <div class="ec-brand">
             <div class="ec-brand-mark">EC-AI</div>
             <div class="ec-brand-product">Executive Review Workspace</div>
-            <div class="ec-brand-stage">Stage 1-E.6.8J.1 · Business Review Readiness Inventory v0.1 · Production DB</div>
+            <div class="ec-brand-stage">Stage 1-E.6.8J.1A.1 · Production AUE Coverage Readiness Inventory v0.1 · Production DB</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -20959,6 +21577,43 @@ def render_stage_1c_sidebar():
                     st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
                 else:
                     st.info("No authoritative business relationships were available for readiness classification.")
+
+
+
+        if diagnostics_enabled:
+            st.markdown("**Stage 1-E.6.8J.1A.1 · Production AUE Coverage Readiness Inventory**")
+            st.caption(
+                "Strict read-only production E.5 coverage scan · inventories persisted OpportunitySignal, "
+                "Change/Event + temporal source state across the authoritative business universe. Missing "
+                "Strategic/Risk/clock coverage remains NOT_ASSESSED; no E.5 engine execution or AUE population occurs."
+            )
+            if st.button(
+                "Run E.6.8J.1A.1 Production AUE Coverage Readiness Scan",
+                key="stage1e6_8j1a1_aue_readiness_scan",
+                use_container_width=True,
+            ):
+                try:
+                    st.session_state["stage1e6_8j1a1_aue_readiness_result"] = _db_stage1e6_8j1a1_run_live_scan_validation()
+                except Exception as exc:
+                    st.error(f"E.6.8J.1A.1 AUE coverage readiness scan failed: {exc}")
+
+            e68j1a1 = st.session_state.get("stage1e6_8j1a1_aue_readiness_result")
+            if e68j1a1:
+                if e68j1a1.get("E.6.8J.1A.1 AUE Coverage Readiness PASS"):
+                    st.success(
+                        "E.6.8J.1A.1 PASS · production E.5 source coverage was classified with zero writes; "
+                        "missing coverage remains explicit and no AUE population or Review cutover occurred."
+                    )
+                else:
+                    st.error("E.6.8J.1A.1 CHECK · inspect source integrity before any production AUE population.")
+                st.write({k: v for k, v in e68j1a1.items() if k not in {"Relationships", "Display Rows"}})
+                display_rows = e68j1a1.get("Display Rows", [])
+                if display_rows:
+                    st.markdown("**Production AUE Coverage Readiness · Current ReviewCycle**")
+                    st.dataframe(pd.DataFrame(display_rows), use_container_width=True, hide_index=True)
+                else:
+                    st.info("No authoritative business relationships were available for production AUE coverage classification.")
+
 
         if diagnostics_enabled:
             st.markdown("**Stage 1-E.5.10 · Final Live Attention × Urgency Validation**")
