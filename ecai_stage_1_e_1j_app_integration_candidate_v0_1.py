@@ -1,5 +1,5 @@
 
-# EC-AI Executive Review Workspace — Stage 1-E.6.8J.1A.2 Production Intelligence Source Onboarding Readiness Inventory v0.1
+# EC-AI Executive Review Workspace — Stage 1-E.6.8J.1A.4 Production Wallet Governance Hardening v0.1
 # Product/UI reference: Stage 1-C.10 remains locked; Stage 1-D persistence remains authoritative.
 # Product/UI reference: Stage 1-C.10 Release Candidate (UI and workflow unchanged)
 # Hotfix v3: Executive Briefing queue uses unique External Rating / Attention Rating columns.
@@ -1468,9 +1468,9 @@ ECAI_DB_PATH = os.environ.get(
     "ECAI_DB_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "ecai_stage_1_d_2_fallback.db"),
 )
-ECAI_SCHEMA_VERSION = 13
-ECAI_PERSISTENCE_RUNTIME_VERSION = 22  # E.6.8J.1A.2 v0.1: read-only production intelligence source onboarding inventory
-ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8J.1A.2 Production Intelligence Source Onboarding Readiness Inventory v0.1"
+ECAI_SCHEMA_VERSION = 15
+ECAI_PERSISTENCE_RUNTIME_VERSION = 24  # E.6.8J.1A.4-A v0.2: production wallet governance red-team hotfix
+ECAI_PERSISTENCE_RELEASE = "Stage 1-E.6.8J.1A.4-A Production Wallet Governance Red-Team Hotfix v0.2"
 
 
 def _db_now() -> str:
@@ -1801,6 +1801,7 @@ CREATE TABLE IF NOT EXISTS intelligence_evidence (
     confidence TEXT NOT NULL CHECK (confidence IN ('HIGH','MEDIUM','LOW')),
     owner TEXT,
     review_date TEXT,
+    test_only INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     CHECK (value_numeric IS NOT NULL OR value_text IS NOT NULL)
 );
@@ -1820,9 +1821,11 @@ CREATE TABLE IF NOT EXISTS intelligence_calculation (
     formula_version TEXT NOT NULL,
     formula_expression TEXT NOT NULL,
     input_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    input_metric_codes_json TEXT NOT NULL DEFAULT '[]',
     output_value_numeric REAL NOT NULL,
     unit TEXT,
     currency TEXT,
+    test_only INTEGER NOT NULL DEFAULT 0,
     calculated_at TEXT NOT NULL
 );
 
@@ -1887,15 +1890,19 @@ CREATE TABLE IF NOT EXISTS wallet_assessment (
     published_at TEXT,
     superseded_at TEXT,
     published_by TEXT,
-    publication_mode TEXT
+    publication_mode TEXT,
+    source_state_fingerprint TEXT,
+    source_state_json TEXT NOT NULL DEFAULT '{}',
+    superseded_by_assessment_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ix_wallet_assessment_relationship
 ON wallet_assessment(relationship_id, product, id DESC);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_wallet_one_current_published
-ON wallet_assessment(relationship_id, product, geographic_scope, time_horizon)
+ON wallet_assessment(relationship_id, methodology_id, geographic_scope, time_horizon)
 WHERE status = 'PUBLISHED';
+
 
 CREATE TABLE IF NOT EXISTS ecai_system_metadata (
     metadata_key TEXT PRIMARY KEY,
@@ -2116,6 +2123,7 @@ CREATE TABLE IF NOT EXISTS intelligence_evidence (
     confidence TEXT NOT NULL CHECK (confidence IN ('HIGH','MEDIUM','LOW')),
     owner TEXT,
     review_date TEXT,
+    test_only SMALLINT NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     CHECK (value_numeric IS NOT NULL OR value_text IS NOT NULL)
 );
@@ -2135,9 +2143,11 @@ CREATE TABLE IF NOT EXISTS intelligence_calculation (
     formula_version TEXT NOT NULL,
     formula_expression TEXT NOT NULL,
     input_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    input_metric_codes_json TEXT NOT NULL DEFAULT '[]',
     output_value_numeric DOUBLE PRECISION NOT NULL,
     unit TEXT,
     currency TEXT,
+    test_only SMALLINT NOT NULL DEFAULT 0,
     calculated_at TEXT NOT NULL
 );
 
@@ -2202,15 +2212,19 @@ CREATE TABLE IF NOT EXISTS wallet_assessment (
     published_at TEXT,
     superseded_at TEXT,
     published_by TEXT,
-    publication_mode TEXT
+    publication_mode TEXT,
+    source_state_fingerprint TEXT,
+    source_state_json TEXT NOT NULL DEFAULT '{}',
+    superseded_by_assessment_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ix_wallet_assessment_relationship
 ON wallet_assessment(relationship_id, product, id DESC);
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_wallet_one_current_published
-ON wallet_assessment(relationship_id, product, geographic_scope, time_horizon)
+ON wallet_assessment(relationship_id, methodology_id, geographic_scope, time_horizon)
 WHERE status = 'PUBLISHED';
+
 
 CREATE TABLE IF NOT EXISTS ecai_system_metadata (
     metadata_key TEXT PRIMARY KEY,
@@ -2270,6 +2284,10 @@ def _db_stage1e2_migrate_wallet_assessment_columns(conn: _DBConnection):
         ("relevant_cash_pool", "REAL" if conn.backend == "sqlite" else "DOUBLE PRECISION"),
         ("forecast_bankable_liquidity_share", "REAL" if conn.backend == "sqlite" else "DOUBLE PRECISION"),
         ("liquidity_time_basis", "TEXT"),
+        # Stage 1-E.6.8J.1A.4 production-wallet governance fields.
+        ("source_state_fingerprint", "TEXT"),
+        ("source_state_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("superseded_by_assessment_id", "TEXT"),
     ]
 
     evidence_columns = [
@@ -2277,6 +2295,12 @@ def _db_stage1e2_migrate_wallet_assessment_columns(conn: _DBConnection):
         ("geographic_scope", "TEXT"),
         ("time_basis", "TEXT"),
         ("rationale", "TEXT"),
+        ("test_only", "INTEGER NOT NULL DEFAULT 0" if conn.backend == "sqlite" else "SMALLINT NOT NULL DEFAULT 0"),
+    ]
+
+    calculation_columns = [
+        ("test_only", "INTEGER NOT NULL DEFAULT 0" if conn.backend == "sqlite" else "SMALLINT NOT NULL DEFAULT 0"),
+        ("input_metric_codes_json", "TEXT NOT NULL DEFAULT '[]'"),
     ]
 
     if conn.backend == "sqlite":
@@ -2288,11 +2312,40 @@ def _db_stage1e2_migrate_wallet_assessment_columns(conn: _DBConnection):
         for name, ddl in evidence_columns:
             if name not in evidence_existing:
                 conn.execute(f"ALTER TABLE intelligence_evidence ADD COLUMN {name} {ddl}")
+        calculation_existing = {row[1] for row in conn.execute("PRAGMA table_info(intelligence_calculation)").fetchall()}
+        for name, ddl in calculation_columns:
+            if name not in calculation_existing:
+                conn.execute(f"ALTER TABLE intelligence_calculation ADD COLUMN {name} {ddl}")
+        # v14 authority: current publication is methodology-scoped, not product-scoped.
+        conn.execute("DROP INDEX IF EXISTS ux_wallet_one_current_published")
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS ux_wallet_one_current_published
+               ON wallet_assessment(relationship_id, methodology_id, geographic_scope, time_horizon)
+               WHERE status='PUBLISHED'"""
+        )
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS ux_wallet_source_state_fingerprint
+               ON wallet_assessment(relationship_id, methodology_id, source_state_fingerprint)
+               WHERE source_state_fingerprint IS NOT NULL"""
+        )
     else:
         for name, ddl in columns:
             conn.execute(f"ALTER TABLE wallet_assessment ADD COLUMN IF NOT EXISTS {name} {ddl}")
         for name, ddl in evidence_columns:
             conn.execute(f"ALTER TABLE intelligence_evidence ADD COLUMN IF NOT EXISTS {name} {ddl}")
+        for name, ddl in calculation_columns:
+            conn.execute(f"ALTER TABLE intelligence_calculation ADD COLUMN IF NOT EXISTS {name} {ddl}")
+        conn.execute("DROP INDEX IF EXISTS ux_wallet_one_current_published")
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS ux_wallet_one_current_published
+               ON wallet_assessment(relationship_id, methodology_id, geographic_scope, time_horizon)
+               WHERE status='PUBLISHED'"""
+        )
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS ux_wallet_source_state_fingerprint
+               ON wallet_assessment(relationship_id, methodology_id, source_state_fingerprint)
+               WHERE source_state_fingerprint IS NOT NULL"""
+        )
 
 
 def _db_init_schema_uncached():
@@ -2557,6 +2610,8 @@ class EvidenceItem:
     geographic_scope: str | None = None
     time_basis: str | None = None
     rationale: str | None = None
+    # Stage 1-E.6.8J.1A.4: source classification propagates upward.
+    test_only: bool = False
 
     def __post_init__(self):
         if self.value_numeric is None and self.value_text is None:
@@ -2573,6 +2628,8 @@ class CalculationRecord:
     output_value_numeric: float
     unit: str | None = None
     currency: str | None = None
+    # Stage 1-E.6.8J.1A.4: calculations inherit upstream source classification.
+    test_only: bool = False
 
 
 @dataclass
@@ -2907,6 +2964,7 @@ def _db_stage1e_persist_evidence(
     review_cycle_db_id: int,
     methodology_db_id: int,
     item: EvidenceItem,
+    test_only: bool | None = None,
 ) -> str:
     evidence_id = _db_next_id(
         conn, "intelligence_evidence", "evidence_id", "EVD"
@@ -2917,8 +2975,8 @@ def _db_stage1e_persist_evidence(
                metric_code,metric_name,value_numeric,value_text,unit,currency,
                evidence_type,source_type,source_name,source_reference,
                effective_date,as_of_date,confidence,owner,review_date,
-               economic_perimeter,geographic_scope,time_basis,rationale,created_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               economic_perimeter,geographic_scope,time_basis,rationale,test_only,created_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             evidence_id, relationship_db_id, review_cycle_db_id, methodology_db_id,
             item.metric_code, item.metric_name, item.value_numeric, item.value_text,
@@ -2926,7 +2984,7 @@ def _db_stage1e_persist_evidence(
             item.source_name, item.source_reference, item.effective_date,
             item.as_of_date, item.confidence.value, item.owner, item.review_date,
             item.economic_perimeter, item.geographic_scope, item.time_basis,
-            item.rationale, _db_now(),
+            item.rationale, 1 if (item.test_only if test_only is None else test_only) else 0, _db_now(),
         ),
     )
     return evidence_id
@@ -2940,6 +2998,7 @@ def _db_stage1e_persist_calculation(
     methodology_db_id: int,
     record: CalculationRecord,
     input_evidence_ids: list[str],
+    test_only: bool | None = None,
 ) -> str:
     calculation_id = _db_next_id(
         conn, "intelligence_calculation", "calculation_id", "CAL"
@@ -2948,13 +3007,14 @@ def _db_stage1e_persist_calculation(
         """INSERT INTO intelligence_calculation(
                calculation_id,relationship_id,review_cycle_id,methodology_id,
                metric_code,metric_name,formula_code,formula_version,formula_expression,
-               input_evidence_ids_json,output_value_numeric,unit,currency,calculated_at
-           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               input_evidence_ids_json,input_metric_codes_json,output_value_numeric,unit,currency,test_only,calculated_at
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             calculation_id, relationship_db_id, review_cycle_db_id, methodology_db_id,
             record.metric_code, None, record.formula_code, record.formula_version,
-            record.formula_expression, _stage1e_json(input_evidence_ids),
-            record.output_value_numeric, record.unit, record.currency, _db_now(),
+            record.formula_expression, _stage1e_json(input_evidence_ids), _stage1e_json(list(record.input_metric_codes)),
+            record.output_value_numeric, record.unit, record.currency,
+            1 if (record.test_only if test_only is None else test_only) else 0, _db_now(),
         ),
     )
     return calculation_id
@@ -2997,6 +3057,7 @@ def _db_stage1e_create_lending_assessment(
                 review_cycle_db_id=cycle["id"],
                 methodology_db_id=methodology["id"],
                 item=item,
+                test_only=False,
             )
             evidence_ids.append(evidence_id)
             evidence_by_metric[item.metric_code] = evidence_id
@@ -3015,6 +3076,7 @@ def _db_stage1e_create_lending_assessment(
                 methodology_db_id=methodology["id"],
                 record=calc,
                 input_evidence_ids=input_ids,
+                test_only=False,
             )
             calculation_ids.append(calc_id)
 
@@ -3106,19 +3168,138 @@ def _db_stage1e_create_lending_assessment(
     }
 
 
+def _db_stage1e_wallet_publication_preflight(conn: _DBConnection, row) -> dict:
+    """Re-check frozen source state against persisted lineage immediately before publication."""
+    methodology = conn.execute(
+        "SELECT * FROM intelligence_methodology WHERE id=?",
+        (row["methodology_id"],),
+    ).fetchone()
+    if methodology is None or str(methodology["status"]).upper() != "ACTIVE":
+        raise ValueError("Wallet publication refused — methodology is not ACTIVE.")
+
+    try:
+        quality_gate = json.loads(row["quality_gate_json"] or "{}")
+    except Exception as exc:
+        raise ValueError("Wallet publication refused — quality gate is malformed.") from exc
+    if quality_gate.get("blocking_issues"):
+        raise ValueError("Wallet publication refused — blocking quality issues remain.")
+
+    evidence_ids = tuple(_stage1e2_parse_json_list(row["evidence_ids_json"]))
+    calculation_ids = tuple(_stage1e2_parse_json_list(row["calculation_ids_json"]))
+    if not evidence_ids or not calculation_ids:
+        raise ValueError("Wallet publication refused — evidence/calculation lineage is incomplete.")
+
+    def _lineage_rows(table: str, id_column: str, ids: tuple[str, ...]):
+        placeholders = ",".join("?" for _ in ids)
+        return conn.execute(
+            f"SELECT * FROM {table} WHERE {id_column} IN ({placeholders})",
+            ids,
+        ).fetchall()
+
+    evidence_rows = _lineage_rows("intelligence_evidence", "evidence_id", evidence_ids)
+    calculation_rows = _lineage_rows("intelligence_calculation", "calculation_id", calculation_ids)
+    if len(evidence_rows) != len(set(evidence_ids)):
+        raise ValueError("Wallet publication refused — evidence lineage is missing or duplicated.")
+    if len(calculation_rows) != len(set(calculation_ids)):
+        raise ValueError("Wallet publication refused — calculation lineage is missing or duplicated.")
+
+    for source in list(evidence_rows) + list(calculation_rows):
+        if int(source["relationship_id"]) != int(row["relationship_id"]):
+            raise ValueError("Wallet publication refused — relationship lineage mismatch.")
+        if int(source["review_cycle_id"]) != int(row["review_cycle_id"]):
+            raise ValueError("Wallet publication refused — ReviewCycle lineage mismatch.")
+        if int(source["methodology_id"]) != int(row["methodology_id"]):
+            raise ValueError("Wallet publication refused — methodology lineage mismatch.")
+        if bool(source["test_only"]):
+            raise ValueError("Wallet publication refused — TEST-only upstream lineage detected.")
+
+    fingerprint = str(row["source_state_fingerprint"] or "").strip()
+    if fingerprint:
+        method_key = (str(methodology["methodology_code"]), str(methodology["version"]))
+        if method_key not in E6_8J1A4_SUPPORTED_PRODUCTION_WALLETS:
+            raise ValueError("Wallet publication refused — hardened methodology is not production-supported.")
+        if quality_gate.get("production_publication_allowed") is not True:
+            raise ValueError("Wallet publication refused — production publication gate must be true.")
+        if quality_gate.get("governance_hardening_version") != E6_8J1A4_HARDENING_VERSION:
+            raise ValueError("Wallet publication refused — hardened governance version missing.")
+        for key in (
+            "production_evidence_preflight",
+            "evidence_value_consistency",
+            "source_freshness_preflight",
+            "test_isolation_preflight",
+        ):
+            if quality_gate.get(key) != "PASS":
+                raise ValueError(f"Wallet publication refused — {key} did not PASS.")
+        try:
+            source_state = json.loads(row["source_state_json"] or "{}")
+        except Exception as exc:
+            raise ValueError("Wallet publication refused — source-state snapshot is malformed.") from exc
+        if not source_state:
+            raise ValueError("Wallet publication refused — source-state snapshot is missing.")
+        recomputed = hashlib.sha256(
+            _stage1e_wallet_canonical_json(source_state).encode("utf-8")
+        ).hexdigest()
+        if recomputed != fingerprint:
+            raise ValueError("Wallet publication refused — source-state fingerprint mismatch.")
+
+        _stage1e_wallet_assert_row_matches_source_state(row, methodology, source_state)
+        persisted_evidence = _stage1e_wallet_persisted_evidence_state(evidence_rows)
+        if persisted_evidence != source_state.get("evidence"):
+            raise ValueError("Wallet publication refused — persisted evidence does not match frozen source state.")
+        persisted_calculations = _stage1e_wallet_persisted_calculation_state(calculation_rows)
+        if persisted_calculations != source_state.get("calculations"):
+            raise ValueError("Wallet publication refused — persisted calculation does not match frozen source state.")
+
+        evidence_metrics = {str(r["metric_code"]) for r in evidence_rows}
+        calculation_metrics = {str(r["metric_code"]) for r in calculation_rows}
+        known_metrics = evidence_metrics | calculation_metrics
+        for calc in persisted_calculations:
+            dangling = [m for m in calc.get("input_metric_codes", []) if m not in known_metrics]
+            if dangling:
+                raise ValueError(
+                    "Wallet publication refused — calculation dependency lineage is incomplete: "
+                    + ", ".join(dangling)
+                )
+    elif quality_gate.get("production_publication_allowed") is False:
+        # Backward-compatible historical path: an explicit false gate still blocks.
+        raise ValueError("Wallet publication refused — production publication gate is false.")
+
+    return {
+        "methodology_code": methodology["methodology_code"],
+        "methodology_version": methodology["version"],
+        "evidence_count": len(evidence_rows),
+        "calculation_count": len(calculation_rows),
+        "source_state_fingerprint": fingerprint or None,
+    }
+
+
 def _db_stage1e_publish_assessment(
     assessment_id: str,
     *,
     actor: str,
 ) -> dict:
-    """Manual publication gate; supersession occurs atomically."""
+    """Manual publication gate with deterministic lock order and stale-context protection."""
     with _db_transaction() as conn:
-        target_sql = "SELECT * FROM wallet_assessment WHERE assessment_id=?"
-        if conn.backend == "postgresql":
-            target_sql += " FOR UPDATE"
-        row = conn.execute(target_sql, (assessment_id,)).fetchone()
+        # Read authority scope first WITHOUT a row lock. Acquiring the advisory
+        # authority lock before FOR UPDATE prevents cross-target publication deadlocks.
+        row = conn.execute(
+            "SELECT * FROM wallet_assessment WHERE assessment_id=?",
+            (assessment_id,),
+        ).fetchone()
         if row is None:
             raise ValueError(f"Wallet assessment {assessment_id} not found.")
+
+        authority_key = (
+            f"wallet-publication:{row['relationship_id']}:{row['methodology_id']}:"
+            f"{row['geographic_scope']}:{row['time_horizon']}"
+        )
+        if conn.backend == "postgresql":
+            conn.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (authority_key,))
+            row = conn.execute(
+                "SELECT * FROM wallet_assessment WHERE assessment_id=? FOR UPDATE",
+                (assessment_id,),
+            ).fetchone()
+
         if row["status"] != AssessmentStatus.VALIDATED.value:
             raise ValueError(
                 f"Only VALIDATED assessments can be published; found {row['status']}."
@@ -3130,20 +3311,77 @@ def _db_stage1e_publish_assessment(
         if bool(row["test_only"]):
             raise ValueError("TEST-only assessments cannot be published to production intelligence.")
 
+        # A newer publication-qualified candidate in the same authority scope means
+        # this target was created against stale context and must not replace it.
+        newer = conn.execute(
+            """SELECT assessment_id,status FROM wallet_assessment
+               WHERE relationship_id=? AND methodology_id=? AND geographic_scope=? AND time_horizon=?
+                 AND id>? AND status IN ('VALIDATED','PUBLISHED')
+                 AND publication_result='PUBLISH' AND test_only=0
+               ORDER BY id DESC LIMIT 1""",
+            (
+                row["relationship_id"], row["methodology_id"], row["geographic_scope"],
+                row["time_horizon"], row["id"],
+            ),
+        ).fetchone()
+        if newer is not None:
+            raise ValueError(
+                f"STALE_PUBLICATION_CONTEXT:newer={newer['assessment_id']}:{newer['status']}"
+            )
+
+        current_published = conn.execute(
+            """SELECT assessment_id,effective_date FROM wallet_assessment
+               WHERE relationship_id=? AND methodology_id=? AND geographic_scope=? AND time_horizon=?
+                 AND status='PUBLISHED' AND assessment_id<>?
+               ORDER BY id DESC LIMIT 1""",
+            (row["relationship_id"], row["methodology_id"], row["geographic_scope"], row["time_horizon"], assessment_id),
+        ).fetchone()
+        if current_published is not None:
+            candidate_date = _stage1e_wallet_parse_iso_date(row["effective_date"])
+            current_date = _stage1e_wallet_parse_iso_date(current_published["effective_date"])
+            if candidate_date is not None and current_date is not None and candidate_date < current_date:
+                raise ValueError(
+                    f"STALE_PUBLICATION_EFFECTIVE_DATE:current={current_published['assessment_id']}"
+                )
+
+        preflight = _db_stage1e_wallet_publication_preflight(conn, row)
         now = _db_now()
-        conn.execute(
-            """UPDATE wallet_assessment
-               SET status='SUPERSEDED',superseded_at=?
-               WHERE relationship_id=? AND product=? AND geographic_scope=? AND time_horizon=?
+        previous_rows = conn.execute(
+            """SELECT assessment_id FROM wallet_assessment
+               WHERE relationship_id=? AND methodology_id=? AND geographic_scope=? AND time_horizon=?
                  AND status='PUBLISHED' AND assessment_id<>?""",
             (
-                now, row["relationship_id"], row["product"],
+                row["relationship_id"], row["methodology_id"],
                 row["geographic_scope"], row["time_horizon"], assessment_id,
             ),
-        )
+        ).fetchall()
+
+        for previous in previous_rows:
+            previous_id = previous["assessment_id"]
+            conn.execute(
+                """UPDATE wallet_assessment
+                   SET status='SUPERSEDED',superseded_at=?,superseded_by_assessment_id=?
+                   WHERE assessment_id=?""",
+                (now, assessment_id, previous_id),
+            )
+            _db_append_audit(
+                conn,
+                entity_type="WalletAssessment",
+                entity_id=previous_id,
+                relationship_id=row["relationship_id"],
+                event_type="WALLET_ASSESSMENT_SUPERSEDED",
+                actor=actor,
+                payload={
+                    "superseded_by_assessment_id": assessment_id,
+                    "methodology_code": preflight["methodology_code"],
+                    "methodology_version": preflight["methodology_version"],
+                },
+            )
+
         conn.execute(
             """UPDATE wallet_assessment
-               SET status='PUBLISHED',published_at=?,published_by=?,publication_mode='MANUAL'
+               SET status='PUBLISHED',published_at=?,published_by=?,publication_mode='MANUAL',
+                   superseded_by_assessment_id=NULL
                WHERE assessment_id=?""",
             (now, actor, assessment_id),
         )
@@ -3154,11 +3392,15 @@ def _db_stage1e_publish_assessment(
             relationship_id=row["relationship_id"],
             event_type="WALLET_ASSESSMENT_PUBLISHED",
             actor=actor,
-            payload={"publication_mode": "MANUAL"},
+            payload={
+                "publication_mode": "MANUAL",
+                "methodology_code": preflight["methodology_code"],
+                "methodology_version": preflight["methodology_version"],
+                "source_state_fingerprint": preflight["source_state_fingerprint"],
+            },
         )
 
     return _db_stage1e_get_assessment(assessment_id)
-
 
 def _db_stage1e_get_assessment(assessment_id: str) -> dict | None:
     conn = _db_connect()
@@ -3204,6 +3446,9 @@ def _db_stage1e_get_assessment(assessment_id: str) -> dict | None:
             "Liquidity Time Basis": row["liquidity_time_basis"] or "",
             "Test Only": bool(row["test_only"]),
             "Economic Interpretation": row["economic_interpretation_json"] or "{}",
+            "Source State Fingerprint": row["source_state_fingerprint"] or "",
+            "Source State": row["source_state_json"] or "{}",
+            "Superseded By": row["superseded_by_assessment_id"] or "",
             "Created": row["created_at"],
             "Validated": row["validated_at"] or "",
             "Published": row["published_at"] or "",
@@ -3882,7 +4127,10 @@ def _stage1e2_build_calculation_records(
             formula_code="STRUCTURAL_LENDING_TOTAL_001",
             formula_version="1.0",
             formula_expression="SUM(complete assessed structural lending components)",
-            input_metric_codes=tuple(total_inputs),
+            input_metric_codes=tuple(
+                [STRUCTURAL_BANK_CAPEX_NOTIONAL] * (1 if capex_value is not None else 0)
+                + [STRUCTURAL_BANK_REFINANCING_NOTIONAL] * (1 if refi_value is not None else 0)
+            ),
             output_value_numeric=float(snapshot["addressable_structural_lending_notional"]),
             unit="MONEY",
             currency=currency,
@@ -3894,7 +4142,7 @@ def _stage1e2_build_calculation_records(
             formula_code="STRUCTURAL_LENDING_CAPTURE_001",
             formula_version="1.0",
             formula_expression="OUR_BANK_COMPARABLE_COMMITMENT / STRUCTURAL_LENDING_ADDRESSABLE_NOTIONAL",
-            input_metric_codes=(OUR_BANK_COMPARABLE_COMMITMENT,),
+            input_metric_codes=(STRUCTURAL_LENDING_ADDRESSABLE_NOTIONAL, OUR_BANK_COMPARABLE_COMMITMENT),
             output_value_numeric=float(snapshot["notional_penetration"]),
             unit="RATIO",
             currency=None,
@@ -3905,7 +4153,7 @@ def _stage1e2_build_calculation_records(
             formula_code="STRUCTURAL_LENDING_GAP_001",
             formula_version="1.0",
             formula_expression="STRUCTURAL_LENDING_ADDRESSABLE_NOTIONAL - OUR_BANK_COMPARABLE_COMMITMENT",
-            input_metric_codes=(OUR_BANK_COMPARABLE_COMMITMENT,),
+            input_metric_codes=(STRUCTURAL_LENDING_ADDRESSABLE_NOTIONAL, OUR_BANK_COMPARABLE_COMMITMENT),
             output_value_numeric=float(snapshot["raw_wallet_gap"]),
             unit="MONEY",
             currency=currency,
@@ -3916,7 +4164,7 @@ def _stage1e2_build_calculation_records(
             formula_code="STRUCTURAL_LENDING_GAP_002",
             formula_version="1.0",
             formula_expression="MAX(0, STRUCTURAL_LENDING_RAW_GAP)",
-            input_metric_codes=(OUR_BANK_COMPARABLE_COMMITMENT,),
+            input_metric_codes=(STRUCTURAL_LENDING_RAW_GAP,),
             output_value_numeric=float(snapshot["positive_wallet_gap"]),
             unit="MONEY",
             currency=currency,
@@ -3934,8 +4182,14 @@ def _db_stage1e2_create_structural_assessment(
     geographic_scope: str = "Global",
     time_horizon: str = "3Y",
     actor: str = "EC-AI",
+    governance_context: dict | None = None,
 ) -> dict:
-    """Persist a frozen Structural Lending v1.0 assessment without auto-publication."""
+    """Persist a frozen Structural Lending v1.0 assessment without auto-publication.
+
+    ``governance_context`` activates the Stage 1-E.6.8J.1A.4 production-onboarding
+    contract: existing ReviewCycle only, deterministic source fingerprint and
+    exact-rerun idempotency. Historical/test callers remain source-compatible.
+    """
     snapshot = _stage1e2_evaluate_structural_lending(assessment_input)
     evidence_map = _stage1e_evidence_map(evidence)
     required_metrics = _stage1e2_required_metrics_for_snapshot(snapshot)
@@ -3951,147 +4205,177 @@ def _db_stage1e2_create_structural_assessment(
         assessment_input, snapshot, currency=currency
     )
 
+    reused_assessment_id = None
     with _db_transaction() as conn:
         methodology = _db_seed_stage1e2_methodology(conn)
-        cycle = _db_active_review_cycle(conn)
+        cycle = (_db_stage1e_wallet_require_existing_active_cycle(conn) if governance_context else _db_active_review_cycle(conn))
         rel = _db_relationship_row(conn, company)
+        if governance_context:
+            fingerprint = governance_context["source_state_fingerprint"]
+            _db_stage1e_wallet_lock_source_state(conn, rel["id"], methodology["id"], fingerprint)
+            existing = _db_stage1e_wallet_by_source_fingerprint(conn, rel["id"], methodology["id"], fingerprint)
+            if existing is not None:
+                reused_assessment_id = existing["assessment_id"]
 
-        evidence_ids = []
-        evidence_by_metric = {}
-        for item in evidence:
-            evidence_id = _db_stage1e_persist_evidence(
-                conn,
-                relationship_db_id=rel["id"],
-                review_cycle_db_id=cycle["id"],
-                methodology_db_id=methodology["id"],
-                item=item,
+        if reused_assessment_id is not None:
+            pass
+        else:
+            evidence_ids = []
+            evidence_by_metric = {}
+            for item in evidence:
+                evidence_id = _db_stage1e_persist_evidence(
+                    conn,
+                    relationship_db_id=rel["id"],
+                    review_cycle_db_id=cycle["id"],
+                    methodology_db_id=methodology["id"],
+                    item=item,
+                    test_only=bool(assessment_input.test_only),
+                )
+                evidence_ids.append(evidence_id)
+                evidence_by_metric[item.metric_code] = evidence_id
+
+            calculation_ids = []
+            for calc in calculations:
+                input_ids = [
+                    evidence_by_metric[m]
+                    for m in calc.input_metric_codes
+                    if m in evidence_by_metric
+                ]
+                calc_id = _db_stage1e_persist_calculation(
+                    conn,
+                    relationship_db_id=rel["id"],
+                    review_cycle_db_id=cycle["id"],
+                    methodology_db_id=methodology["id"],
+                    record=calc,
+                    input_evidence_ids=input_ids,
+                    test_only=bool(assessment_input.test_only),
+                )
+                calculation_ids.append(calc_id)
+
+            # Freeze real persisted lineage in the economic snapshot.
+            frozen_snapshot = dict(snapshot)
+            frozen_snapshot["evidence_ids"] = list(evidence_ids)
+            frozen_snapshot["calculation_ids"] = list(calculation_ids)
+            frozen_snapshot["effective_date"] = effective_date
+            frozen_snapshot["currency"] = currency
+            frozen_snapshot["geographic_scope"] = geographic_scope
+            frozen_snapshot["time_horizon"] = time_horizon
+            frozen_snapshot["confidence"] = confidence
+            frozen_snapshot["confidence_explanation"] = confidence_explanation
+
+            assessment_id = _db_next_id(
+                conn, "wallet_assessment", "assessment_id", "WAL"
             )
-            evidence_ids.append(evidence_id)
-            evidence_by_metric[item.metric_code] = evidence_id
-
-        calculation_ids = []
-        for calc in calculations:
-            input_ids = [
-                evidence_by_metric[m]
-                for m in calc.input_metric_codes
-                if m in evidence_by_metric
-            ]
-            calc_id = _db_stage1e_persist_calculation(
-                conn,
-                relationship_db_id=rel["id"],
-                review_cycle_db_id=cycle["id"],
-                methodology_db_id=methodology["id"],
-                record=calc,
-                input_evidence_ids=input_ids,
+            now = _db_now()
+            status = (
+                AssessmentStatus.DRAFT.value
+                if snapshot["publication_result"] == PublicationResult.REJECT.value
+                else AssessmentStatus.VALIDATED.value
             )
-            calculation_ids.append(calc_id)
-
-        # Freeze real persisted lineage in the economic snapshot.
-        frozen_snapshot = dict(snapshot)
-        frozen_snapshot["evidence_ids"] = list(evidence_ids)
-        frozen_snapshot["calculation_ids"] = list(calculation_ids)
-        frozen_snapshot["effective_date"] = effective_date
-        frozen_snapshot["currency"] = currency
-        frozen_snapshot["geographic_scope"] = geographic_scope
-        frozen_snapshot["time_horizon"] = time_horizon
-        frozen_snapshot["confidence"] = confidence
-        frozen_snapshot["confidence_explanation"] = confidence_explanation
-
-        assessment_id = _db_next_id(
-            conn, "wallet_assessment", "assessment_id", "WAL"
-        )
-        now = _db_now()
-        status = (
-            AssessmentStatus.DRAFT.value
-            if snapshot["publication_result"] == PublicationResult.REJECT.value
-            else AssessmentStatus.VALIDATED.value
-        )
-        validated_at = now if status == AssessmentStatus.VALIDATED.value else None
-        notional_completeness = (
-            CompletenessStatus.COMPLETE.value
-            if snapshot["wallet_coverage"] == StructuralWalletCoverage.CAPEX_AND_REFINANCING.value
-            else CompletenessStatus.PARTIAL.value
-        )
-        quality_gate = {
-            "methodology": "STRUCTURAL_LENDING 1.0",
-            "wallet_scope": snapshot["wallet_scope"],
-            "wallet_coverage": snapshot["wallet_coverage"],
-            "warnings": snapshot["warnings"],
-            "blocking_issues": snapshot["blocking_issues"],
-            "publication_result": snapshot["publication_result"],
-            "production_publication_allowed": snapshot["production_publication_allowed"],
-            "test_only": bool(assessment_input.test_only),
-        }
-
-        conn.execute(
-            """INSERT INTO wallet_assessment(
-                   assessment_id,relationship_id,review_cycle_id,methodology_id,
-                   product,effective_date,currency,geographic_scope,time_horizon,
-                   evidence_ids_json,calculation_ids_json,
-                   addressable_notional,captured_notional,notional_penetration,
-                   estimated_wallet_revenue,actual_bank_revenue,revenue_share_of_wallet,
-                   revenue_wallet_gap,notional_completeness,revenue_wallet_completeness,
-                   confidence,confidence_explanation,status,publication_result,
-                   quality_gate_json,wallet_scope,wallet_coverage,
-                   capex_component_status,refinancing_component_status,capture_component_status,
-                   bank_capex_notional,bank_refinancing_notional,raw_wallet_gap,positive_wallet_gap,
-                   capture_comparability_status,test_only,economic_interpretation_json,
-                   created_at,validated_at
-               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                assessment_id, rel["id"], cycle["id"], methodology["id"],
-                "LENDING", effective_date, currency, geographic_scope, time_horizon,
-                _stage1e_json(evidence_ids), _stage1e_json(calculation_ids),
-                snapshot["addressable_structural_lending_notional"],
-                snapshot["comparable_capture_notional"], snapshot["notional_penetration"],
-                None, None, None, None,
-                notional_completeness, CompletenessStatus.PARTIAL.value,
-                confidence, confidence_explanation, status, snapshot["publication_result"],
-                _stage1e_json(quality_gate), snapshot["wallet_scope"], snapshot["wallet_coverage"],
-                snapshot["component_status"]["CAPEX"], snapshot["component_status"]["REFINANCING"],
-                snapshot["component_status"]["CAPTURE"], snapshot["component_notional"]["CAPEX"],
-                snapshot["component_notional"]["REFINANCING"], snapshot["raw_wallet_gap"],
-                snapshot["positive_wallet_gap"], snapshot["capture_comparability_status"],
-                1 if assessment_input.test_only else 0, _stage1e_json(frozen_snapshot),
-                now, validated_at,
-            ),
-        )
-
-        _db_append_audit(
-            conn,
-            entity_type="WalletAssessment",
-            entity_id=assessment_id,
-            relationship_id=rel["id"],
-            event_type="STRUCTURAL_LENDING_ASSESSMENT_CREATED",
-            actor=actor,
-            payload={
+            validated_at = now if status == AssessmentStatus.VALIDATED.value else None
+            # J.1A.4: completeness refers to the declared assessed scope; breadth is
+            # preserved separately in wallet_coverage (CAPEX_ONLY / REFINANCING_ONLY / BOTH).
+            notional_completeness = (
+                CompletenessStatus.COMPLETE.value
+                if snapshot["wallet_coverage"] != StructuralWalletCoverage.NOT_ASSESSED.value
+                else CompletenessStatus.PARTIAL.value
+            )
+            quality_gate = {
                 "methodology": "STRUCTURAL_LENDING 1.0",
+                "wallet_scope": snapshot["wallet_scope"],
                 "wallet_coverage": snapshot["wallet_coverage"],
-                "component_status": snapshot["component_status"],
-                "addressable_notional": snapshot["addressable_structural_lending_notional"],
-                "currency": currency,
+                "warnings": snapshot["warnings"],
+                "blocking_issues": snapshot["blocking_issues"],
                 "publication_result": snapshot["publication_result"],
+                "production_publication_allowed": snapshot["production_publication_allowed"],
                 "test_only": bool(assessment_input.test_only),
-            },
-        )
-        if status == AssessmentStatus.VALIDATED.value:
+            }
+            if governance_context:
+                quality_gate.update({
+                    "governance_hardening_version": governance_context.get("hardening_version"),
+                    "production_evidence_preflight": governance_context.get("production_evidence_preflight"),
+                    "evidence_value_consistency": governance_context.get("evidence_value_consistency"),
+                    "source_freshness_preflight": governance_context.get("source_freshness_preflight"),
+                    "test_isolation_preflight": governance_context.get("test_isolation_preflight"),
+                    "source_state_fingerprint": governance_context.get("source_state_fingerprint"),
+                })
+
+            conn.execute(
+                """INSERT INTO wallet_assessment(
+                       assessment_id,relationship_id,review_cycle_id,methodology_id,
+                       product,effective_date,currency,geographic_scope,time_horizon,
+                       evidence_ids_json,calculation_ids_json,
+                       addressable_notional,captured_notional,notional_penetration,
+                       estimated_wallet_revenue,actual_bank_revenue,revenue_share_of_wallet,
+                       revenue_wallet_gap,notional_completeness,revenue_wallet_completeness,
+                       confidence,confidence_explanation,status,publication_result,
+                       quality_gate_json,wallet_scope,wallet_coverage,
+                       capex_component_status,refinancing_component_status,capture_component_status,
+                       bank_capex_notional,bank_refinancing_notional,raw_wallet_gap,positive_wallet_gap,
+                       capture_comparability_status,test_only,economic_interpretation_json,
+                       source_state_fingerprint,source_state_json,
+                       created_at,validated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    assessment_id, rel["id"], cycle["id"], methodology["id"],
+                    "LENDING", effective_date, currency, geographic_scope, time_horizon,
+                    _stage1e_json(evidence_ids), _stage1e_json(calculation_ids),
+                    snapshot["addressable_structural_lending_notional"],
+                    snapshot["comparable_capture_notional"], snapshot["notional_penetration"],
+                    None, None, None, None,
+                    notional_completeness, CompletenessStatus.PARTIAL.value,
+                    confidence, confidence_explanation, status, snapshot["publication_result"],
+                    _stage1e_json(quality_gate), snapshot["wallet_scope"], snapshot["wallet_coverage"],
+                    snapshot["component_status"]["CAPEX"], snapshot["component_status"]["REFINANCING"],
+                    snapshot["component_status"]["CAPTURE"], snapshot["component_notional"]["CAPEX"],
+                    snapshot["component_notional"]["REFINANCING"], snapshot["raw_wallet_gap"],
+                    snapshot["positive_wallet_gap"], snapshot["capture_comparability_status"],
+                    1 if assessment_input.test_only else 0, _stage1e_json(frozen_snapshot),
+                    governance_context.get("source_state_fingerprint") if governance_context else None,
+                    _stage1e_json(governance_context.get("source_state", {})) if governance_context else _stage1e_json({}),
+                    now, validated_at,
+                ),
+            )
+
             _db_append_audit(
                 conn,
                 entity_type="WalletAssessment",
                 entity_id=assessment_id,
                 relationship_id=rel["id"],
-                event_type="STRUCTURAL_LENDING_ASSESSMENT_VALIDATED",
+                event_type="STRUCTURAL_LENDING_ASSESSMENT_CREATED",
                 actor=actor,
                 payload={
+                    "methodology": "STRUCTURAL_LENDING 1.0",
                     "wallet_coverage": snapshot["wallet_coverage"],
-                    "warnings": snapshot["warnings"],
+                    "component_status": snapshot["component_status"],
+                    "addressable_notional": snapshot["addressable_structural_lending_notional"],
+                    "currency": currency,
                     "publication_result": snapshot["publication_result"],
                     "test_only": bool(assessment_input.test_only),
                 },
             )
+            if status == AssessmentStatus.VALIDATED.value:
+                _db_append_audit(
+                    conn,
+                    entity_type="WalletAssessment",
+                    entity_id=assessment_id,
+                    relationship_id=rel["id"],
+                    event_type="STRUCTURAL_LENDING_ASSESSMENT_VALIDATED",
+                    actor=actor,
+                    payload={
+                        "wallet_coverage": snapshot["wallet_coverage"],
+                        "warnings": snapshot["warnings"],
+                        "publication_result": snapshot["publication_result"],
+                        "test_only": bool(assessment_input.test_only),
+                    },
+                )
 
-    return _db_stage1e_get_assessment(assessment_id)
-
+    result_id = reused_assessment_id or assessment_id
+    result = _db_stage1e_get_assessment(result_id)
+    if result is not None and governance_context:
+        result["Persistence Action"] = "KEEP_EXISTING" if reused_assessment_id else "CREATE_NEW"
+        result["Source State Fingerprint"] = governance_context.get("source_state_fingerprint")
+    return result
 
 def _db_stage1e2_latest_assessment(company: str) -> dict | None:
     conn = _db_connect()
@@ -4513,7 +4797,7 @@ def _stage1e2b_evaluate_cash_liquidity(
                 formula_code="CASH_CAPTURE_001",
                 formula_version="1.0",
                 formula_expression="OUR_AVERAGE_DEPOSITS / ADDRESSABLE_LIQUIDITY_NOTIONAL",
-                input_metric_codes=(OUR_AVERAGE_DEPOSITS, ADDRESSABLE_LIQUIDITY_NOTIONAL),
+                input_metric_codes=(ADDRESSABLE_LIQUIDITY_NOTIONAL, OUR_AVERAGE_DEPOSITS),
                 output_value_numeric=penetration,
                 unit="RATIO",
                 currency=None,
@@ -4525,7 +4809,7 @@ def _stage1e2b_evaluate_cash_liquidity(
             formula_code="CASH_GAP_001",
             formula_version="1.0",
             formula_expression="ADDRESSABLE_LIQUIDITY_NOTIONAL - OUR_AVERAGE_DEPOSITS",
-            input_metric_codes=(OUR_AVERAGE_DEPOSITS,),
+            input_metric_codes=(ADDRESSABLE_LIQUIDITY_NOTIONAL, OUR_AVERAGE_DEPOSITS),
             output_value_numeric=raw_gap,
             unit="MONEY",
             currency=cash_item.currency if cash_item else None,
@@ -4535,7 +4819,7 @@ def _stage1e2b_evaluate_cash_liquidity(
             formula_code="CASH_GAP_002",
             formula_version="1.0",
             formula_expression="MAX(0, RAW_DEPOSIT_GAP)",
-            input_metric_codes=(OUR_AVERAGE_DEPOSITS,),
+            input_metric_codes=(RAW_DEPOSIT_GAP,),
             output_value_numeric=positive_gap,
             unit="MONEY",
             currency=cash_item.currency if cash_item else None,
@@ -4656,8 +4940,13 @@ def _db_stage1e2b_create_cash_assessment(
     time_horizon: str = "1Y",
     test_only: bool = False,
     actor: str = "EC-AI",
+    governance_context: dict | None = None,
 ) -> dict:
-    """Persist a frozen Cash & Liquidity Wallet v1.0 assessment; never auto-publish."""
+    """Persist a frozen Cash & Liquidity Wallet v1.0 assessment; never auto-publish.
+
+    ``governance_context`` activates the Stage 1-E.6.8J.1A.4 production-onboarding
+    contract and exact-rerun idempotency.
+    """
     snapshot, calculations = _stage1e2b_evaluate_cash_liquidity(
         evidence,
         test_only=test_only,
@@ -4670,146 +4959,175 @@ def _db_stage1e2b_create_cash_assessment(
             + ", ".join(missing)
         )
 
+    reused_assessment_id = None
     with _db_transaction() as conn:
         methodology = _db_seed_stage1e2b_methodology(conn)
-        cycle = _db_active_review_cycle(conn)
+        cycle = (_db_stage1e_wallet_require_existing_active_cycle(conn) if governance_context else _db_active_review_cycle(conn))
         rel = _db_relationship_row(conn, company)
+        if governance_context:
+            fingerprint = governance_context["source_state_fingerprint"]
+            _db_stage1e_wallet_lock_source_state(conn, rel["id"], methodology["id"], fingerprint)
+            existing = _db_stage1e_wallet_by_source_fingerprint(conn, rel["id"], methodology["id"], fingerprint)
+            if existing is not None:
+                reused_assessment_id = existing["assessment_id"]
 
-        evidence_ids = []
-        evidence_by_metric = {}
-        for item in evidence:
-            evidence_id = _db_stage1e_persist_evidence(
-                conn,
-                relationship_db_id=rel["id"],
-                review_cycle_db_id=cycle["id"],
-                methodology_db_id=methodology["id"],
-                item=item,
+        if reused_assessment_id is not None:
+            pass
+        else:
+            evidence_ids = []
+            evidence_by_metric = {}
+            for item in evidence:
+                evidence_id = _db_stage1e_persist_evidence(
+                    conn,
+                    relationship_db_id=rel["id"],
+                    review_cycle_db_id=cycle["id"],
+                    methodology_db_id=methodology["id"],
+                    item=item,
+                    test_only=bool(test_only),
+                )
+                evidence_ids.append(evidence_id)
+                evidence_by_metric[item.metric_code] = evidence_id
+
+            calculation_ids = []
+            for calc in calculations:
+                input_ids = [
+                    evidence_by_metric[m]
+                    for m in calc.input_metric_codes
+                    if m in evidence_by_metric
+                ]
+                calc_id = _db_stage1e_persist_calculation(
+                    conn,
+                    relationship_db_id=rel["id"],
+                    review_cycle_db_id=cycle["id"],
+                    methodology_db_id=methodology["id"],
+                    record=calc,
+                    input_evidence_ids=input_ids,
+                    test_only=bool(test_only),
+                )
+                calculation_ids.append(calc_id)
+
+            frozen_snapshot = dict(snapshot)
+            frozen_snapshot["evidence_ids"] = list(evidence_ids)
+            frozen_snapshot["calculation_ids"] = list(calculation_ids)
+            frozen_snapshot["effective_date"] = effective_date or snapshot.get("effective_date")
+            frozen_snapshot["geographic_scope"] = geographic_scope or snapshot.get("geographic_scope")
+            frozen_snapshot["time_horizon"] = time_horizon
+
+            assessment_id = _db_next_id(
+                conn, "wallet_assessment", "assessment_id", "WAL"
             )
-            evidence_ids.append(evidence_id)
-            evidence_by_metric[item.metric_code] = evidence_id
-
-        calculation_ids = []
-        for calc in calculations:
-            input_ids = [
-                evidence_by_metric[m]
-                for m in calc.input_metric_codes
-                if m in evidence_by_metric
-            ]
-            calc_id = _db_stage1e_persist_calculation(
-                conn,
-                relationship_db_id=rel["id"],
-                review_cycle_db_id=cycle["id"],
-                methodology_db_id=methodology["id"],
-                record=calc,
-                input_evidence_ids=input_ids,
+            now = _db_now()
+            status = (
+                AssessmentStatus.DRAFT.value
+                if snapshot["publication_result"] == PublicationResult.REJECT.value
+                else AssessmentStatus.VALIDATED.value
             )
-            calculation_ids.append(calc_id)
-
-        frozen_snapshot = dict(snapshot)
-        frozen_snapshot["evidence_ids"] = list(evidence_ids)
-        frozen_snapshot["calculation_ids"] = list(calculation_ids)
-        frozen_snapshot["effective_date"] = effective_date or snapshot.get("effective_date")
-        frozen_snapshot["geographic_scope"] = geographic_scope or snapshot.get("geographic_scope")
-        frozen_snapshot["time_horizon"] = time_horizon
-
-        assessment_id = _db_next_id(
-            conn, "wallet_assessment", "assessment_id", "WAL"
-        )
-        now = _db_now()
-        status = (
-            AssessmentStatus.DRAFT.value
-            if snapshot["publication_result"] == PublicationResult.REJECT.value
-            else AssessmentStatus.VALIDATED.value
-        )
-        validated_at = now if status == AssessmentStatus.VALIDATED.value else None
-        notional_completeness = (
-            CompletenessStatus.COMPLETE.value
-            if snapshot["liquidity_component_status"] == CashLiquidityComponentStatus.COMPLETE.value
-            else CompletenessStatus.PARTIAL.value
-        )
-        quality_gate = {
-            "methodology": "CASH_LIQUIDITY_WALLET 1.0",
-            "methodology_scope": snapshot["methodology_scope"],
-            "wallet_coverage": snapshot["wallet_coverage"],
-            "warnings": snapshot["warnings"],
-            "blocking_issues": snapshot["blocking_issues"],
-            "publication_result": snapshot["publication_result"],
-            "production_publication_allowed": snapshot["production_publication_allowed"],
-            "test_only": bool(test_only),
-        }
-
-        conn.execute(
-            """INSERT INTO wallet_assessment(
-                   assessment_id,relationship_id,review_cycle_id,methodology_id,
-                   product,effective_date,currency,geographic_scope,time_horizon,
-                   evidence_ids_json,calculation_ids_json,
-                   addressable_notional,captured_notional,notional_penetration,
-                   estimated_wallet_revenue,actual_bank_revenue,revenue_share_of_wallet,
-                   revenue_wallet_gap,notional_completeness,revenue_wallet_completeness,
-                   confidence,confidence_explanation,status,publication_result,
-                   quality_gate_json,wallet_scope,wallet_coverage,
-                   capex_component_status,refinancing_component_status,capture_component_status,
-                   bank_capex_notional,bank_refinancing_notional,raw_wallet_gap,positive_wallet_gap,
-                   capture_comparability_status,test_only,economic_interpretation_json,
-                   liquidity_component_status,relevant_cash_pool,
-                   forecast_bankable_liquidity_share,liquidity_time_basis,
-                   created_at,validated_at
-               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                assessment_id, rel["id"], cycle["id"], methodology["id"],
-                "CASH_LIQUIDITY", effective_date or snapshot.get("effective_date"),
-                snapshot.get("currency"), geographic_scope, time_horizon,
-                _stage1e_json(evidence_ids), _stage1e_json(calculation_ids),
-                snapshot["addressable_liquidity_notional"],
-                snapshot["comparable_capture_notional"], snapshot["deposit_penetration"],
-                None, None, None, None,
-                notional_completeness, CompletenessStatus.PARTIAL.value,
-                snapshot["confidence"], snapshot["confidence_explanation"],
-                status, snapshot["publication_result"], _stage1e_json(quality_gate),
-                snapshot["methodology_scope"], snapshot["wallet_coverage"],
-                None, None, snapshot["capture_component_status"],
-                None, None, snapshot["raw_deposit_gap"], snapshot["positive_deposit_gap"],
-                snapshot["capture_comparability_status"], 1 if test_only else 0,
-                _stage1e_json(frozen_snapshot), snapshot["liquidity_component_status"],
-                snapshot["relevant_cash_pool"], snapshot["forecast_bankable_liquidity_share"],
-                snapshot["liquidity_time_basis"], now, validated_at,
-            ),
-        )
-
-        _db_append_audit(
-            conn,
-            entity_type="WalletAssessment",
-            entity_id=assessment_id,
-            relationship_id=rel["id"],
-            event_type="CASH_LIQUIDITY_ASSESSMENT_CREATED",
-            actor=actor,
-            payload={
+            validated_at = now if status == AssessmentStatus.VALIDATED.value else None
+            notional_completeness = (
+                CompletenessStatus.COMPLETE.value
+                if snapshot["liquidity_component_status"] == CashLiquidityComponentStatus.COMPLETE.value
+                else CompletenessStatus.PARTIAL.value
+            )
+            quality_gate = {
                 "methodology": "CASH_LIQUIDITY_WALLET 1.0",
                 "methodology_scope": snapshot["methodology_scope"],
-                "addressable_notional": snapshot["addressable_liquidity_notional"],
-                "currency": snapshot.get("currency"),
-                "liquidity_time_basis": snapshot.get("liquidity_time_basis"),
+                "wallet_coverage": snapshot["wallet_coverage"],
+                "warnings": snapshot["warnings"],
+                "blocking_issues": snapshot["blocking_issues"],
                 "publication_result": snapshot["publication_result"],
+                "production_publication_allowed": snapshot["production_publication_allowed"],
                 "test_only": bool(test_only),
-            },
-        )
-        if status == AssessmentStatus.VALIDATED.value:
+            }
+            if governance_context:
+                quality_gate.update({
+                    "governance_hardening_version": governance_context.get("hardening_version"),
+                    "production_evidence_preflight": governance_context.get("production_evidence_preflight"),
+                    "evidence_value_consistency": governance_context.get("evidence_value_consistency"),
+                    "source_freshness_preflight": governance_context.get("source_freshness_preflight"),
+                    "test_isolation_preflight": governance_context.get("test_isolation_preflight"),
+                    "source_state_fingerprint": governance_context.get("source_state_fingerprint"),
+                })
+
+            conn.execute(
+                """INSERT INTO wallet_assessment(
+                       assessment_id,relationship_id,review_cycle_id,methodology_id,
+                       product,effective_date,currency,geographic_scope,time_horizon,
+                       evidence_ids_json,calculation_ids_json,
+                       addressable_notional,captured_notional,notional_penetration,
+                       estimated_wallet_revenue,actual_bank_revenue,revenue_share_of_wallet,
+                       revenue_wallet_gap,notional_completeness,revenue_wallet_completeness,
+                       confidence,confidence_explanation,status,publication_result,
+                       quality_gate_json,wallet_scope,wallet_coverage,
+                       capex_component_status,refinancing_component_status,capture_component_status,
+                       bank_capex_notional,bank_refinancing_notional,raw_wallet_gap,positive_wallet_gap,
+                       capture_comparability_status,test_only,economic_interpretation_json,
+                       liquidity_component_status,relevant_cash_pool,
+                       forecast_bankable_liquidity_share,liquidity_time_basis,
+                       source_state_fingerprint,source_state_json,
+                       created_at,validated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    assessment_id, rel["id"], cycle["id"], methodology["id"],
+                    "CASH_LIQUIDITY", effective_date or snapshot.get("effective_date"),
+                    snapshot.get("currency"), geographic_scope, time_horizon,
+                    _stage1e_json(evidence_ids), _stage1e_json(calculation_ids),
+                    snapshot["addressable_liquidity_notional"],
+                    snapshot["comparable_capture_notional"], snapshot["deposit_penetration"],
+                    None, None, None, None,
+                    notional_completeness, CompletenessStatus.PARTIAL.value,
+                    snapshot["confidence"], snapshot["confidence_explanation"],
+                    status, snapshot["publication_result"], _stage1e_json(quality_gate),
+                    snapshot["methodology_scope"], snapshot["wallet_coverage"],
+                    None, None, snapshot["capture_component_status"],
+                    None, None, snapshot["raw_deposit_gap"], snapshot["positive_deposit_gap"],
+                    snapshot["capture_comparability_status"], 1 if test_only else 0,
+                    _stage1e_json(frozen_snapshot), snapshot["liquidity_component_status"],
+                    snapshot["relevant_cash_pool"], snapshot["forecast_bankable_liquidity_share"],
+                    snapshot["liquidity_time_basis"],
+                    governance_context.get("source_state_fingerprint") if governance_context else None,
+                    _stage1e_json(governance_context.get("source_state", {})) if governance_context else _stage1e_json({}),
+                    now, validated_at,
+                ),
+            )
+
             _db_append_audit(
                 conn,
                 entity_type="WalletAssessment",
                 entity_id=assessment_id,
                 relationship_id=rel["id"],
-                event_type="CASH_LIQUIDITY_ASSESSMENT_VALIDATED",
+                event_type="CASH_LIQUIDITY_ASSESSMENT_CREATED",
                 actor=actor,
                 payload={
-                    "warnings": snapshot["warnings"],
+                    "methodology": "CASH_LIQUIDITY_WALLET 1.0",
+                    "methodology_scope": snapshot["methodology_scope"],
+                    "addressable_notional": snapshot["addressable_liquidity_notional"],
+                    "currency": snapshot.get("currency"),
+                    "liquidity_time_basis": snapshot.get("liquidity_time_basis"),
                     "publication_result": snapshot["publication_result"],
                     "test_only": bool(test_only),
                 },
             )
+            if status == AssessmentStatus.VALIDATED.value:
+                _db_append_audit(
+                    conn,
+                    entity_type="WalletAssessment",
+                    entity_id=assessment_id,
+                    relationship_id=rel["id"],
+                    event_type="CASH_LIQUIDITY_ASSESSMENT_VALIDATED",
+                    actor=actor,
+                    payload={
+                        "warnings": snapshot["warnings"],
+                        "publication_result": snapshot["publication_result"],
+                        "test_only": bool(test_only),
+                    },
+                )
 
-    return _db_stage1e_get_assessment(assessment_id)
-
+    result_id = reused_assessment_id or assessment_id
+    result = _db_stage1e_get_assessment(result_id)
+    if result is not None and governance_context:
+        result["Persistence Action"] = "KEEP_EXISTING" if reused_assessment_id else "CREATE_NEW"
+        result["Source State Fingerprint"] = governance_context.get("source_state_fingerprint")
+    return result
 
 def _db_stage1e2b_latest_assessment(company: str) -> dict | None:
     conn = _db_connect()
@@ -4880,6 +5198,645 @@ def _db_stage1e2b_run_toyota_persistence_test(*, actor: str = "Founder Test") ->
     )
 
 # END STAGE 1-E.2B.6 — CASH & LIQUIDITY WALLET v1.0 / PERSISTENCE INTEGRATION
+
+
+# =============================================================================
+# STAGE 1-E.6.8J.1A.4-A — PRODUCTION WALLET GOVERNANCE HARDENING RED-TEAM v1.1
+# =============================================================================
+# Red-team hotfix over v1.0. This layer hardens scope authority, source-state
+# semantics, persisted-lineage reconciliation, publication ordering and E3 current
+# authority. Stage 1-C.10 UI and Review authority remain unchanged.
+
+E6_8J1A4_HARDENING_VERSION = "1.1"
+E6_8J1A4_SUPPORTED_PRODUCTION_WALLETS = {
+    ("STRUCTURAL_LENDING", "1.0"),
+    ("CASH_LIQUIDITY_WALLET", "1.0"),
+}
+
+
+class ProductionWalletGovernanceError(ValueError):
+    pass
+
+
+def _stage1e_wallet_canonical_json(value) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _stage1e_wallet_norm(value) -> str:
+    return str(value or "").strip().upper()
+
+
+def _stage1e_wallet_evidence_state(evidence: list[EvidenceItem]) -> list[dict]:
+    rows = []
+    for item in evidence:
+        rows.append({
+            "metric_code": item.metric_code,
+            "evidence_type": item.evidence_type.value,
+            "confidence": item.confidence.value,
+            "value_numeric": item.value_numeric,
+            "value_text": item.value_text,
+            "metric_name": item.metric_name,
+            "unit": item.unit,
+            "currency": item.currency,
+            "source_type": item.source_type,
+            "source_name": item.source_name,
+            "source_reference": item.source_reference,
+            "effective_date": item.effective_date,
+            "as_of_date": item.as_of_date,
+            "owner": item.owner,
+            "review_date": item.review_date,
+            "economic_perimeter": item.economic_perimeter,
+            "geographic_scope": item.geographic_scope,
+            "time_basis": item.time_basis,
+            "rationale": item.rationale,
+            "test_only": bool(item.test_only),
+        })
+    return sorted(rows, key=lambda x: (str(x["metric_code"]), str(x.get("source_reference") or "")))
+
+
+def _stage1e_wallet_persisted_evidence_state(rows) -> list[dict]:
+    out = []
+    for item in rows:
+        out.append({
+            "metric_code": item["metric_code"],
+            "evidence_type": item["evidence_type"],
+            "confidence": item["confidence"],
+            "value_numeric": item["value_numeric"],
+            "value_text": item["value_text"],
+            "metric_name": item["metric_name"],
+            "unit": item["unit"],
+            "currency": item["currency"],
+            "source_type": item["source_type"],
+            "source_name": item["source_name"],
+            "source_reference": item["source_reference"],
+            "effective_date": item["effective_date"],
+            "as_of_date": item["as_of_date"],
+            "owner": item["owner"],
+            "review_date": item["review_date"],
+            "economic_perimeter": item["economic_perimeter"],
+            "geographic_scope": item["geographic_scope"],
+            "time_basis": item["time_basis"],
+            "rationale": item["rationale"],
+            "test_only": bool(item["test_only"]),
+        })
+    return sorted(out, key=lambda x: (str(x["metric_code"]), str(x.get("source_reference") or "")))
+
+
+def _stage1e_wallet_calculation_state(calculations: list[CalculationRecord]) -> list[dict]:
+    rows = []
+    for record in calculations:
+        rows.append({
+            "metric_code": record.metric_code,
+            "formula_code": record.formula_code,
+            "formula_version": record.formula_version,
+            "formula_expression": record.formula_expression,
+            "input_metric_codes": list(record.input_metric_codes),
+            "output_value_numeric": record.output_value_numeric,
+            "unit": record.unit,
+            "currency": record.currency,
+            "test_only": bool(record.test_only),
+        })
+    return sorted(rows, key=lambda x: (str(x["metric_code"]), str(x["formula_code"])))
+
+
+def _stage1e_wallet_persisted_calculation_state(rows) -> list[dict]:
+    out = []
+    for record in rows:
+        try:
+            inputs = json.loads(record["input_metric_codes_json"] or "[]")
+        except Exception:
+            inputs = []
+        out.append({
+            "metric_code": record["metric_code"],
+            "formula_code": record["formula_code"],
+            "formula_version": record["formula_version"],
+            "formula_expression": record["formula_expression"],
+            "input_metric_codes": [str(x) for x in inputs],
+            "output_value_numeric": record["output_value_numeric"],
+            "unit": record["unit"],
+            "currency": record["currency"],
+            "test_only": bool(record["test_only"]),
+        })
+    return sorted(out, key=lambda x: (str(x["metric_code"]), str(x["formula_code"])))
+
+
+def _stage1e2_structural_input_state(assessment_input: StructuralLendingAssessmentInput) -> dict:
+    def component_state(component):
+        if component is None:
+            return None
+        return {
+            "base_amount": component.base_amount,
+            "funding_rate": component.funding_rate,
+            "bank_share": component.bank_share,
+            "economic_perimeter": component.economic_perimeter,
+            "time_horizon": component.time_horizon,
+            "currency": component.currency,
+            "evidence_ids": list(component.evidence_ids),
+            "estimation_method": component.estimation_method,
+            "rationale": component.rationale,
+            "confidence": component.confidence,
+            "financing_need_ids": list(component.financing_need_ids),
+            "assessed": bool(component.assessed),
+        }
+    capture = assessment_input.capture
+    capture_state = None if capture is None else {
+        "comparable_commitment": capture.comparable_commitment,
+        "funded_notional": capture.funded_notional,
+        "pipeline_notional": capture.pipeline_notional,
+        "comparability_status": capture.comparability_status.value,
+        "comparability_reason": capture.comparability_reason,
+        "evidence_ids": list(capture.evidence_ids),
+        "verified_zero": bool(capture.verified_zero),
+    }
+    return {
+        "methodology_code": assessment_input.methodology_code,
+        "methodology_version": assessment_input.methodology_version,
+        "wallet_scope": assessment_input.wallet_scope,
+        "test_only": bool(assessment_input.test_only),
+        "capex": component_state(assessment_input.capex),
+        "refinancing": component_state(assessment_input.refinancing),
+        "capture": capture_state,
+    }
+
+
+def _stage1e_wallet_validate_unique_evidence_metrics(evidence: list[EvidenceItem]):
+    counts = {}
+    for item in evidence:
+        counts[item.metric_code] = counts.get(item.metric_code, 0) + 1
+    duplicates = sorted(code for code, count in counts.items() if count > 1)
+    if duplicates:
+        raise ProductionWalletGovernanceError(
+            "AMBIGUOUS_EVIDENCE_FOR_METRIC: " + ", ".join(duplicates)
+        )
+
+
+def _stage1e_wallet_parse_iso_date(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _stage1e_wallet_validate_production_evidence(evidence: list[EvidenceItem]):
+    if not evidence:
+        raise ProductionWalletGovernanceError("NO_PRODUCTION_EVIDENCE")
+    _stage1e_wallet_validate_unique_evidence_metrics(evidence)
+    today = datetime.now().date()
+    for item in evidence:
+        if item.test_only:
+            raise ProductionWalletGovernanceError(f"TEST_SOURCE_CONTAMINATION:{item.metric_code}")
+        if not (item.source_type and item.source_name and item.source_reference):
+            raise ProductionWalletGovernanceError(f"SOURCE_PROVENANCE_INCOMPLETE:{item.metric_code}")
+        if not (item.effective_date or item.as_of_date):
+            raise ProductionWalletGovernanceError(f"SOURCE_AS_OF_MISSING:{item.metric_code}")
+        if not (item.economic_perimeter and item.geographic_scope and item.time_basis):
+            raise ProductionWalletGovernanceError(f"SOURCE_SCOPE_INCOMPLETE:{item.metric_code}")
+        if item.evidence_type == EvidenceType.ASSUMPTION:
+            if not (item.rationale or "").strip():
+                raise ProductionWalletGovernanceError(f"ASSUMPTION_RATIONALE_MISSING:{item.metric_code}")
+            review_date = _stage1e_wallet_parse_iso_date(item.review_date)
+            if review_date is None:
+                raise ProductionWalletGovernanceError(f"ASSUMPTION_REVIEW_DATE_INVALID:{item.metric_code}")
+            if review_date < today:
+                raise ProductionWalletGovernanceError(f"ASSUMPTION_REVIEW_EXPIRED:{item.metric_code}")
+
+
+def _stage1e_wallet_numbers_equal(left, right, tolerance: float = 1e-9) -> bool:
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+    try:
+        a = float(left); b = float(right)
+    except Exception:
+        return False
+    scale = max(1.0, abs(a), abs(b))
+    return abs(a - b) <= tolerance * scale
+
+
+def _stage1e2_validate_structural_evidence_consistency(
+    assessment_input: StructuralLendingAssessmentInput,
+    evidence: list[EvidenceItem],
+    *,
+    effective_date: str | None = None,
+    currency: str | None = None,
+    geographic_scope: str | None = None,
+    time_horizon: str | None = None,
+):
+    _stage1e_wallet_validate_unique_evidence_metrics(evidence)
+    ev = {item.metric_code: item for item in evidence}
+
+    def _require(component, component_name: str, metric_triplet: tuple[str, str, str]):
+        if component is None or not component.assessed:
+            return
+        if time_horizon and _stage1e_wallet_norm(component.time_horizon) != _stage1e_wallet_norm(time_horizon):
+            raise ProductionWalletGovernanceError(f"WALLET_TIME_HORIZON_MISMATCH:{component_name}")
+        if currency and _stage1e_wallet_norm(component.currency) != _stage1e_wallet_norm(currency):
+            raise ProductionWalletGovernanceError(f"WALLET_CURRENCY_MISMATCH:{component_name}")
+        values = (component.base_amount, component.funding_rate, component.bank_share)
+        reference_scope = None
+        reference_geo = None
+        reference_time_basis = None
+        for idx, (metric, value) in enumerate(zip(metric_triplet, values)):
+            item = ev.get(metric)
+            if item is None:
+                continue
+            if not _stage1e_wallet_numbers_equal(value, item.value_numeric):
+                raise ProductionWalletGovernanceError(f"EVIDENCE_VALUE_MISMATCH:{component_name}:{metric}")
+            if component.economic_perimeter and _stage1e_wallet_norm(item.economic_perimeter) != _stage1e_wallet_norm(component.economic_perimeter):
+                raise ProductionWalletGovernanceError(f"EVIDENCE_PERIMETER_MISMATCH:{component_name}:{metric}")
+            if geographic_scope and _stage1e_wallet_norm(item.geographic_scope) != _stage1e_wallet_norm(geographic_scope):
+                raise ProductionWalletGovernanceError(f"EVIDENCE_GEOGRAPHIC_SCOPE_MISMATCH:{component_name}:{metric}")
+            if idx == 0 and currency and _stage1e_wallet_norm(item.currency) != _stage1e_wallet_norm(currency):
+                raise ProductionWalletGovernanceError(f"EVIDENCE_CURRENCY_MISMATCH:{component_name}:{metric}")
+            source_date = item.effective_date or item.as_of_date
+            if idx == 0 and effective_date and str(source_date or "") != str(effective_date):
+                raise ProductionWalletGovernanceError(f"WALLET_EFFECTIVE_DATE_MISMATCH:{component_name}:{metric}")
+            scope = _stage1e_wallet_norm(item.economic_perimeter)
+            geo = _stage1e_wallet_norm(item.geographic_scope)
+            basis = _stage1e_wallet_norm(item.time_basis)
+            reference_scope = reference_scope or scope
+            reference_geo = reference_geo or geo
+            reference_time_basis = reference_time_basis or basis
+            if reference_scope and scope != reference_scope:
+                raise ProductionWalletGovernanceError(f"EVIDENCE_PERIMETER_MISMATCH:{component_name}:{metric}")
+            if reference_geo and geo != reference_geo:
+                raise ProductionWalletGovernanceError(f"EVIDENCE_GEOGRAPHIC_SCOPE_MISMATCH:{component_name}:{metric}")
+            if reference_time_basis and basis != reference_time_basis:
+                raise ProductionWalletGovernanceError(f"EVIDENCE_TIME_BASIS_MISMATCH:{component_name}:{metric}")
+
+    _require(assessment_input.capex, "CAPEX", (FORECAST_CAPEX, FORECAST_CAPEX_DEBT_FUNDING_PCT, FORECAST_BANK_CAPEX_SHARE))
+    _require(assessment_input.refinancing, "REFINANCING", (RELEVANT_PRINCIPAL_MATURING, FORECAST_EXTERNAL_REFINANCE_RATE, FORECAST_BANK_REFINANCE_SHARE))
+
+    if assessment_input.capture is not None and assessment_input.capture.comparability_status == CaptureComparabilityStatus.COMPARABLE:
+        capture_item = ev.get(OUR_BANK_COMPARABLE_COMMITMENT)
+        expected = assessment_input.capture.comparable_commitment
+        if expected is None and assessment_input.capture.verified_zero:
+            expected = 0.0
+        if capture_item is not None:
+            if not _stage1e_wallet_numbers_equal(expected, capture_item.value_numeric):
+                raise ProductionWalletGovernanceError("EVIDENCE_VALUE_MISMATCH:CAPTURE:OUR_BANK_COMPARABLE_COMMITMENT")
+            if geographic_scope and _stage1e_wallet_norm(capture_item.geographic_scope) != _stage1e_wallet_norm(geographic_scope):
+                raise ProductionWalletGovernanceError("EVIDENCE_GEOGRAPHIC_SCOPE_MISMATCH:CAPTURE:OUR_BANK_COMPARABLE_COMMITMENT")
+            if currency and _stage1e_wallet_norm(capture_item.currency) != _stage1e_wallet_norm(currency):
+                raise ProductionWalletGovernanceError("EVIDENCE_CURRENCY_MISMATCH:CAPTURE:OUR_BANK_COMPARABLE_COMMITMENT")
+            base_component = assessment_input.capex if assessment_input.capex and assessment_input.capex.assessed else assessment_input.refinancing
+            if base_component and _stage1e_wallet_norm(capture_item.economic_perimeter) != _stage1e_wallet_norm(base_component.economic_perimeter):
+                raise ProductionWalletGovernanceError("EVIDENCE_PERIMETER_MISMATCH:CAPTURE:OUR_BANK_COMPARABLE_COMMITMENT")
+
+
+def _stage1e2b_validate_cash_outer_scope(
+    snapshot: dict, evidence: list[EvidenceItem], *, effective_date: str, geographic_scope: str
+):
+    base_item = next((x for x in evidence if x.metric_code == RELEVANT_CASH_POOL), None)
+    source_date = (base_item.effective_date or base_item.as_of_date) if base_item else snapshot.get("effective_date")
+    if source_date and str(source_date) != str(effective_date):
+        raise ProductionWalletGovernanceError("WALLET_EFFECTIVE_DATE_MISMATCH:CASH")
+    if snapshot.get("geographic_scope") and _stage1e_wallet_norm(snapshot.get("geographic_scope")) != _stage1e_wallet_norm(geographic_scope):
+        raise ProductionWalletGovernanceError("WALLET_GEOGRAPHIC_SCOPE_MISMATCH:CASH")
+
+
+def _stage1e_wallet_assert_row_matches_source_state(row, methodology, source_state: dict):
+    """Fail closed if persisted WalletAssessment economics diverge from its frozen source state."""
+    def _text(field, expected):
+        actual = row[field]
+        if _stage1e_wallet_norm(actual) != _stage1e_wallet_norm(expected):
+            raise ValueError(f"Wallet source-state reconciliation failed — {field} mismatch.")
+
+    def _number(field, expected):
+        actual = row[field]
+        if not _stage1e_wallet_numbers_equal(actual, expected):
+            raise ValueError(f"Wallet source-state reconciliation failed — {field} mismatch.")
+
+    if str(source_state.get("relationship_id") or ""):
+        # Relationship public ID is validated by the caller when needed; the DB row
+        # stores the internal relationship FK, so do not compare unlike identifiers here.
+        pass
+    if str(source_state.get("methodology_code") or "") != str(methodology["methodology_code"]):
+        raise ValueError("Wallet source-state reconciliation failed — methodology code mismatch.")
+    if str(source_state.get("methodology_version") or "") != str(methodology["version"]):
+        raise ValueError("Wallet source-state reconciliation failed — methodology version mismatch.")
+    _text("effective_date", source_state.get("effective_date"))
+    _text("currency", source_state.get("currency"))
+    _text("geographic_scope", source_state.get("geographic_scope"))
+    _text("time_horizon", source_state.get("time_horizon"))
+
+    snapshot = dict(source_state.get("assessment_snapshot") or {})
+    code = str(methodology["methodology_code"])
+    if code == "STRUCTURAL_LENDING":
+        _text("product", "LENDING")
+        _text("wallet_scope", snapshot.get("wallet_scope"))
+        _text("wallet_coverage", snapshot.get("wallet_coverage"))
+        components = snapshot.get("component_status") or {}
+        _text("capex_component_status", components.get("CAPEX"))
+        _text("refinancing_component_status", components.get("REFINANCING"))
+        _text("capture_component_status", components.get("CAPTURE"))
+        component_notional = snapshot.get("component_notional") or {}
+        _number("bank_capex_notional", component_notional.get("CAPEX"))
+        _number("bank_refinancing_notional", component_notional.get("REFINANCING"))
+        _number("addressable_notional", snapshot.get("addressable_structural_lending_notional"))
+        _number("captured_notional", snapshot.get("comparable_capture_notional"))
+        _number("notional_penetration", snapshot.get("notional_penetration"))
+        _number("raw_wallet_gap", snapshot.get("raw_wallet_gap"))
+        _number("positive_wallet_gap", snapshot.get("positive_wallet_gap"))
+        _text("capture_comparability_status", snapshot.get("capture_comparability_status"))
+        _text("confidence", snapshot.get("confidence"))
+        _text("publication_result", snapshot.get("publication_result"))
+    elif code == "CASH_LIQUIDITY_WALLET":
+        _text("product", "CASH_LIQUIDITY")
+        _text("wallet_scope", snapshot.get("methodology_scope"))
+        _text("wallet_coverage", snapshot.get("wallet_coverage"))
+        _text("liquidity_component_status", snapshot.get("liquidity_component_status"))
+        _text("capture_component_status", snapshot.get("capture_component_status"))
+        _number("relevant_cash_pool", snapshot.get("relevant_cash_pool"))
+        _number("forecast_bankable_liquidity_share", snapshot.get("forecast_bankable_liquidity_share"))
+        _number("addressable_notional", snapshot.get("addressable_liquidity_notional"))
+        _number("captured_notional", snapshot.get("comparable_capture_notional"))
+        _number("notional_penetration", snapshot.get("deposit_penetration"))
+        _number("raw_wallet_gap", snapshot.get("raw_deposit_gap"))
+        _number("positive_wallet_gap", snapshot.get("positive_deposit_gap"))
+        _text("capture_comparability_status", snapshot.get("capture_comparability_status"))
+        _text("liquidity_time_basis", snapshot.get("liquidity_time_basis"))
+        _text("confidence", snapshot.get("confidence"))
+        _text("publication_result", snapshot.get("publication_result"))
+
+
+def _db_stage1e_wallet_require_existing_active_cycle(conn: _DBConnection):
+    rows = conn.execute("SELECT * FROM review_cycle WHERE status='Active' ORDER BY id DESC").fetchall()
+    if len(rows) != 1:
+        raise ProductionWalletGovernanceError(f"ACTIVE_REVIEW_CYCLE_REQUIRED:found={len(rows)}")
+    return rows[0]
+
+
+def _db_stage1e_wallet_lock_source_state(conn: _DBConnection, relationship_db_id: int, methodology_db_id: int, fingerprint: str):
+    if conn.backend == "postgresql":
+        conn.execute("SELECT pg_advisory_xact_lock(hashtext(?))", (f"wallet-source:{relationship_db_id}:{methodology_db_id}:{fingerprint}",))
+
+
+def _db_stage1e_wallet_by_source_fingerprint(conn: _DBConnection, relationship_db_id: int, methodology_db_id: int, fingerprint: str):
+    return conn.execute(
+        """SELECT * FROM wallet_assessment
+           WHERE relationship_id=? AND methodology_id=? AND source_state_fingerprint=?
+           ORDER BY id DESC LIMIT 1""",
+        (relationship_db_id, methodology_db_id, fingerprint),
+    ).fetchone()
+
+
+def _stage1e_wallet_governance_context(
+    *,
+    relationship_public_id: str,
+    methodology_code: str,
+    methodology_version: str,
+    effective_date: str | None,
+    currency: str | None,
+    geographic_scope: str,
+    time_horizon: str,
+    evidence: list[EvidenceItem],
+    assessment_snapshot: dict,
+    calculations: list[CalculationRecord],
+    assessment_input_state: dict | None = None,
+) -> dict:
+    source_state = {
+        "relationship_id": relationship_public_id,
+        "methodology_code": methodology_code,
+        "methodology_version": methodology_version,
+        "effective_date": effective_date,
+        "currency": currency,
+        "geographic_scope": geographic_scope,
+        "time_horizon": time_horizon,
+        "evidence": _stage1e_wallet_evidence_state(evidence),
+        "calculations": _stage1e_wallet_calculation_state(calculations),
+        "assessment_input_state": assessment_input_state,
+        "assessment_snapshot": assessment_snapshot,
+    }
+    fingerprint = hashlib.sha256(_stage1e_wallet_canonical_json(source_state).encode("utf-8")).hexdigest()
+    return {
+        "hardening_version": E6_8J1A4_HARDENING_VERSION,
+        "source_state_fingerprint": fingerprint,
+        "source_state": source_state,
+        "production_evidence_preflight": "PASS",
+        "evidence_value_consistency": "PASS",
+        "source_freshness_preflight": "PASS",
+        "test_isolation_preflight": "PASS",
+    }
+
+
+def _db_stage1e2_create_governed_structural_assessment(
+    company: str,
+    assessment_input: StructuralLendingAssessmentInput,
+    evidence: list[EvidenceItem],
+    *,
+    effective_date: str,
+    currency: str,
+    geographic_scope: str = "Global",
+    time_horizon: str = "3Y",
+    actor: str = "EC-AI Production Onboarding",
+) -> dict:
+    """Create/reuse one production Structural Lending v1.0 source state."""
+    if assessment_input.test_only:
+        raise ProductionWalletGovernanceError("PRODUCTION_ASSESSMENT_CANNOT_BE_TEST_ONLY")
+    _stage1e_wallet_validate_production_evidence(evidence)
+    _stage1e2_validate_structural_evidence_consistency(
+        assessment_input, evidence, effective_date=effective_date, currency=currency,
+        geographic_scope=geographic_scope, time_horizon=time_horizon,
+    )
+    snapshot = _stage1e2_evaluate_structural_lending(assessment_input)
+    if snapshot.get("publication_result") != PublicationResult.PUBLISH.value:
+        raise ProductionWalletGovernanceError(f"STRUCTURAL_WALLET_NOT_PUBLISH_QUALIFIED:{snapshot.get('publication_result')}")
+    confidence, confidence_explanation = _stage1e2_overall_confidence(assessment_input, snapshot)
+    source_snapshot = dict(snapshot)
+    source_snapshot["confidence"] = confidence
+    source_snapshot["confidence_explanation"] = confidence_explanation
+    calculations = _stage1e2_build_calculation_records(assessment_input, snapshot, currency=currency)
+
+    conn = _db_connect()
+    try:
+        _db_stage1e_wallet_require_existing_active_cycle(conn)
+        rel = _db_relationship_row(conn, company)
+        relationship_public_id = rel["relationship_id"]
+    finally:
+        conn.close()
+
+    context = _stage1e_wallet_governance_context(
+        relationship_public_id=relationship_public_id,
+        methodology_code="STRUCTURAL_LENDING", methodology_version="1.0",
+        effective_date=effective_date, currency=currency, geographic_scope=geographic_scope, time_horizon=time_horizon,
+        evidence=evidence, assessment_snapshot=source_snapshot, calculations=calculations,
+        assessment_input_state=_stage1e2_structural_input_state(assessment_input),
+    )
+    return _db_stage1e2_create_structural_assessment(
+        company, assessment_input, evidence, effective_date=effective_date, currency=currency,
+        geographic_scope=geographic_scope, time_horizon=time_horizon, actor=actor,
+        governance_context=context,
+    )
+
+
+def _db_stage1e2b_create_governed_cash_assessment(
+    company: str,
+    evidence: list[EvidenceItem],
+    *,
+    effective_date: str,
+    geographic_scope: str = "Global",
+    time_horizon: str = "1Y",
+    actor: str = "EC-AI Production Onboarding",
+) -> dict:
+    """Create/reuse one production Cash & Liquidity Wallet v1.0 source state."""
+    _stage1e_wallet_validate_production_evidence(evidence)
+    snapshot, calculations = _stage1e2b_evaluate_cash_liquidity(evidence, test_only=False)
+    _stage1e2b_validate_cash_outer_scope(snapshot, evidence, effective_date=effective_date, geographic_scope=geographic_scope)
+    if snapshot.get("publication_result") != PublicationResult.PUBLISH.value:
+        raise ProductionWalletGovernanceError(f"CASH_WALLET_NOT_PUBLISH_QUALIFIED:{snapshot.get('publication_result')}")
+
+    conn = _db_connect()
+    try:
+        _db_stage1e_wallet_require_existing_active_cycle(conn)
+        rel = _db_relationship_row(conn, company)
+        relationship_public_id = rel["relationship_id"]
+    finally:
+        conn.close()
+
+    context = _stage1e_wallet_governance_context(
+        relationship_public_id=relationship_public_id,
+        methodology_code="CASH_LIQUIDITY_WALLET", methodology_version="1.0",
+        effective_date=effective_date, currency=snapshot.get("currency"), geographic_scope=geographic_scope, time_horizon=time_horizon,
+        evidence=evidence, assessment_snapshot=snapshot, calculations=calculations,
+        assessment_input_state=None,
+    )
+    return _db_stage1e2b_create_cash_assessment(
+        company, evidence, effective_date=effective_date, geographic_scope=geographic_scope,
+        time_horizon=time_horizon, test_only=False, actor=actor, governance_context=context,
+    )
+
+
+# =============================================================================
+# STAGE 1-E.6.8J.1A.4B — PRODUCTION WALLET GOVERNANCE INTEGRATION (READ-ONLY)
+# =============================================================================
+# Integration diagnostics deliberately do not publish, create, supersede,
+# migrate, seed, or promote any object. They report only on the connected DB.
+# This API can be called from a future controlled operational surface without
+# modifying locked Stage 1-C.10 workspaces or LEGACY Review authority.
+E6_8J1A4B_INTEGRATION_VERSION = "1.0"
+E6_8J1A4B_SUPPORTED = frozenset({
+    ("STRUCTURAL_LENDING", "1.0"),
+    ("CASH_LIQUIDITY_WALLET", "1.0"),
+})
+
+
+def _db_stage1e_wallet_integration_inventory(*, conn: _DBConnection | None = None) -> dict:
+    """Read-only assessment-by-assessment publication/E3 lineage inventory.
+
+    Does not treat existing historical published methodologies as production
+    ready. Every listed wallet has explicit governance / E3 reason codes.
+    """
+    owns_connection = conn is None
+    if owns_connection:
+        conn = _db_connect()
+    try:
+        cycle = conn.execute(
+            "SELECT review_cycle_id FROM review_cycle WHERE status='Active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        authority = _db_stage1e6_review_authority_mode(conn)
+        rows = conn.execute(
+            """SELECT wa.*, r.relationship_id AS relationship_public_id,
+                      r.name AS relationship_name,
+                      im.methodology_code, im.version AS methodology_version,
+                      im.status AS methodology_status
+               FROM wallet_assessment wa
+               JOIN relationship r ON r.id=wa.relationship_id
+               JOIN intelligence_methodology im ON im.id=wa.methodology_id
+               ORDER BY wa.id"""
+        ).fetchall()
+        items = []
+        for row in rows:
+            method_key = (str(row['methodology_code']), str(row['methodology_version']))
+            production_supported = method_key in E6_8J1A4B_SUPPORTED
+            issues = []
+            if not production_supported:
+                issues.append('UNSUPPORTED_PRODUCTION_METHODOLOGY')
+            if str(row['methodology_status']).upper() != 'ACTIVE':
+                issues.append('METHODOLOGY_NOT_ACTIVE')
+            if bool(row['test_only']):
+                issues.append('TEST_ONLY')
+            if row['status'] != 'PUBLISHED':
+                issues.append('NOT_PUBLISHED')
+            if row['publication_result'] != 'PUBLISH':
+                issues.append('PUBLICATION_GATE_NOT_PUBLISH')
+            if not row['source_state_fingerprint']:
+                issues.append('MISSING_HARDENED_SOURCE_FINGERPRINT')
+            try:
+                gate = json.loads(row['quality_gate_json'] or '{}')
+                if not isinstance(gate, dict):
+                    raise ValueError('non-object gate')
+            except (ValueError, TypeError):
+                gate = {}
+                issues.append('MALFORMED_QUALITY_GATE')
+            if gate.get('blocking_issues'):
+                issues.append('QUALITY_GATE_BLOCKING')
+            if production_supported and gate.get('production_publication_allowed') is not True:
+                issues.append('PRODUCTION_GATE_NOT_ALLOWED')
+
+            current = conn.execute(
+                """SELECT assessment_id FROM wallet_assessment
+                   WHERE relationship_id=? AND methodology_id=?
+                     AND geographic_scope=? AND time_horizon=? AND status='PUBLISHED'
+                   ORDER BY id DESC LIMIT 1""",
+                (row['relationship_id'], row['methodology_id'],
+                 row['geographic_scope'], row['time_horizon']),
+            ).fetchone()
+            if row['status'] == 'PUBLISHED' and (
+                current is None or current['assessment_id'] != row['assessment_id']
+            ):
+                issues.append('NOT_CURRENT_AUTHORITY')
+
+            # Re-run full persisted lineage validation for potentially eligible
+            # assessments, even though publication occurred in the past.
+            if not issues:
+                try:
+                    _db_stage1e_wallet_publication_preflight(conn, row)
+                except (ValueError, ProductionWalletGovernanceError) as exc:
+                    issues.append('PERSISTED_LINEAGE_PRECHECK_FAILED')
+                    # Diagnostic metadata is deliberately not duplicated in
+                    # the inventory; the preflight exception holds details.
+
+            if not issues:
+                try:
+                    wallet_input = _db_stage1e3_wallet_input(conn, row['assessment_id'])
+                    if not wallet_input.is_current:
+                        issues.append('E3_NOT_CURRENT')
+                except (ValueError, ProductionWalletGovernanceError):
+                    issues.append('E3_INPUT_CONTRACT_FAILED')
+
+            items.append({
+                'assessment_id': str(row['assessment_id']),
+                'relationship_id': str(row['relationship_public_id']),
+                'relationship': str(row['relationship_name']),
+                'methodology': f"{row['methodology_code']} {row['methodology_version']}",
+                'status': str(row['status']),
+                'test_only': bool(row['test_only']),
+                'production_integration_ready': not issues,
+                'reason_codes': issues,
+                'source_state_fingerprint': str(row['source_state_fingerprint'] or ''),
+            })
+
+        return {
+            'integration_version': E6_8J1A4B_INTEGRATION_VERSION,
+            'backend': conn.backend,
+            'active_review_cycle': cycle['review_cycle_id'] if cycle else None,
+            'review_authority': authority,
+            'assessment_count': len(items),
+            'production_integration_ready_count': sum(x['production_integration_ready'] for x in items),
+            'assessments': items,
+            'writes_performed': False,
+        }
+    finally:
+        if owns_connection:
+            conn.close()
+
+
+# END STAGE 1-E.6.8J.1A.4-A — PRODUCTION WALLET GOVERNANCE HARDENING RED-TEAM
+
 
 
 # =============================================================================
@@ -7112,16 +8069,20 @@ def _db_stage1e3_wallet_input(conn: _DBConnection, assessment_id: str) -> E3Wall
     if row is None:
         raise ValueError(f"Wallet assessment {assessment_id} not found.")
 
-    # Current means latest non-superseded assessment for the same relationship/methodology.
-    newer = conn.execute(
-        """SELECT 1
-           FROM wallet_assessment wa2
-           WHERE wa2.relationship_id=? AND wa2.methodology_id=?
-             AND wa2.id>? AND wa2.status<>'SUPERSEDED'
-           LIMIT 1""",
-        (row["relationship_id"], row["methodology_id"], row["id"]),
+    # E.6.8J.1A.4-A: only a PUBLISHED authority is current for E3.
+    # A newer DRAFT/VALIDATED candidate must not make the current published wallet stale.
+    current_row = conn.execute(
+        """SELECT assessment_id FROM wallet_assessment
+           WHERE relationship_id=? AND methodology_id=? AND geographic_scope=? AND time_horizon=?
+             AND status='PUBLISHED'
+           ORDER BY id DESC LIMIT 1""",
+        (row["relationship_id"], row["methodology_id"], row["geographic_scope"], row["time_horizon"]),
     ).fetchone()
-    is_current = newer is None and row["status"] != "SUPERSEDED"
+    is_current = bool(
+        row["status"] == "PUBLISHED"
+        and current_row is not None
+        and str(current_row["assessment_id"]) == str(row["assessment_id"])
+    )
 
     evidence_ids = tuple(_stage1e2_parse_json_list(row["evidence_ids_json"]))
     calculation_ids = tuple(_stage1e2_parse_json_list(row["calculation_ids_json"]))
@@ -7130,6 +8091,15 @@ def _db_stage1e3_wallet_input(conn: _DBConnection, assessment_id: str) -> E3Wall
     except Exception:
         qg = {}
     blocking = tuple(str(x) for x in (qg.get("blocking_issues") or []))
+
+    fingerprint = str(row["source_state_fingerprint"] or "").strip()
+    if fingerprint:
+        try:
+            source_state = json.loads(row["source_state_json"] or "{}")
+        except Exception as exc:
+            raise ValueError("Hardened WalletAssessment source state is malformed.") from exc
+        methodology_contract = {"methodology_code": row["methodology_code"], "version": row["methodology_version"]}
+        _stage1e_wallet_assert_row_matches_source_state(row, methodology_contract, source_state)
 
     methodology_code = row["methodology_code"]
     if methodology_code == "STRUCTURAL_LENDING":
@@ -7788,56 +8758,17 @@ def _db_stage1e3_8_create_or_reuse_validation_wallet() -> str:
     )
     assessment_id = created["Assessment ID"]
 
-    # The normal Stage 1-E.2 persistence path never auto-publishes. For this
-    # dedicated hidden fixture only, promote the already PUBLISH-qualified,
-    # non-test VALIDATED assessment to PUBLISHED after re-checking its gate.
+    # Red-team hardening: even the hidden E3.8 fixture uses the normal Wallet
+    # publication authority path; no direct PUBLISHED status bypass remains.
+    published = _db_stage1e_publish_assessment(
+        assessment_id, actor="E3.8 Validation Harness"
+    )
+    if published.get("Status") != "PUBLISHED":
+        raise ValueError("E3.8 validation WalletAssessment failed governed publication.")
     with _db_transaction() as conn:
-        row = conn.execute(
-            """SELECT wa.*, r.relationship_id AS relationship_public_id
-               FROM wallet_assessment wa
-               JOIN relationship r ON r.id=wa.relationship_id
-               WHERE wa.assessment_id=?""",
-            (assessment_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError("E3.8 validation WalletAssessment disappeared before publication.")
-        if row["relationship_public_id"] != E3_VALIDATION_RELATIONSHIP_ID:
-            raise ValueError("E3.8 validation publication refused outside hidden validation relationship.")
-        if bool(row["test_only"]):
-            raise ValueError("E3.8 validation source must be non-test to exercise the production eligibility gate.")
-        if row["status"] != "VALIDATED" or row["publication_result"] != "PUBLISH":
-            raise ValueError(
-                f"E3.8 validation source is not publication-qualified: "
-                f"{row['status']} / {row['publication_result']}."
-            )
-        qg = json.loads(row["quality_gate_json"] or "{}")
-        if not bool(qg.get("production_publication_allowed")):
-            raise ValueError("E3.8 validation source failed the underlying Wallet publication gate.")
-
-        now = _db_now()
         conn.execute(
-            """UPDATE wallet_assessment
-               SET status='PUBLISHED',published_at=?,published_by=?,publication_mode=?
-               WHERE assessment_id=?""",
-            (
-                now,
-                "E3.8 Validation Harness",
-                E3_VALIDATION_PUBLICATION_MODE,
-                assessment_id,
-            ),
-        )
-        _db_append_audit(
-            conn,
-            entity_type="WalletAssessment",
-            entity_id=assessment_id,
-            relationship_id=row["relationship_id"],
-            event_type="WALLET_ASSESSMENT_PUBLISHED",
-            actor="E3.8 Validation Harness",
-            payload={
-                "validation_fixture": True,
-                "publication_mode": E3_VALIDATION_PUBLICATION_MODE,
-                "methodology": "STRUCTURAL_LENDING 1.0",
-            },
+            "UPDATE wallet_assessment SET publication_mode=? WHERE assessment_id=?",
+            (E3_VALIDATION_PUBLICATION_MODE, assessment_id),
         )
 
     return assessment_id
@@ -21377,10 +22308,10 @@ def _db_validate_persistence_contract() -> dict:
         ).fetchone()["n"])
         checks["duplicate_current_wallet_assessments"] = int(conn.execute(
             """SELECT COUNT(*) AS n FROM (
-                   SELECT relationship_id,product,geographic_scope,time_horizon
+                   SELECT relationship_id,methodology_id,geographic_scope,time_horizon
                    FROM wallet_assessment
                    WHERE status='PUBLISHED'
-                   GROUP BY relationship_id,product,geographic_scope,time_horizon
+                   GROUP BY relationship_id,methodology_id,geographic_scope,time_horizon
                    HAVING COUNT(*) > 1
                ) x"""
         ).fetchone()["n"])
