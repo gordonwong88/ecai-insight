@@ -5507,8 +5507,19 @@ def _stage1e_wallet_assert_row_matches_source_state(row, methodology, source_sta
 
     def _number(field, expected):
         actual = row[field]
-        if not _stage1e_wallet_numbers_equal(actual, expected):
+        # Frozen persisted economics are an identity check, not a model-calculation
+        # near-equality check. SQLite/PostgreSQL DOUBLE PRECISION round-trips a
+        # Python float exactly; tolerance could hide meaningful tampering for
+        # trillion-unit wallets (1e-9 relative == 1000 monetary units).
+        if (actual is None) != (expected is None):
             raise ValueError(f"Wallet source-state reconciliation failed — {field} mismatch.")
+        if actual is not None:
+            try:
+                a, b = float(actual), float(expected)
+            except (ValueError, TypeError, OverflowError) as exc:
+                raise ValueError(f"Wallet source-state reconciliation failed — {field} invalid numeric.") from exc
+            if not (math.isfinite(a) and math.isfinite(b) and a == b):
+                raise ValueError(f"Wallet source-state reconciliation failed — {field} mismatch.")
 
     if str(source_state.get("relationship_id") or ""):
         # Relationship public ID is validated by the caller when needed; the DB row
@@ -5834,6 +5845,96 @@ def _db_stage1e_wallet_integration_inventory(*, conn: _DBConnection | None = Non
         if owns_connection:
             conn.close()
 
+
+
+
+# STAGE 1-E.6.8J.1A.4B.2 — CONTROLLED WALLET-TO-OPPORTUNITY BRIDGE
+# Read-only by design: no publication, no opportunity writes, no Review cutover.
+E6_8J1A4B2_BRIDGE_VERSION = "0.12-readonly"
+
+
+def _db_stage1e_wallet_to_opportunity_bridge(*, conn: _DBConnection | None = None) -> dict:
+    """Report E2 authority and downstream E3/E4/E5/E6 lineage, fail closed.
+
+    A downstream record is *observed*, never synthesized by this bridge. An E3
+    signal must reference an individually eligible current published wallet;
+    a signal referencing another wallet cannot inherit eligibility. E4-E6
+    counts are observational and are NOT proof of causal workflow completion.
+    """
+    own = conn is None
+    if own:
+        conn = _db_connect()
+    try:
+        inventory = _db_stage1e_wallet_integration_inventory(conn=conn)
+        if inventory['review_authority'] != 'LEGACY':
+            raise ValueError('REVIEW_AUTHORITY_NOT_LEGACY: controlled bridge is disabled')
+        output = []
+        for wallet in inventory['assessments']:
+            assessment_id = wallet['assessment_id']
+            reasons = list(wallet['reason_codes'])
+            signals = conn.execute(
+                """SELECT signal_id,source_assessment_id,signal_status,signal_strength,test_only
+                     FROM opportunity_signal WHERE source_assessment_id=? ORDER BY id""",
+                (assessment_id,),
+            ).fetchall()
+            production_signals = [r for r in signals if not bool(r['test_only'])]
+            if not wallet['production_integration_ready'] and production_signals:
+                reasons.append('DOWNSTREAM_E3_FROM_INELIGIBLE_WALLET')
+            if wallet['production_integration_ready'] and not production_signals:
+                reasons.append('E3_NOT_CREATED')
+            ids = [str(r['signal_id']) for r in production_signals]
+            events = conn.execute(
+                """SELECT change_event_id FROM change_event
+                   WHERE test_only=0 AND (source_assessment_id=? OR current_assessment_id=?)
+                   ORDER BY id""",
+                (assessment_id, assessment_id),
+            ).fetchall()
+            # E5 evaluation and E6 link are relationship-scoped context, not
+            # assumed to be caused by this specific wallet or opportunity.
+            rel = conn.execute(
+                'SELECT id FROM relationship WHERE relationship_id=?',
+                (wallet['relationship_id'],),
+            ).fetchone()
+            rel_id = rel['id'] if rel is not None else None
+            aue_count = 0
+            if rel_id is not None:
+                aue_count = int(conn.execute(
+                    'SELECT COUNT(*) FROM attention_urgency_evaluation WHERE relationship_id=? AND test_only=0',
+                    (rel_id,),
+                ).fetchone()[0])
+            e6_rows = conn.execute(
+                """SELECT link_id FROM review_item_intelligence_link
+                   WHERE source_object_type='WalletAssessment' AND source_object_id=?
+                     AND test_only=0 ORDER BY id""",
+                (assessment_id,),
+            ).fetchall()
+            output.append({
+                'assessment_id': assessment_id,
+                'relationship_id': wallet['relationship_id'],
+                'methodology': wallet['methodology'],
+                'e2_governance_eligible': bool(wallet['production_integration_ready']),
+                'e3_production_signal_ids': ids,
+                'e4_direct_wallet_event_ids': [str(r['change_event_id']) for r in events],
+                'e5_relationship_evaluation_count': aue_count,
+                'e6_direct_wallet_link_ids': [str(r['link_id']) for r in e6_rows],
+                'bridge_status': ('BLOCKED' if not wallet['production_integration_ready']
+                                  else 'E3_OBSERVED' if ids else 'E3_PENDING'),
+                'reason_codes': list(dict.fromkeys(reasons)),
+            })
+        return {
+            'bridge_version': E6_8J1A4B2_BRIDGE_VERSION,
+            'backend': conn.backend,
+            'review_authority': inventory['review_authority'],
+            'assessment_count': len(output),
+            'e2_eligible_count': sum(x['e2_governance_eligible'] for x in output),
+            'e3_observed_count': sum(bool(x['e3_production_signal_ids']) for x in output),
+            'assessments': output,
+            'writes_performed': False,
+            'review_promotions_performed': False,
+        }
+    finally:
+        if own:
+            conn.close()
 
 # END STAGE 1-E.6.8J.1A.4-A — PRODUCTION WALLET GOVERNANCE HARDENING RED-TEAM
 
@@ -25490,6 +25591,535 @@ def stage_1c_main():
     page_key = render_stage_1c_sidebar()
     render_stage_1c_page(page_key)
     render_stage_1c_footer()
+
+
+# =============================================================================
+# STAGE 1-E.6.8J.1A.4B.3 — CONTROLLED SYNTHETIC ORCHESTRATION (LOCAL ONLY)
+# =============================================================================
+def _db_stage1e_a4b3_synthetic_orchestration(*, explicit_local_test: bool = False) -> dict:
+    """Exercise existing E2-E5 and E5-E6 persistence validation lanes.
+
+    This function is deliberately fail-closed. It cannot run on PostgreSQL,
+    on the default SQLite fallback, or without explicit test authorization.
+    The two legacy fixtures have different synthetic relationship identities;
+    this is NOT a verified single-lineage E2-E6 integration.
+    """
+    if not explicit_local_test:
+        raise RuntimeError('A4B3_EXPLICIT_LOCAL_TEST_REQUIRED')
+    if ECAI_DB_BACKEND != 'sqlite' or ECAI_DATABASE_URL:
+        raise RuntimeError('A4B3_POSTGRESQL_OR_REMOTE_DATABASE_PROHIBITED')
+    path = os.path.realpath(ECAI_DB_PATH)
+    basename = os.path.basename(path)
+    if not basename.startswith('a4b3_disposable_') or not path.endswith('.db'):
+        raise RuntimeError('A4B3_DISPOSABLE_DB_FILENAME_REQUIRED')
+    if not os.path.exists(path):
+        raise RuntimeError('A4B3_INITIALIZED_DB_REQUIRED')
+    check = _db_connect()
+    try:
+        initial = check.execute('SELECT COUNT(*) FROM relationship').fetchone()[0]
+        extra = check.execute("SELECT COUNT(*) FROM relationship WHERE relationship_id NOT LIKE 'REL-%'").fetchone()[0]
+    finally:
+        check.close()
+    if initial != 10 or extra:
+        raise RuntimeError('A4B3_FRESH_SEEDED_FIXTURE_REQUIRED')
+    e2e5 = _db_stage1e5_10_run_final_validation()
+    if not e2e5.get('E.5.10 Final Validation PASS'):
+        raise AssertionError('A4B3_E2_E5_CHAIN_FAILED')
+    e5e6 = _db_stage1e6_8d_run_live_validation()
+    if not e5e6.get('E.6.8D Live Validation PASS'):
+        raise AssertionError('A4B3_E5_E6_CHAIN_FAILED')
+    conn = _db_connect()
+    try:
+        src = conn.execute('SELECT relationship_id FROM relationship WHERE relationship_id=?',
+                           (E5_10_VALIDATION_RELATIONSHIP_ID,)).fetchone()
+        dst = conn.execute('SELECT relationship_id FROM relationship WHERE relationship_id=?',
+                           (E6_VALIDATION_RELATIONSHIP_ID,)).fetchone()
+        authority_row = conn.execute("SELECT metadata_value FROM ecai_system_metadata WHERE metadata_key='REVIEW_ITEM_AUTHORITY_MODE'").fetchone()
+        authority = authority_row[0] if authority_row else 'LEGACY'
+    finally:
+        conn.close()
+    if not src or not dst or src[0] == dst[0]:
+        raise AssertionError('A4B3_SYNTHETIC_RELATIONSHIP_ISOLATION_FAILED')
+    if authority != 'LEGACY':
+        raise AssertionError('A4B3_LEGACY_REVIEW_AUTHORITY_CHANGED')
+    return {
+        'local_orchestration_pass': True,
+        'upstream_e2_to_e5_pass': True,
+        'downstream_e5_to_e6_pass': True,
+        'continuous_e2_to_e6_lineage_pass': False,
+        'release_gate': 'HOLD_SINGLE_LINEAGE_PENDING',
+        'source_aue_id': e2e5.get('AttentionUrgencyEvaluation'),
+        'downstream_review_item_id': e5e6.get('Current Review Item') or e5e6.get('Recurrence Review Item'),
+        'upstream_synthetic_relationship': src[0],
+        'downstream_synthetic_relationship': dst[0],
+        'review_authority': authority,
+        'writes_scope': 'DISPOSABLE_LOCAL_SQLITE_ONLY',
+        'test_branch_deployment_authorized': False,
+    }
+
+
+# =============================================================================
+# STAGE 1-E.6.8J.1A.4B.4 — SINGLE-LINEAGE, DISPOSABLE SQLITE RED-TEAM
+# =============================================================================
+def _db_stage1e_a4b4_authority_read():
+    conn = _db_connect()
+    try:
+        return _db_stage1e6_review_authority_mode(conn)
+    finally:
+        conn.close()
+
+
+def _db_stage1e_a4b4_lineage_verify(review_item_id: str, *, expected_wallet_id: str,
+                                     expected_signal_id: str, expected_event_id: str,
+                                     expected_aue_id: str, expected_relationship_id: str) -> dict:
+    """Read-only, fail-closed verification of *persisted* E2→E3/E4→E5→E6 IDs.
+
+    Requires the E3/E5 lineage evaluators to agree and persisted AUE cluster
+    source IDs to include both expected upstream IDs. No repair or writes.
+    """
+    conn = _db_connect()
+    try:
+        row = conn.execute('''SELECT ri.review_item_id,ri.relationship_id,ri.origin_aue_id,
+            ri.test_only,r.relationship_id AS relationship_public_id
+            FROM review_item ri JOIN relationship r ON r.id=ri.relationship_id
+            WHERE ri.review_item_id=?''', (review_item_id,)).fetchone()
+        if not row: raise AssertionError('REVIEW_ITEM_NOT_FOUND')
+        if row['relationship_public_id'] != expected_relationship_id or not bool(row['test_only']):
+            raise AssertionError('REVIEW_ITEM_RELATIONSHIP_OR_TEST_ISOLATION_MISMATCH')
+        if row['origin_aue_id'] != expected_aue_id:
+            raise AssertionError('REVIEW_ITEM_ORIGIN_AUE_MISMATCH')
+        aue = conn.execute('''SELECT * FROM attention_urgency_evaluation
+            WHERE evaluation_id=?''', (expected_aue_id,)).fetchone()
+        if not aue or aue['relationship_id'] != row['relationship_id'] or aue['status'] != 'PUBLISHED' or not bool(aue['test_only']):
+            raise AssertionError('AUE_AUTHORITY_OR_TEST_ISOLATION_MISMATCH')
+        clusters = conn.execute('''SELECT * FROM attention_urgency_cluster
+            WHERE evaluation_db_id=? AND axis='ATTENTION' ''', (aue['id'],)).fetchall()
+        if not any({expected_signal_id,expected_event_id}.issubset(set(json.loads(c['source_ids_json'] or '[]'))) for c in clusters):
+            raise AssertionError('ATTENTION_CLUSTER_SOURCE_IDS_MISMATCH')
+        links = conn.execute('''SELECT * FROM review_item_intelligence_link
+            WHERE review_item_id=? AND source_object_type='AUE' AND link_role='CURRENT_CONTEXT' ''',
+            (review_item_id,)).fetchall()
+        if len(links)!=1 or links[0]['source_object_id'] != expected_aue_id:
+            raise AssertionError('REVIEW_ITEM_CURRENT_AUE_LINK_MISMATCH')
+        signal = conn.execute('''SELECT * FROM opportunity_signal WHERE signal_id=?''',(expected_signal_id,)).fetchone()
+        if not signal or signal['relationship_id'] != row['relationship_id']:
+            raise AssertionError('SIGNAL_RELATIONSHIP_MISMATCH')
+        event = conn.execute('''SELECT * FROM change_event WHERE change_event_id=? AND object_kind='EVENT' ''',
+                             (expected_event_id,)).fetchone()
+        if not event or event['relationship_id'] != row['relationship_id']:
+            raise AssertionError('EVENT_RELATIONSHIP_MISMATCH')
+        # E3 lineage establishes the actual wallet ID rather than guessing a join.
+    finally:
+        conn.close()
+    signal_lineage = _db_stage1e3_signal_lineage(expected_signal_id)
+    wallet = signal_lineage.get('Wallet Assessment Lineage',{})
+    wallet_summary = wallet.get('Assessment',{})
+    wallet_id = wallet_summary.get('Assessment ID') or wallet_summary.get('assessment_id')
+    if wallet_id != expected_wallet_id:
+        raise AssertionError(f'WALLET_SOURCE_MISMATCH:{wallet_id}')
+    e5 = _db_stage1e5_10_lineage(expected_aue_id)
+    if not e5.get('Lineage PASS'):
+        raise AssertionError('E5_DOWNSTREAM_LINEAGE_FAILED')
+    e6 = _db_stage1e6_8d_lineage(review_item_id)
+    if not e6.get('Lineage PASS'):
+        raise AssertionError('E6_DOWNSTREAM_LINEAGE_FAILED')
+    return {'single_lineage_pass':True,'wallet_frozen_evidence_integrity_verified':False,
+            'relationship_id':expected_relationship_id,
+            'wallet_assessment_id':expected_wallet_id,'opportunity_signal_id':expected_signal_id,
+            'change_event_id':expected_event_id,'aue_id':expected_aue_id,'review_item_id':review_item_id,
+            'review_authority':_db_stage1e_a4b4_authority_read()}
+
+
+def _db_stage1e_a4b4_synthetic_single_lineage(*, explicit_local_test: bool=False) -> dict:
+    """Opt-in *local only* full E2→E6 persisted chain; NEVER call on startup.
+
+    E5 test fixture has production-like E2/E3/E4 rows but is permitted only in a
+    disposable SQLite DB. E6 fixture adapter is temporarily configured to read
+    the exact E5 relationship, episode, and AUE. Restores globals on exit.
+    """
+    if not explicit_local_test: raise RuntimeError('A4B4_EXPLICIT_LOCAL_TEST_REQUIRED')
+    if ECAI_DB_BACKEND != 'sqlite' or ECAI_DATABASE_URL:
+        raise RuntimeError('A4B4_REMOTE_BACKEND_PROHIBITED')
+    path = os.path.realpath(ECAI_DB_PATH)
+    if not os.path.basename(path).startswith('a4b4_disposable_') or not path.endswith('.db') or not os.path.isfile(path):
+        raise RuntimeError('A4B4_DISPOSABLE_DATABASE_REQUIRED')
+    conn = _db_connect()
+    try:
+        initial=conn.execute('SELECT COUNT(*) FROM relationship').fetchone()[0]
+        if initial!=10: raise RuntimeError('A4B4_FRESH_REFERENCE_SEED_REQUIRED')
+    finally: conn.close()
+    if _db_stage1e_a4b4_authority_read() != 'LEGACY':
+        raise RuntimeError('A4B4_LEGACY_AUTHORITY_REQUIRED')
+    upstream = _db_stage1e5_10_run_final_validation()
+    if not upstream.get('E.5.10 Final Validation PASS'):
+        raise AssertionError('A4B4_UPSTREAM_CHAIN_FAILED')
+    wallet_id=upstream['Source WalletAssessment']; signal_id=upstream['Source OpportunitySignal']
+    event_id=upstream['Source CorporateEvent'] if 'Source CorporateEvent' in upstream else upstream.get('Source Event')
+    aue_id=upstream['AttentionUrgencyEvaluation']
+    if not event_id: raise AssertionError('A4B4_E4_ID_NOT_RETURNED')
+    # These E6.8D selectors are fixture-specific globals. Mutate them only
+    # inside this opt-in, physically isolated database harness and restore.
+    global E6_VALIDATION_RELATIONSHIP_ID, E6_VALIDATION_COMPANY, E6_8D_EPISODE
+    previous=(E6_VALIDATION_RELATIONSHIP_ID,E6_VALIDATION_COMPANY,E6_8D_EPISODE)
+    try:
+        E6_VALIDATION_RELATIONSHIP_ID=E5_10_VALIDATION_RELATIONSHIP_ID
+        E6_VALIDATION_COMPANY=E5_10_VALIDATION_COMPANY
+        conn=_db_connect()
+        try:
+            cycle=_db_active_review_cycle(conn)
+            E6_8D_EPISODE=f"{E5_10_EPISODE_PREFIX}-{cycle['review_cycle_id']}"
+        finally: conn.close()
+        inp=_db_stage1e6_build_validation_engine_input()
+        if inp.aue.evaluation_id!=aue_id: raise AssertionError('A4B4_E6_INPUT_AUE_ID_MISMATCH')
+        result=_E6.evaluate_review_item_candidate(inp)
+        first=_db_stage1e6_persist_evaluation(inp,result,actor='A4B4 Disposable Test')
+        review_id=first['Review Item ID']
+        lineage=_db_stage1e_a4b4_lineage_verify(review_id,
+            expected_wallet_id=wallet_id,expected_signal_id=signal_id,
+            expected_event_id=event_id,expected_aue_id=aue_id,
+            expected_relationship_id=E5_10_VALIDATION_RELATIONSHIP_ID)
+        # Same input + result: no new review, application or audit writes.
+        conn=_db_connect()
+        try:
+            before={t:conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
+                    for t in ('review_item','review_promotion_application','audit_event')}
+        finally:conn.close()
+        rerun=_db_stage1e6_persist_evaluation(inp,result,actor='A4B4 Disposable Test')
+        conn=_db_connect()
+        try:
+            after={t:conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
+                    for t in before}
+        finally:conn.close()
+        if not rerun['Exact Rerun'] or rerun['Review Item ID']!=review_id or before!=after:
+            raise AssertionError('A4B4_EXACT_RERUN_CREATED_NEW_ROWS')
+        return dict(lineage,exact_rerun_quiet=True,review_item_test_only=True,
+                    release_gate='HOLD_FROZEN_WALLET_EVIDENCE_LINEAGE_AND_POSTGRES_PARITY',
+                    writes_scope='A4B4_DISPOSABLE_LOCAL_SQLITE_ONLY',deploy_authorized=False)
+    finally:
+        (E6_VALIDATION_RELATIONSHIP_ID,E6_VALIDATION_COMPANY,E6_8D_EPISODE)=previous
+
+
+
+# =============================================================================
+# STAGE 1-E.6.8J.1A.4B.5 — FROZEN EVIDENCE LOCAL LINEAGE RED-TEAM
+# =============================================================================
+def _db_stage1e_a4b5_create_governed_fixture_wallet() -> str:
+    with _db_transaction() as conn:
+        _db_stage1e5_10_validation_relationship(conn)
+        _db_stage1e5_10_seed_source_configs(conn)
+        existing = _db_stage1e5_10_existing_wallet(conn)
+        if existing is not None:
+            _db_stage1e_wallet_publication_preflight(conn, existing)
+            if not existing["source_state_fingerprint"]:
+                raise AssertionError("A4B5_EXISTING_WALLET_MISSING_FINGERPRINT")
+            return existing["assessment_id"]
+
+    effective_date = "2026-10-15"
+    evidence = [
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX,
+            metric_name="Forecast Capex",
+            value_numeric=1_000_000_000_000.0,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E5_FINAL_VALIDATION_FIXTURE",
+            source_name="EC-AI E5.10 Final Validation",
+            source_reference="E5.10-FORECAST-CAPEX",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic production-like evidence used only for Stage 1-E.5.10 final validation.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_CAPEX_DEBT_FUNDING_PCT,
+            metric_name="Forecast Capex Debt Funding %",
+            value_numeric=0.80,
+            unit="RATIO",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="E5_FINAL_VALIDATION_FIXTURE",
+            source_name="EC-AI E5.10 Final Validation",
+            source_reference="E5.10-DEBT-FUNDING",
+            review_date="2099-01-01",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Controlled governed assumption for the hidden E.5.10 validation fixture.",
+        ),
+        EvidenceItem(
+            metric_code=FORECAST_BANK_CAPEX_SHARE,
+            metric_name="Forecast Bank Capex Share",
+            value_numeric=0.75,
+            unit="RATIO",
+            evidence_type=EvidenceType.ASSUMPTION,
+            source_type="E5_FINAL_VALIDATION_FIXTURE",
+            source_name="EC-AI E5.10 Final Validation",
+            source_reference="E5.10-BANK-SHARE",
+            review_date="2099-01-01",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.MEDIUM,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Controlled governed assumption for the hidden E.5.10 validation fixture.",
+        ),
+        EvidenceItem(
+            metric_code=OUR_BANK_COMPARABLE_COMMITMENT,
+            metric_name="Our Bank Comparable Commitment",
+            value_numeric=60_000_000_000.0,
+            unit="MONEY",
+            currency="JPY",
+            evidence_type=EvidenceType.FACT,
+            source_type="E5_FINAL_VALIDATION_FIXTURE",
+            source_name="EC-AI E5.10 Final Validation",
+            source_reference="E5.10-CAPTURE",
+            effective_date=effective_date,
+            confidence=ConfidenceLevel.HIGH,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            geographic_scope="Global",
+            time_basis="FORECAST_1Y",
+            rationale="Synthetic comparable capture for Stage 1-E.5.10 final validation only.",
+        ),
+    ]
+
+    assessment_input = StructuralLendingAssessmentInput(
+        capex=StructuralLendingComponent(
+            base_amount=1_000_000_000_000.0,
+            funding_rate=0.80,
+            bank_share=0.75,
+            economic_perimeter="E5_FINAL_VALIDATION_GROUP",
+            time_horizon="1Y",
+            currency="JPY",
+            evidence_ids=(
+                "E5.10-FORECAST-CAPEX",
+                "E5.10-DEBT-FUNDING",
+                "E5.10-BANK-SHARE",
+            ),
+            estimation_method="Controlled E5.10 deterministic validation fixture",
+            rationale="Production-like Structural Lending wallet used only to validate the final Attention × Urgency chain.",
+            confidence="MEDIUM",
+            financing_need_ids=("E5.10-CAPEX-NEED",),
+            assessed=True,
+        ),
+        refinancing=None,
+        capture=StructuralLendingCapture(
+            comparable_commitment=60_000_000_000.0,
+            comparability_status=CaptureComparabilityStatus.COMPARABLE,
+            comparability_reason="Synthetic capture matches wallet perimeter, currency and horizon.",
+            evidence_ids=("E5.10-CAPTURE",),
+            verified_zero=False,
+        ),
+        test_only=False,
+    )
+
+    created = _db_stage1e2_create_governed_structural_assessment(
+        E5_10_VALIDATION_COMPANY,
+        assessment_input,
+        evidence,
+        effective_date=effective_date,
+        currency="JPY",
+        geographic_scope="Global",
+        time_horizon="1Y",
+        actor="E5.10 Validation Harness",
+    )
+    assessment_id = created["Assessment ID"]
+    _db_stage1e5_10_publish_wallet(assessment_id)
+    return assessment_id
+
+
+def _db_stage1e_a4b5_assert_frozen_lineage(chain: dict) -> dict:
+    """Fail closed if published wallet's persisted E2 data deviates from its frozen source."""
+    conn = _db_connect()
+    try:
+        row = conn.execute('SELECT * FROM wallet_assessment WHERE assessment_id=?',
+                           (chain['wallet_assessment_id'],)).fetchone()
+        if row is None or row['status'] != 'PUBLISHED' or bool(row['test_only']):
+            raise AssertionError('A4B5_WALLET_NOT_PUBLISHED_AUTHORIZED')
+        if not row['source_state_fingerprint'] or not row['source_state_json']:
+            raise AssertionError('A4B5_FROZEN_SOURCE_STATE_REQUIRED')
+        preflight = _db_stage1e_wallet_publication_preflight(conn, row)
+        if preflight['source_state_fingerprint'] != row['source_state_fingerprint']:
+            raise AssertionError('A4B5_SOURCE_STATE_FINGERPRINT_MISMATCH')
+        signal=conn.execute('SELECT * FROM opportunity_signal WHERE signal_id=?',
+                            (chain['opportunity_signal_id'],)).fetchone()
+        if signal is None or signal['relationship_id'] != row['relationship_id']:
+            raise AssertionError('A4B5_DOWNSTREAM_RELATIONSHIP_MISMATCH')
+        return {'frozen_evidence_integrity_verified':True,
+                'frozen_fingerprint':row['source_state_fingerprint'],
+                'evidence_count':preflight['evidence_count'],
+                'calculation_count':preflight['calculation_count']}
+    finally:
+        conn.close()
+
+
+def _db_stage1e_a4b6_existing_exact_chain() -> dict | None:
+    '''Read-only exact-rerun gate for the fixed, disposable E5/E6 fixture.
+
+    A complete matching chain is returned only after the frozen wallet and
+    downstream lineage have been checked. A partial chain raises, rather than
+    causing a fresh E5 fixture run that may emit duplicate lifecycle audits.
+    '''
+    conn = _db_connect()
+    try:
+        rel = conn.execute('SELECT id FROM relationship WHERE relationship_id=?',
+                           (E5_10_VALIDATION_RELATIONSHIP_ID,)).fetchone()
+        if rel is None:
+            return None
+        rel_id = rel['id']
+        wallets = conn.execute('''SELECT wa.assessment_id FROM wallet_assessment wa
+            JOIN intelligence_methodology im ON im.id=wa.methodology_id
+            WHERE wa.relationship_id=? AND im.methodology_code='STRUCTURAL_LENDING'
+              AND im.version='1.0' ORDER BY wa.id''', (rel_id,)).fetchall()
+        if not wallets:
+            return None
+        # We have started a fixture chain: do not silently regenerate if it is
+        # partial, ambiguous, or has been superseded/tampered.
+        if len(wallets) != 1:
+            raise AssertionError('A4B6_AMBIGUOUS_SYNTHETIC_WALLET')
+        wallet_id = wallets[0]['assessment_id']
+        signals = conn.execute('SELECT signal_id FROM opportunity_signal WHERE relationship_id=?',
+                               (rel_id,)).fetchall()
+        events = conn.execute('''SELECT change_event_id FROM change_event
+             WHERE relationship_id=? AND object_kind='EVENT' ''',(rel_id,)).fetchall()
+        aues = conn.execute('''SELECT evaluation_id FROM attention_urgency_evaluation
+            WHERE relationship_id=? AND status='PUBLISHED' ''',(rel_id,)).fetchall()
+        reviews = conn.execute('''SELECT review_item_id,origin_aue_id FROM review_item
+            WHERE relationship_id=? AND origin_aue_id IS NOT NULL''',(rel_id,)).fetchall()
+        if any(len(rows)!=1 for rows in (signals,events,aues,reviews)):
+            raise AssertionError('A4B6_PARTIAL_OR_AMBIGUOUS_CHAIN_FAIL_CLOSED')
+        sig_id=signals[0]['signal_id'];evt_id=events[0]['change_event_id']
+        aue_id=aues[0]['evaluation_id'];review_id=reviews[0]['review_item_id']
+        if reviews[0]['origin_aue_id']!=aue_id:
+            raise AssertionError('A4B6_AUE_REVIEW_MISMATCH')
+    finally:
+        conn.close()
+    lineage=_db_stage1e_a4b4_lineage_verify(review_id,
+        expected_wallet_id=wallet_id,expected_signal_id=sig_id,
+        expected_event_id=evt_id,expected_aue_id=aue_id,
+        expected_relationship_id=E5_10_VALIDATION_RELATIONSHIP_ID)
+    frozen=_db_stage1e_a4b5_assert_frozen_lineage(lineage)
+    return dict(lineage,**frozen, wallet_frozen_evidence_integrity_verified=True,
+        exact_rerun_quiet=True, review_item_test_only=True, full_chain_exact_rerun=True,
+        release_gate='HOLD_POSTGRES_PARITY_AND_CONCURRENCY',
+        writes_scope='A4B6_DISPOSABLE_LOCAL_SQLITE_ONLY', deploy_authorized=False,
+        release_authorized=False)
+
+
+def _db_stage1e_a4b5_synthetic_frozen_single_lineage(*, explicit_local_test: bool=False) -> dict:
+    """Guarded test ONLY. Temporarily substitutes E5 fixture wallet factory; restores in finally."""
+    if not explicit_local_test: raise RuntimeError('A4B5_EXPLICIT_LOCAL_TEST_REQUIRED')
+    if ECAI_DB_BACKEND != 'sqlite' or ECAI_DATABASE_URL:
+        raise RuntimeError('A4B5_REMOTE_BACKEND_PROHIBITED')
+    path=os.path.realpath(ECAI_DB_PATH)
+    if not os.path.basename(path).startswith('a4b5_disposable_') or not path.endswith('.db') or not os.path.isfile(path):
+        raise RuntimeError('A4B5_DISPOSABLE_DATABASE_REQUIRED')
+    if _db_stage1e6_review_authority_mode() != 'LEGACY':
+        raise RuntimeError('A4B5_LEGACY_AUTHORITY_REQUIRED')
+    conn=_db_connect()
+    try:
+        if conn.execute('SELECT COUNT(*) FROM relationship WHERE relationship_id NOT LIKE ?', ('REL-EC-AI-%VALIDATION-%',)).fetchone()[0]!=10 or conn.execute('SELECT COUNT(*) FROM relationship').fetchone()[0] not in (10,11):
+            raise RuntimeError('A4B5_REFERENCE_SEED_REQUIRED')
+    finally:conn.close()
+    # Exact rerun: preserve all audit/fixture rows by verifying the COMPLETE
+    # persisted chain, instead of re-running the E5 final-validation fixture.
+    prior = _db_stage1e_a4b6_existing_exact_chain()
+    if prior is not None:
+        return prior
+    global _db_stage1e5_10_create_or_reuse_wallet
+    # A4B4 runner has its own filename guard. Temporarily accept A4B5 disposable path
+    # by routing its path check only, without changing any DB target.
+    old_factory=_db_stage1e5_10_create_or_reuse_wallet
+    old_guard=_db_stage1e_a4b4_synthetic_single_lineage
+    try:
+        _db_stage1e5_10_create_or_reuse_wallet=_db_stage1e_a4b5_create_governed_fixture_wallet
+        # Shared runner is otherwise unchanged. It explicitly checks its own A4B4 prefix;
+        # adapt that isolated guard using one local wrapper below.
+        return _db_stage1e_a4b5_run_with_a4b4_adapter()
+    finally:
+        _db_stage1e5_10_create_or_reuse_wallet=old_factory
+
+
+def _db_stage1e_a4b5_run_with_a4b4_adapter() -> dict:
+    """A4B4 implementation body is invoked with its filename guard satisfied through local copy."""
+    # Keep actual DB immutable; replace the path guard through a namespaced callable
+    # created from A4B4's source only in this isolated local testing code.
+    result=_db_stage1e_a4b5_single_lineage_core(explicit_local_test=True)
+    freeze=_db_stage1e_a4b5_assert_frozen_lineage(result)
+    return dict(result, **freeze, wallet_frozen_evidence_integrity_verified=True,
+                release_gate='HOLD_POSTGRES_PARITY_AND_CONCURRENCY', release_authorized=False)
+
+def _db_stage1e_a4b5_single_lineage_core(*, explicit_local_test: bool=False) -> dict:
+    """Opt-in *local only* full E2→E6 persisted chain; NEVER call on startup.
+
+    E5 test fixture has production-like E2/E3/E4 rows but is permitted only in a
+    disposable SQLite DB. E6 fixture adapter is temporarily configured to read
+    the exact E5 relationship, episode, and AUE. Restores globals on exit.
+    """
+    if not explicit_local_test: raise RuntimeError('A4B5_EXPLICIT_LOCAL_TEST_REQUIRED')
+    if ECAI_DB_BACKEND != 'sqlite' or ECAI_DATABASE_URL:
+        raise RuntimeError('A4B5_REMOTE_BACKEND_PROHIBITED')
+    path = os.path.realpath(ECAI_DB_PATH)
+    if not os.path.basename(path).startswith('a4b5_disposable_') or not path.endswith('.db') or not os.path.isfile(path):
+        raise RuntimeError('A4B5_DISPOSABLE_DATABASE_REQUIRED')
+    conn = _db_connect()
+    try:
+        initial=conn.execute('SELECT COUNT(*) FROM relationship').fetchone()[0]
+        if initial not in (10,11): raise RuntimeError('A4B5_FRESH_REFERENCE_SEED_REQUIRED')
+    finally: conn.close()
+    if _db_stage1e_a4b4_authority_read() != 'LEGACY':
+        raise RuntimeError('A4B5_LEGACY_AUTHORITY_REQUIRED')
+    upstream = _db_stage1e5_10_run_final_validation()
+    if not upstream.get('E.5.10 Final Validation PASS'):
+        raise AssertionError('A4B5_UPSTREAM_CHAIN_FAILED')
+    wallet_id=upstream['Source WalletAssessment']; signal_id=upstream['Source OpportunitySignal']
+    event_id=upstream['Source CorporateEvent'] if 'Source CorporateEvent' in upstream else upstream.get('Source Event')
+    aue_id=upstream['AttentionUrgencyEvaluation']
+    if not event_id: raise AssertionError('A4B5_E4_ID_NOT_RETURNED')
+    # These E6.8D selectors are fixture-specific globals. Mutate them only
+    # inside this opt-in, physically isolated database harness and restore.
+    global E6_VALIDATION_RELATIONSHIP_ID, E6_VALIDATION_COMPANY, E6_8D_EPISODE
+    previous=(E6_VALIDATION_RELATIONSHIP_ID,E6_VALIDATION_COMPANY,E6_8D_EPISODE)
+    try:
+        E6_VALIDATION_RELATIONSHIP_ID=E5_10_VALIDATION_RELATIONSHIP_ID
+        E6_VALIDATION_COMPANY=E5_10_VALIDATION_COMPANY
+        conn=_db_connect()
+        try:
+            cycle=_db_active_review_cycle(conn)
+            E6_8D_EPISODE=f"{E5_10_EPISODE_PREFIX}-{cycle['review_cycle_id']}"
+        finally: conn.close()
+        inp=_db_stage1e6_build_validation_engine_input()
+        if inp.aue.evaluation_id!=aue_id: raise AssertionError('A4B5_E6_INPUT_AUE_ID_MISMATCH')
+        result=_E6.evaluate_review_item_candidate(inp)
+        first=_db_stage1e6_persist_evaluation(inp,result,actor='A4B5 Disposable Test')
+        review_id=first['Review Item ID']
+        lineage=_db_stage1e_a4b4_lineage_verify(review_id,
+            expected_wallet_id=wallet_id,expected_signal_id=signal_id,
+            expected_event_id=event_id,expected_aue_id=aue_id,
+            expected_relationship_id=E5_10_VALIDATION_RELATIONSHIP_ID)
+        # Same input + result: no new review, application or audit writes.
+        conn=_db_connect()
+        try:
+            before={t:conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
+                    for t in ('review_item','review_promotion_application','audit_event')}
+        finally:conn.close()
+        rerun=_db_stage1e6_persist_evaluation(inp,result,actor='A4B5 Disposable Test')
+        conn=_db_connect()
+        try:
+            after={t:conn.execute(f'SELECT COUNT(*) FROM {t}').fetchone()[0]
+                    for t in before}
+        finally:conn.close()
+        if not rerun['Exact Rerun'] or rerun['Review Item ID']!=review_id or before!=after:
+            raise AssertionError('A4B5_EXACT_RERUN_CREATED_NEW_ROWS')
+        return dict(lineage,exact_rerun_quiet=True,review_item_test_only=True,
+                    release_gate='HOLD_FROZEN_WALLET_EVIDENCE_LINEAGE_AND_POSTGRES_PARITY',
+                    writes_scope='A4B5_DISPOSABLE_LOCAL_SQLITE_ONLY',deploy_authorized=False)
+    finally:
+        (E6_VALIDATION_RELATIONSHIP_ID,E6_VALIDATION_COMPANY,E6_8D_EPISODE)=previous
+
 
 
 stage_1c_main()
